@@ -1,0 +1,309 @@
+defmodule Schooner.LexerTest do
+  use ExUnit.Case, async: true
+
+  alias Schooner.Lexer
+  alias Schooner.Lexer.Error
+
+  describe "punctuation and quote forms" do
+    test "parens and quote markers" do
+      assert Lexer.tokenise("()") == [
+               {:lparen, nil, {1, 1}},
+               {:rparen, nil, {1, 2}}
+             ]
+
+      assert Lexer.tokenise("'`,@,") == [
+               {:quote, nil, {1, 1}},
+               {:quasiquote, nil, {1, 2}},
+               {:unquote_splicing, nil, {1, 3}},
+               {:unquote, nil, {1, 5}}
+             ]
+    end
+
+    test "vector and bytevector openers" do
+      assert Lexer.tokenise("#( ") == [{:vector_open, nil, {1, 1}}]
+      assert Lexer.tokenise("#u8(") == [{:bytevector_open, nil, {1, 1}}]
+    end
+
+    test "dot is its own token only with surrounding whitespace" do
+      assert [
+               {:lparen, _, _},
+               {:ident, "a", _},
+               {:dot, nil, _},
+               {:ident, "b", _},
+               {:rparen, _, _}
+             ] = Lexer.tokenise("(a . b)")
+    end
+
+    test "ellipsis identifier is distinct from dot" do
+      assert [{:ident, "...", {1, 1}}] = Lexer.tokenise("...")
+    end
+  end
+
+  describe "booleans" do
+    test "short and long forms" do
+      assert [{:bool, true, {1, 1}}] = Lexer.tokenise("#t")
+      assert [{:bool, false, {1, 1}}] = Lexer.tokenise("#f")
+      assert [{:bool, true, {1, 1}}] = Lexer.tokenise("#true")
+      assert [{:bool, false, {1, 1}}] = Lexer.tokenise("#false")
+    end
+
+    test "must be terminated by whitespace, paren, or other token boundary" do
+      assert_raise Error, fn -> Lexer.tokenise("#tx") end
+      assert_raise Error, fn -> Lexer.tokenise("#trues") end
+    end
+  end
+
+  describe "characters" do
+    test "single ascii char" do
+      assert [{:char, ?a, {1, 1}}] = Lexer.tokenise(~S(#\a))
+      assert [{:char, ?A, {1, 1}}] = Lexer.tokenise(~S(#\A))
+      assert [{:char, ?0, {1, 1}}] = Lexer.tokenise(~S(#\0))
+      assert [{:char, ?(, {1, 1}}] = Lexer.tokenise(~S(#\())
+    end
+
+    test "named characters" do
+      assert [{:char, ?\s, _}] = Lexer.tokenise(~S(#\space))
+      assert [{:char, ?\n, _}] = Lexer.tokenise(~S(#\newline))
+      assert [{:char, ?\t, _}] = Lexer.tokenise(~S(#\tab))
+      assert [{:char, 0, _}] = Lexer.tokenise(~S(#\null))
+      assert [{:char, 0x1B, _}] = Lexer.tokenise(~S(#\escape))
+    end
+
+    test "hex characters" do
+      assert [{:char, 0x41, _}] = Lexer.tokenise(~S(#\x41))
+      assert [{:char, 0x10FFFF, _}] = Lexer.tokenise(~S(#\x10FFFF))
+    end
+
+    test "unknown char name raises" do
+      assert_raise Error, fn -> Lexer.tokenise(~S(#\notachar)) end
+    end
+  end
+
+  describe "strings" do
+    test "simple literal" do
+      assert [{:string, "hello", {1, 1}}] = Lexer.tokenise(~s("hello"))
+    end
+
+    test "common escape sequences" do
+      assert [{:string, "a\nb", _}] = Lexer.tokenise(~S("a\nb"))
+      assert [{:string, "a\tb", _}] = Lexer.tokenise(~S("a\tb"))
+      assert [{:string, "a\rb", _}] = Lexer.tokenise(~S("a\rb"))
+      assert [{:string, ~s(a"b), _}] = Lexer.tokenise(~S("a\"b"))
+      assert [{:string, "a\\b", _}] = Lexer.tokenise(~S("a\\b"))
+    end
+
+    test "hex escape" do
+      assert [{:string, "A", _}] = Lexer.tokenise(~S("\x41;"))
+      # multi-byte codepoint
+      assert [{:string, "λ", _}] = Lexer.tokenise(~S("\x3BB;"))
+    end
+
+    test "raw newline inside string is preserved as \\n" do
+      assert [{:string, "a\nb", _}] = Lexer.tokenise("\"a\nb\"")
+    end
+
+    test "unterminated string raises with start position" do
+      err =
+        assert_raise Error, fn -> Lexer.tokenise(~s("abc)) end
+
+      assert err.reason == :unterminated_string
+      assert err.position == {1, 1}
+    end
+
+    test "invalid escape raises" do
+      err =
+        assert_raise Error, fn -> Lexer.tokenise(~S("a\q")) end
+
+      assert match?({:invalid_escape, ?q}, err.reason)
+    end
+
+    test "empty hex escape raises" do
+      err =
+        assert_raise Error, fn -> Lexer.tokenise(~S("\x;")) end
+
+      assert err.reason == :empty_hex_escape
+    end
+  end
+
+  describe "identifiers" do
+    test "simple identifier" do
+      assert [{:ident, "foo", {1, 1}}] = Lexer.tokenise("foo")
+      assert [{:ident, "foo-bar", _}] = Lexer.tokenise("foo-bar")
+      assert [{:ident, "list->vector", _}] = Lexer.tokenise("list->vector")
+      assert [{:ident, "set!", _}] = Lexer.tokenise("set!")
+      assert [{:ident, "x?", _}] = Lexer.tokenise("x?")
+      assert [{:ident, "<=", _}] = Lexer.tokenise("<=")
+    end
+
+    test "peculiar identifiers" do
+      assert [{:ident, "+", _}] = Lexer.tokenise("+")
+      assert [{:ident, "-", _}] = Lexer.tokenise("-")
+      assert [{:ident, "...", _}] = Lexer.tokenise("...")
+      assert [{:ident, "->", _}] = Lexer.tokenise("->")
+      assert [{:ident, "->foo", _}] = Lexer.tokenise("->foo")
+    end
+
+    test "vertical-bar quoted identifier" do
+      assert [{:ident, "hello world", {1, 1}}] = Lexer.tokenise("|hello world|")
+      assert [{:ident, "a|b", _}] = Lexer.tokenise(~S(|a\|b|))
+      assert [{:ident, "a\\b", _}] = Lexer.tokenise(~S(|a\\b|))
+      assert [{:ident, "", _}] = Lexer.tokenise("||")
+    end
+
+    test "unterminated bar identifier raises" do
+      err =
+        assert_raise Error, fn -> Lexer.tokenise("|hello") end
+
+      assert err.reason == :unterminated_bar_identifier
+    end
+
+    test "unicode identifiers" do
+      assert [{:ident, "λ", _}] = Lexer.tokenise("λ")
+      assert [{:ident, "α-β", _}] = Lexer.tokenise("α-β")
+    end
+  end
+
+  describe "numbers" do
+    test "exact integers" do
+      assert [{:integer, 0, _}] = Lexer.tokenise("0")
+      assert [{:integer, 42, _}] = Lexer.tokenise("42")
+      assert [{:integer, -7, _}] = Lexer.tokenise("-7")
+      assert [{:integer, 7, _}] = Lexer.tokenise("+7")
+    end
+
+    test "inexact reals" do
+      assert [{:float, 1.5, _}] = Lexer.tokenise("1.5")
+      assert [{:float, -1.5, _}] = Lexer.tokenise("-1.5")
+      assert [{:float, 0.5, _}] = Lexer.tokenise(".5")
+      assert [{:float, -0.5, _}] = Lexer.tokenise("-.5")
+      assert [{:float, 1.0, _}] = Lexer.tokenise("1.")
+      assert [{:float, 150.0, _}] = Lexer.tokenise("1.5e2")
+      assert [{:float, 100.0, _}] = Lexer.tokenise("1e2")
+    end
+
+    test "radix prefixes" do
+      assert [{:integer, 5, _}] = Lexer.tokenise("#b101")
+      assert [{:integer, 15, _}] = Lexer.tokenise("#o17")
+      assert [{:integer, 255, _}] = Lexer.tokenise("#xff")
+      assert [{:integer, 12, _}] = Lexer.tokenise("#d12")
+      assert [{:integer, -5, _}] = Lexer.tokenise("#b-101")
+      assert [{:integer, 31, _}] = Lexer.tokenise("#x1F")
+    end
+
+    test "exactness prefixes" do
+      assert [{:integer, 1, _}] = Lexer.tokenise("#e1.5") |> Enum.map(&clamp/1)
+      # #e on a float truncates / converts to integer
+      assert [{:integer, 1, _}] = Lexer.tokenise("#e1.5")
+      # #i on an integer makes it inexact
+      assert [{:float, 3.0, _}] = Lexer.tokenise("#i3")
+    end
+
+    test "stacked radix + exactness prefixes" do
+      assert [{:float, 255.0, _}] = Lexer.tokenise("#i#xff")
+      assert [{:float, 255.0, _}] = Lexer.tokenise("#x#iff")
+    end
+
+    test "duplicate prefix is an error" do
+      err = assert_raise Error, fn -> Lexer.tokenise("#x#x10") end
+      assert match?({:duplicate_number_prefix, _}, err.reason)
+    end
+
+    test "rationals raise" do
+      assert_raise Error, fn -> Lexer.tokenise("1/2") end
+    end
+
+    test "non-decimal radix forbids fractional point" do
+      assert_raise Error, fn -> Lexer.tokenise("#x1.5") end
+    end
+
+    test "arbitrary-precision integers" do
+      big = String.duplicate("9", 80)
+      assert [{:integer, n, _}] = Lexer.tokenise(big)
+      assert n == String.to_integer(big)
+    end
+
+    test "garbage after digits is an error" do
+      err = assert_raise Error, fn -> Lexer.tokenise("10abc") end
+      assert match?({:invalid_numeric_literal, "10abc"}, err.reason)
+    end
+
+    defp clamp({:integer, n, _}) when n in -1..1, do: {:integer, n, nil}
+    defp clamp(t), do: t
+  end
+
+  describe "comments" do
+    test "line comment terminates at newline" do
+      tokens = Lexer.tokenise("; ignored\n42")
+      assert [{:integer, 42, {2, 1}}] = tokens
+    end
+
+    test "line comment to EOF" do
+      assert [] = Lexer.tokenise("; just a comment")
+    end
+
+    test "block comment, including nested" do
+      assert [{:integer, 1, _}] = Lexer.tokenise("#| outer #| inner |# outer |# 1")
+    end
+
+    test "block comment can span lines" do
+      assert [{:integer, 1, {3, 3}}] = Lexer.tokenise("#| a\nb\n|#1")
+    end
+
+    test "unterminated block comment raises with opening position" do
+      err = assert_raise Error, fn -> Lexer.tokenise("#| oops") end
+      assert err.reason == :unterminated_block_comment
+      assert err.position == {1, 1}
+    end
+
+    test "datum-comment marker is preserved" do
+      assert [
+               {:datum_comment, nil, {1, 1}},
+               {:integer, 7, _}
+             ] = Lexer.tokenise("#; 7")
+    end
+  end
+
+  describe "source positions" do
+    test "tracks line and column across multi-line input" do
+      src = """
+      (define x 1)
+      (define y 2)
+      """
+
+      tokens = Lexer.tokenise(src)
+
+      assert [
+               {:lparen, nil, {1, 1}},
+               {:ident, "define", {1, 2}},
+               {:ident, "x", {1, 9}},
+               {:integer, 1, {1, 11}},
+               {:rparen, nil, {1, 12}},
+               {:lparen, nil, {2, 1}},
+               {:ident, "define", {2, 2}},
+               {:ident, "y", {2, 9}},
+               {:integer, 2, {2, 11}},
+               {:rparen, nil, {2, 12}}
+             ] = tokens
+    end
+
+    test "tabs count as one column for now" do
+      assert [{:ident, "x", {1, 2}}] = Lexer.tokenise("\tx")
+    end
+
+    test "CRLF and lone CR are both newlines" do
+      assert [{:integer, 1, {2, 1}}] = Lexer.tokenise("\r\n1")
+      assert [{:integer, 1, {2, 1}}] = Lexer.tokenise("\r1")
+    end
+  end
+
+  describe "negative cases" do
+    test "stray closing bracket-style char is an unexpected character" do
+      err = assert_raise Error, fn -> Lexer.tokenise("@") end
+      assert match?({:unexpected_char, ?@}, err.reason)
+    end
+
+    test "lone hash is an error" do
+      assert_raise Error, fn -> Lexer.tokenise("#") end
+    end
+  end
+end
