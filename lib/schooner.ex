@@ -13,15 +13,25 @@ defmodule Schooner do
 
   alias Schooner.Env
   alias Schooner.Eval
+  alias Schooner.Primitives
   alias Schooner.Reader
   alias Schooner.Value
 
   @doc """
-  Read and evaluate `source` in a fresh environment. Returns the value
-  of the last datum, or `:unspecified` for empty input.
+  An environment preloaded with the standard primitives shipped by
+  Schooner. `Env.new/0` deliberately stays empty for tests that want
+  isolation; this is the entry point for callers that want a usable
+  Scheme out of the box.
+  """
+  @spec standard_env() :: Env.t()
+  def standard_env, do: Env.new() |> Primitives.Base.register_into()
+
+  @doc """
+  Read and evaluate `source` in a fresh standard environment. Returns
+  the value of the last datum, or `:unspecified` for empty input.
   """
   @spec run(binary()) :: Value.t()
-  def run(source) when is_binary(source), do: eval(source, Env.new())
+  def run(source) when is_binary(source), do: eval(source, standard_env())
 
   @doc """
   Read and evaluate `source` in the given environment, threading
