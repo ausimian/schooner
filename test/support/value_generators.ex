@@ -26,6 +26,25 @@ defmodule Schooner.Test.ValueGenerators do
     |> compound_value(depth)
   end
 
+  @doc """
+  Generator for any reader-readable Schooner value, depth-bounded.
+
+  Excludes `:eof` and `:unspecified`, which have no Scheme source syntax
+  and therefore cannot survive a `write`/`read` round-trip.
+  """
+  def readable_value(depth \\ 3) do
+    one_of([
+      readable_atom_value(),
+      integer_value(),
+      float_value(),
+      char_value(),
+      string_value(),
+      bytevector_value(),
+      symbol_value()
+    ])
+    |> compound_value(depth)
+  end
+
   defp compound_value(leaf, 0), do: leaf
 
   defp compound_value(leaf, depth) do
@@ -44,6 +63,14 @@ defmodule Schooner.Test.ValueGenerators do
       constant(:null),
       constant(:eof),
       constant(:unspecified)
+    ])
+  end
+
+  def readable_atom_value do
+    one_of([
+      constant({:bool, true}),
+      constant({:bool, false}),
+      constant(:null)
     ])
   end
 

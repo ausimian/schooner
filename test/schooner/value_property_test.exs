@@ -2,6 +2,7 @@ defmodule Schooner.ValuePropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  alias Schooner.Reader
   alias Schooner.Test.ValueGenerators
   alias Schooner.Value
 
@@ -33,13 +34,11 @@ defmodule Schooner.ValuePropertyTest do
     end
   end
 
-  @tag :skip
-  property "write/read round-trip preserves equal? — unskips after the reader lands in phase 3" do
-    check all(v <- ValueGenerators.value()) do
+  property "write/read round-trip preserves equal?" do
+    check all(v <- ValueGenerators.readable_value()) do
       written = Value.write(v)
-      # Schooner.Reader.read_string(written) — to be wired up in phase 3
-      _ = written
-      assert true
+      assert [read_back] = Reader.read_string(written)
+      assert Value.equal?(v, read_back)
     end
   end
 end
