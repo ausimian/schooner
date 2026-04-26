@@ -1,0 +1,35 @@
+defmodule Schooner.Eval.Error do
+  @moduledoc """
+  Exception raised by `Schooner.Eval` for runtime and syntactic failures.
+
+  The `:reason` field is a structured term — atom or tagged tuple — meant
+  to be machine-matchable in tests. The pretty `:message` is generated
+  lazily so assertions can pin behaviour without coupling to wording.
+  """
+
+  defexception [:reason, :message]
+
+  @impl true
+  def exception(opts) do
+    reason = Keyword.fetch!(opts, :reason)
+    %__MODULE__{reason: reason, message: format(reason)}
+  end
+
+  defp format({:unbound, name}), do: "unbound variable: #{name}"
+  defp format(:empty_application), do: "() is not a valid expression"
+  defp format({:not_a_procedure, value}), do: "not a procedure: #{inspect(value)}"
+  defp format({:bad_special_form, name}), do: "malformed `#{name}` form"
+  defp format(:invalid_params), do: "invalid lambda parameter list"
+  defp format(:improper_application), do: "improper application form"
+
+  defp format({:arity_mismatch, name, {:exact, expected}, got}) do
+    "arity mismatch in #{name_str(name)}: expected #{expected}, got #{got}"
+  end
+
+  defp format({:arity_mismatch, name, {:at_least, expected}, got}) do
+    "arity mismatch in #{name_str(name)}: expected at least #{expected}, got #{got}"
+  end
+
+  defp name_str(nil), do: "anonymous procedure"
+  defp name_str(name) when is_binary(name), do: "`#{name}`"
+end
