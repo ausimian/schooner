@@ -18,6 +18,9 @@ defmodule Schooner.Primitives.Base do
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
+  defguardp is_special(v)
+            when is_tuple(v) and tuple_size(v) == 2 and elem(v, 0) == :float_special
+
   # ---------------------------------------------------------------------------
   # Public registration
   # ---------------------------------------------------------------------------
@@ -63,20 +66,20 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp add([]), do: 0
-  defp add(args), do: reduce_numeric("+", args, 0, &+/2)
+  defp add(args), do: reduce_numeric("+", args, 0, &add_pair/2)
 
   defp sub([n]) do
     require_number!("-", n)
-    -n
+    negate(n)
   end
 
   defp sub([first | rest]) do
     require_number!("-", first)
-    reduce_numeric("-", rest, first, &-/2)
+    reduce_numeric("-", rest, first, &sub_pair/2)
   end
 
   defp mul([]), do: 1
-  defp mul(args), do: reduce_numeric("*", args, 1, &*/2)
+  defp mul(args), do: reduce_numeric("*", args, 1, &mul_pair/2)
 
   defp divide([n]) do
     require_number!("/", n)
@@ -92,6 +95,65 @@ defmodule Schooner.Primitives.Base do
     end)
   end
 
+  # ---- Specials-aware pairwise arithmetic ------------------------------------
+
+  defp add_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, b)
+  defp add_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) + to_float(b)
+  defp add_pair(a, b), do: a + b
+
+  defp sub_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, negate(b))
+  defp sub_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) - to_float(b)
+  defp sub_pair(a, b), do: a - b
+
+  defp mul_pair(a, b) when is_special(a) or is_special(b), do: special_mul(a, b)
+  defp mul_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) * to_float(b)
+  defp mul_pair(a, b), do: a * b
+
+  defp negate({:float_special, :pos_inf}), do: {:float_special, :neg_inf}
+  defp negate({:float_special, :neg_inf}), do: {:float_special, :pos_inf}
+  defp negate({:float_special, :nan}), do: {:float_special, :nan}
+  defp negate(n), do: -n
+
+  # NaN propagates; otherwise IEEE-754 inf rules. `+inf + -inf` → NaN.
+  defp special_add({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp special_add(_, {:float_special, :nan}), do: {:float_special, :nan}
+
+  defp special_add({:float_special, :pos_inf}, {:float_special, :neg_inf}),
+    do: {:float_special, :nan}
+
+  defp special_add({:float_special, :neg_inf}, {:float_special, :pos_inf}),
+    do: {:float_special, :nan}
+
+  defp special_add({:float_special, k}, {:float_special, k}), do: {:float_special, k}
+  defp special_add({:float_special, k}, _finite), do: {:float_special, k}
+  defp special_add(_finite, {:float_special, k}), do: {:float_special, k}
+
+  # NaN propagates; inf*inf rules; inf*0 (any zero) is NaN.
+  defp special_mul({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp special_mul(_, {:float_special, :nan}), do: {:float_special, :nan}
+
+  defp special_mul({:float_special, ka}, {:float_special, kb}) do
+    if ka == kb, do: {:float_special, :pos_inf}, else: {:float_special, :neg_inf}
+  end
+
+  defp special_mul({:float_special, k}, finite), do: scale_inf(k, sign_finite(finite))
+  defp special_mul(finite, {:float_special, k}), do: scale_inf(k, sign_finite(finite))
+
+  # Sign of a finite real, treating both +0.0 and -0.0 as zero (their
+  # signed-ness only matters for division, not multiplication).
+  defp sign_finite(0), do: 0
+  defp sign_finite(+0.0), do: 0
+  defp sign_finite(-0.0), do: 0
+  defp sign_finite(n) when n > 0, do: 1
+  defp sign_finite(_), do: -1
+
+  defp scale_inf(_k, 0), do: {:float_special, :nan}
+  defp scale_inf(k, 1), do: {:float_special, k}
+  defp scale_inf(:pos_inf, -1), do: {:float_special, :neg_inf}
+  defp scale_inf(:neg_inf, -1), do: {:float_special, :pos_inf}
+
+  # ---- Division --------------------------------------------------------------
+
   defp divide_pair(_op, a, b) when is_integer(a) and is_integer(b) do
     cond do
       b == 0 -> raise Error, reason: {:division_by_zero, "/"}
@@ -100,16 +162,31 @@ defmodule Schooner.Primitives.Base do
     end
   end
 
-  defp divide_pair(_op, a, b) do
-    a = to_float(a)
-    b = to_float(b)
-    do_float_divide(a, b)
-  end
+  defp divide_pair(_op, a, b) when is_special(a) or is_special(b),
+    do: special_divide(a, b)
 
-  # BEAM raises ArithmeticError on float `/0` rather than producing :inf/:nan.
-  # Surface that as a structured error consistent with the integer-divide path.
-  defp do_float_divide(_a, +0.0), do: raise(Error, reason: {:division_by_zero, "/"})
-  defp do_float_divide(_a, -0.0), do: raise(Error, reason: {:division_by_zero, "/"})
+  defp divide_pair(_op, a, b), do: do_float_divide(to_float(a), to_float(b))
+
+  # NaN propagates; inf/inf is NaN; finite/inf is 0; inf/finite preserves
+  # sign of inf scaled by sign of divisor.
+  defp special_divide({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp special_divide(_, {:float_special, :nan}), do: {:float_special, :nan}
+  defp special_divide({:float_special, _}, {:float_special, _}), do: {:float_special, :nan}
+  defp special_divide(_finite, {:float_special, _}), do: 0.0
+  defp special_divide({:float_special, k}, finite), do: scale_inf(k, sign_finite(finite))
+
+  # IEEE-754 finite/zero: sign(numerator) determines the resulting infinity;
+  # zero/zero → NaN; sign of the zero divisor flips the result.
+  defp do_float_divide(+0.0, +0.0), do: {:float_special, :nan}
+  defp do_float_divide(+0.0, -0.0), do: {:float_special, :nan}
+  defp do_float_divide(-0.0, +0.0), do: {:float_special, :nan}
+  defp do_float_divide(-0.0, -0.0), do: {:float_special, :nan}
+
+  defp do_float_divide(a, +0.0) when a > 0, do: {:float_special, :pos_inf}
+  defp do_float_divide(a, +0.0) when a < 0, do: {:float_special, :neg_inf}
+  defp do_float_divide(a, -0.0) when a > 0, do: {:float_special, :neg_inf}
+  defp do_float_divide(a, -0.0) when a < 0, do: {:float_special, :pos_inf}
+
   defp do_float_divide(a, b), do: a / b
 
   defp quotient([a, b]) do
@@ -140,8 +217,12 @@ defmodule Schooner.Primitives.Base do
 
   defp abs_([n]) do
     require_number!("abs", n)
-    abs(n)
+    abs_special(n)
   end
+
+  defp abs_special({:float_special, :neg_inf}), do: {:float_special, :pos_inf}
+  defp abs_special({:float_special, k}), do: {:float_special, k}
+  defp abs_special(n), do: abs(n)
 
   defp min_([first | rest]) do
     require_number!("min", first)
@@ -162,9 +243,22 @@ defmodule Schooner.Primitives.Base do
   end
 
   # min/max contaminate exactness even when the chosen value is exact.
+  # NaN propagates per r7rs; +inf wins max / -inf wins min.
+  defp pick_min({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp pick_min(_, {:float_special, :nan}), do: {:float_special, :nan}
+  defp pick_min({:float_special, :neg_inf}, _), do: {:float_special, :neg_inf}
+  defp pick_min(_, {:float_special, :neg_inf}), do: {:float_special, :neg_inf}
+  defp pick_min({:float_special, :pos_inf}, b), do: to_float(b)
+  defp pick_min(a, {:float_special, :pos_inf}), do: to_float(a)
   defp pick_min(a, b) when is_float(a) or is_float(b), do: min(to_float(a), to_float(b))
   defp pick_min(a, b), do: min(a, b)
 
+  defp pick_max({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp pick_max(_, {:float_special, :nan}), do: {:float_special, :nan}
+  defp pick_max({:float_special, :pos_inf}, _), do: {:float_special, :pos_inf}
+  defp pick_max(_, {:float_special, :pos_inf}), do: {:float_special, :pos_inf}
+  defp pick_max({:float_special, :neg_inf}, b), do: to_float(b)
+  defp pick_max(a, {:float_special, :neg_inf}), do: to_float(a)
   defp pick_max(a, b) when is_float(a) or is_float(b), do: max(to_float(a), to_float(b))
   defp pick_max(a, b), do: max(a, b)
 
@@ -186,7 +280,67 @@ defmodule Schooner.Primitives.Base do
     raise Error, reason: {:negative_exponent, base, exp}
   end
 
+  defp do_expt(base, exp) when is_special(base) or is_special(exp),
+    do: special_expt(base, exp)
+
   defp do_expt(base, exp), do: :math.pow(to_float(base), to_float(exp))
+
+  # IEEE-754 pow: anything^0 is 1.0 (even NaN, even infinities); 1^anything
+  # is 1.0; NaN otherwise propagates. inf^positive → inf, inf^negative → 0.0,
+  # |b|>1 ^ +inf → inf, |b|<1 ^ +inf → 0.0, mirrored for -inf exponents.
+  defp special_expt(_, 0), do: 1.0
+  defp special_expt(_, +0.0), do: 1.0
+  defp special_expt(_, -0.0), do: 1.0
+  defp special_expt(1, _), do: 1.0
+  defp special_expt(1.0, _), do: 1.0
+  defp special_expt({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp special_expt(_, {:float_special, :nan}), do: {:float_special, :nan}
+
+  defp special_expt({:float_special, :pos_inf}, exp) do
+    case finite_exp_sign(exp) do
+      1 -> {:float_special, :pos_inf}
+      -1 -> 0.0
+      _ -> {:float_special, :nan}
+    end
+  end
+
+  defp special_expt({:float_special, :neg_inf}, exp) do
+    # IEEE-754 pow(-inf, n): odd integer n preserves the sign;
+    # even integer n or non-integer n yields the positive form.
+    case finite_exp_sign(exp) do
+      1 -> if odd_integer?(exp), do: {:float_special, :neg_inf}, else: {:float_special, :pos_inf}
+      -1 -> 0.0
+      _ -> {:float_special, :nan}
+    end
+  end
+
+  defp special_expt(base, {:float_special, :pos_inf}) do
+    cond do
+      is_special(base) -> {:float_special, :pos_inf}
+      abs(to_float(base)) > 1.0 -> {:float_special, :pos_inf}
+      abs(to_float(base)) < 1.0 -> 0.0
+      true -> {:float_special, :nan}
+    end
+  end
+
+  defp special_expt(base, {:float_special, :neg_inf}) do
+    cond do
+      is_special(base) -> 0.0
+      abs(to_float(base)) > 1.0 -> 0.0
+      abs(to_float(base)) < 1.0 -> {:float_special, :pos_inf}
+      true -> {:float_special, :nan}
+    end
+  end
+
+  defp finite_exp_sign(e) when is_integer(e) and e > 0, do: 1
+  defp finite_exp_sign(e) when is_integer(e) and e < 0, do: -1
+  defp finite_exp_sign(e) when is_float(e) and e > 0.0, do: 1
+  defp finite_exp_sign(e) when is_float(e) and e < 0.0, do: -1
+  defp finite_exp_sign(_), do: 0
+
+  defp odd_integer?(e) when is_integer(e), do: rem(e, 2) != 0
+  defp odd_integer?(e) when is_float(e), do: e == trunc(e) and rem(trunc(e), 2) != 0
+  defp odd_integer?(_), do: false
 
   defp int_pow(_b, 0), do: 1
   defp int_pow(b, 1), do: b
@@ -226,6 +380,9 @@ defmodule Schooner.Primitives.Base do
     require_number!("sqrt", n)
 
     cond do
+      n == {:float_special, :pos_inf} -> {:float_special, :pos_inf}
+      is_special(n) -> {:float_special, :nan}
+      is_float(n) and n < 0.0 -> {:float_special, :nan}
       is_float(n) -> :math.sqrt(n)
       is_integer(n) and n >= 0 -> exact_isqrt_or_raise(n)
       true -> raise Error, reason: {:irrational, "sqrt", n}
@@ -251,13 +408,17 @@ defmodule Schooner.Primitives.Base do
 
   defp exact_to_inexact([n]) do
     require_number!("exact->inexact", n)
-    to_float(n)
+    if is_special(n), do: n, else: to_float(n)
   end
 
   defp inexact_to_exact([n]) when is_integer(n), do: n
 
   defp inexact_to_exact([n]) when is_float(n) do
     if Value.integer?(n), do: trunc(n), else: raise(Error, reason: {:not_representable_exact, n})
+  end
+
+  defp inexact_to_exact([{:float_special, _} = n]) do
+    raise Error, reason: {:not_representable_exact, n}
   end
 
   defp inexact_to_exact([other]) do
@@ -293,24 +454,47 @@ defmodule Schooner.Primitives.Base do
 
   defp check_pairs([b | rest], prev, op, pair) do
     require_number!(op, b)
-    pair.(prev, b) and check_pairs(rest, b, op, pair)
+    # IEEE-754: any comparison against NaN is "unordered" → false.
+    cond do
+      prev == {:float_special, :nan} -> false
+      b == {:float_special, :nan} -> false
+      pair.(prev, b) -> check_pairs(rest, b, op, pair)
+      true -> false
+    end
   end
 
   # `=` is numerical equality; `(= 1 1.0)` is true (only `eqv?` cares about exactness).
+  defp num_eq(a, b) when is_special(a) or is_special(b), do: special_cmp_eq(a, b)
   defp num_eq(a, b) when is_float(a) or is_float(b), do: to_float(a) == to_float(b)
   defp num_eq(a, b), do: a == b
 
+  defp num_lt(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) == :lt
   defp num_lt(a, b) when is_float(a) or is_float(b), do: to_float(a) < to_float(b)
   defp num_lt(a, b), do: a < b
 
+  defp num_gt(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) == :gt
   defp num_gt(a, b) when is_float(a) or is_float(b), do: to_float(a) > to_float(b)
   defp num_gt(a, b), do: a > b
 
+  defp num_le(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) in [:lt, :eq]
   defp num_le(a, b) when is_float(a) or is_float(b), do: to_float(a) <= to_float(b)
   defp num_le(a, b), do: a <= b
 
+  defp num_ge(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) in [:gt, :eq]
   defp num_ge(a, b) when is_float(a) or is_float(b), do: to_float(a) >= to_float(b)
   defp num_ge(a, b), do: a >= b
+
+  # Equality and ordering between specials and finite reals (NaN handled
+  # in `check_pairs/4`; not reached here for the generic comparison ops).
+  defp special_cmp_eq({:float_special, k}, {:float_special, k}), do: true
+  defp special_cmp_eq(_, _), do: false
+
+  defp special_cmp({:float_special, :pos_inf}, {:float_special, :pos_inf}), do: :eq
+  defp special_cmp({:float_special, :neg_inf}, {:float_special, :neg_inf}), do: :eq
+  defp special_cmp({:float_special, :pos_inf}, _), do: :gt
+  defp special_cmp({:float_special, :neg_inf}, _), do: :lt
+  defp special_cmp(_, {:float_special, :pos_inf}), do: :lt
+  defp special_cmp(_, {:float_special, :neg_inf}), do: :gt
 
   # ---------------------------------------------------------------------------
   # Predicates
@@ -357,13 +541,19 @@ defmodule Schooner.Primitives.Base do
 
   defp zero_p([n]) do
     require_number!("zero?", n)
-    Value.bool(n == 0)
+    Value.bool(not is_special(n) and n == 0)
   end
+
+  defp positive_p([{:float_special, :pos_inf}]), do: Value.bool(true)
+  defp positive_p([{:float_special, _}]), do: Value.bool(false)
 
   defp positive_p([n]) do
     require_number!("positive?", n)
     Value.bool(n > 0)
   end
+
+  defp negative_p([{:float_special, :neg_inf}]), do: Value.bool(true)
+  defp negative_p([{:float_special, _}]), do: Value.bool(false)
 
   defp negative_p([n]) do
     require_number!("negative?", n)
@@ -409,16 +599,12 @@ defmodule Schooner.Primitives.Base do
   defp reduce_numeric(op, args, acc, op_fn) do
     Enum.reduce(args, acc, fn x, a ->
       require_number!(op, x)
-
-      if is_float(a) or is_float(x) do
-        op_fn.(to_float(a), to_float(x))
-      else
-        op_fn.(a, x)
-      end
+      op_fn.(a, x)
     end)
   end
 
   defp require_number!(_op, n) when is_integer(n) or is_float(n), do: :ok
+  defp require_number!(_op, n) when is_special(n), do: :ok
 
   defp require_number!(op, other) do
     raise Error, reason: {:type_error, op, "number", other}

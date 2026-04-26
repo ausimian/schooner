@@ -664,16 +664,12 @@ defmodule Schooner.Lexer do
 
   defp all_hex_digits?(s), do: every_byte?(s, &digit_in_radix?(&1, 16))
 
-  defp special_float("+inf.0"), do: positive_infinity()
-  defp special_float("-inf.0"), do: negative_infinity()
-  defp special_float("+nan.0"), do: nan()
-  defp special_float("-nan.0"), do: nan()
-
-  # `0/0`-style construction risks compile-time evaluation; pin them to
-  # values built by the BEAM at runtime via well-known IEEE-754 bytes.
-  defp positive_infinity, do: :erlang.binary_to_term(<<131, 70, 127, 240, 0, 0, 0, 0, 0, 0>>)
-  defp negative_infinity, do: :erlang.binary_to_term(<<131, 70, 255, 240, 0, 0, 0, 0, 0, 0>>)
-  defp nan, do: :erlang.binary_to_term(<<131, 70, 127, 248, 0, 0, 0, 0, 0, 0>>)
+  # The BEAM cannot represent IEEE-754 non-finite floats as `float()`
+  # values; they are modelled as a distinct tagged value in `Schooner.Value`.
+  defp special_float("+inf.0"), do: {:float_special, :pos_inf}
+  defp special_float("-inf.0"), do: {:float_special, :neg_inf}
+  defp special_float("+nan.0"), do: {:float_special, :nan}
+  defp special_float("-nan.0"), do: {:float_special, :nan}
 
   # ---------------------------------------------------------------------------
   # Identifier classification
