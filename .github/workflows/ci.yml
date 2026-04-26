@@ -34,13 +34,19 @@ jobs:
             ${{ runner.os }}-otp28.3-elixir1.19.5-mix-
 
       - name: Install dependencies
-        run: mix deps.get
+        run: mix deps.get --check-locked
+
+      - name: Verify no unused dependencies
+        run: mix deps.unlock --check-unused
 
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
 
       - name: Check formatting
         run: mix format --check-formatted
+
+      - name: Credo (strict)
+        run: mix credo --strict
 
       - name: Tests
         run: mix test --warnings-as-errors

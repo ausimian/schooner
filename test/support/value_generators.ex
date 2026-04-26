@@ -54,7 +54,12 @@ defmodule Schooner.Test.ValueGenerators do
     map(integer(-1_000_000..1_000_000), &(&1 / 1.0))
   end
 
-  def char_value, do: map(integer(0..0x10_FFFF), &Value.char/1)
+  def char_value do
+    # Unicode scalar values: 0..0xD7FF and 0xE000..0x10FFFF. Surrogates
+    # (0xD800..0xDFFF) are not characters and would crash <<cp::utf8>>.
+    one_of([integer(0..0xD7FF), integer(0xE000..0x10_FFFF)])
+    |> map(&Value.char/1)
+  end
 
   def string_value do
     string(:utf8, max_length: 16)
