@@ -235,4 +235,47 @@ defmodule Schooner.ValueTest do
       assert Value.display(Value.list([Value.string("hi"), Value.char(?!)])) == "(hi !)"
     end
   end
+
+  describe "non-finite float specials" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+    @nan {:float_special, :nan}
+
+    test "type predicates classify specials" do
+      for v <- [@pos_inf, @neg_inf, @nan] do
+        assert Value.number?(v)
+        assert Value.inexact?(v)
+        refute Value.exact?(v)
+        refute Value.integer?(v)
+        assert Value.float_special?(v)
+      end
+
+      refute Value.float_special?(1.0)
+      refute Value.float_special?(1)
+    end
+
+    test "eqv? — like infinities are equal; NaN is never equal to anything" do
+      assert Value.eqv?(@pos_inf, @pos_inf)
+      assert Value.eqv?(@neg_inf, @neg_inf)
+      refute Value.eqv?(@pos_inf, @neg_inf)
+      refute Value.eqv?(@nan, @nan)
+      refute Value.eqv?(@nan, 1)
+      refute Value.eqv?(1, @nan)
+    end
+
+    test "equal? mirrors eqv? for specials, NaN included" do
+      assert Value.equal?(@pos_inf, @pos_inf)
+      refute Value.equal?(@pos_inf, @neg_inf)
+      refute Value.equal?(@nan, @nan)
+    end
+
+    test "write/display render the literal forms" do
+      assert Value.write(@pos_inf) == "+inf.0"
+      assert Value.write(@neg_inf) == "-inf.0"
+      assert Value.write(@nan) == "+nan.0"
+      assert Value.display(@pos_inf) == "+inf.0"
+      assert Value.display(@neg_inf) == "-inf.0"
+      assert Value.display(@nan) == "+nan.0"
+    end
+  end
 end

@@ -99,8 +99,8 @@ defmodule Schooner.Primitives.BaseTest do
       assert Value.write(run("(* -1.0 0.0)")) =~ "0"
     end
 
-    test "(/ 1.0 0.0) raises division_by_zero (BEAM does not produce :inf)" do
-      assert_raise PError, fn -> run("(/ 1.0 0.0)") end
+    test "(/ 1.0 0.0) yields +inf.0 (IEEE-754, closes #8)" do
+      assert run("(/ 1.0 0.0)") == {:float_special, :pos_inf}
     end
 
     test "rendered floats round-trip via re-evaluation" do
@@ -113,11 +113,7 @@ defmodule Schooner.Primitives.BaseTest do
       assert Value.write(run("0.5")) == "0.5"
     end
 
-    @tag :skip
     test "+inf.0 / -inf.0 / +nan.0 round-trip through write/read" do
-      # The lexer tokenises these forms but the term-decoder trick used to
-      # synthesise the float values is rejected by current ERTS. Until the
-      # lexer is updated, no value of these tags can flow through eval.
       assert Value.write(run("+inf.0")) == "+inf.0"
       assert Value.write(run("-inf.0")) == "-inf.0"
       assert Value.write(run("+nan.0")) == "+nan.0"
@@ -388,6 +384,262 @@ defmodule Schooner.Primitives.BaseTest do
     test "(gcd) is 0; (lcm) is 1" do
       assert run("(gcd)") === 0
       assert run("(lcm)") === 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Non-finite floats — arithmetic propagation
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite arithmetic propagation" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+    @nan {:float_special, :nan}
+
+    test "NaN propagates through +, -, *, /" do
+      assert run("(+ +nan.0 1)") == @nan
+      assert run("(+ 1 +nan.0)") == @nan
+      assert run("(- +nan.0 1)") == @nan
+      assert run("(- 1 +nan.0)") == @nan
+      assert run("(* +nan.0 2.0)") == @nan
+      assert run("(/ +nan.0 2)") == @nan
+      assert run("(/ 2 +nan.0)") == @nan
+    end
+
+    test "(+ +inf.0 -inf.0) is NaN" do
+      assert run("(+ +inf.0 -inf.0)") == @nan
+      assert run("(+ -inf.0 +inf.0)") == @nan
+      assert run("(- +inf.0 +inf.0)") == @nan
+    end
+
+    test "infinity + finite preserves the infinity" do
+      assert run("(+ +inf.0 1000)") == @pos_inf
+      assert run("(+ -inf.0 1000)") == @neg_inf
+      assert run("(- +inf.0 1000)") == @pos_inf
+    end
+
+    test "(* +inf.0 0) and (* +inf.0 0.0) are NaN" do
+      assert run("(* +inf.0 0)") == @nan
+      assert run("(* +inf.0 0.0)") == @nan
+      assert run("(* 0 -inf.0)") == @nan
+    end
+
+    test "(* +inf.0 +inf.0) is +inf.0; (* +inf.0 -inf.0) is -inf.0" do
+      assert run("(* +inf.0 +inf.0)") == @pos_inf
+      assert run("(* -inf.0 -inf.0)") == @pos_inf
+      assert run("(* +inf.0 -inf.0)") == @neg_inf
+    end
+
+    test "infinity times finite — sign is product of signs" do
+      assert run("(* +inf.0 2)") == @pos_inf
+      assert run("(* +inf.0 -2)") == @neg_inf
+      assert run("(* -inf.0 -2.0)") == @pos_inf
+    end
+
+    test "unary minus negates an infinity, leaves NaN" do
+      assert run("(- +inf.0)") == @neg_inf
+      assert run("(- -inf.0)") == @pos_inf
+      assert run("(- +nan.0)") == @nan
+    end
+
+    test "abs of specials" do
+      assert run("(abs +inf.0)") == @pos_inf
+      assert run("(abs -inf.0)") == @pos_inf
+      assert run("(abs +nan.0)") == @nan
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Non-finite floats — division by zero
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite division" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+    @nan {:float_special, :nan}
+
+    test "exact integer divisor of zero still raises (r7rs ticket 367)" do
+      e = assert_raise PError, fn -> run("(/ 1 0)") end
+      assert e.reason == {:division_by_zero, "/"}
+    end
+
+    test "finite float over +0.0 yields signed infinity" do
+      assert run("(/ 1.0 0.0)") == @pos_inf
+      assert run("(/ -1.0 0.0)") == @neg_inf
+      assert run("(/ 1 0.0)") == @pos_inf
+    end
+
+    test "finite float over -0.0 flips the sign" do
+      assert run("(/ 1.0 -0.0)") == @neg_inf
+      assert run("(/ -1.0 -0.0)") == @pos_inf
+    end
+
+    test "(/ 0.0 0.0) is NaN" do
+      assert run("(/ 0.0 0.0)") == @nan
+      assert run("(/ -0.0 0.0)") == @nan
+    end
+
+    test "(/ +inf.0 +inf.0) and other inf/inf forms are NaN" do
+      assert run("(/ +inf.0 +inf.0)") == @nan
+      assert run("(/ +inf.0 -inf.0)") == @nan
+      assert run("(/ -inf.0 -inf.0)") == @nan
+    end
+
+    test "finite over infinity is 0.0" do
+      assert run("(/ 1.0 +inf.0)") === 0.0
+      assert run("(/ 5 -inf.0)") === 0.0
+    end
+
+    test "infinity over finite preserves sign" do
+      assert run("(/ +inf.0 2)") == @pos_inf
+      assert run("(/ +inf.0 -2)") == @neg_inf
+      assert run("(/ -inf.0 -2.0)") == @pos_inf
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Non-finite floats — comparison
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite comparison" do
+    test "any comparison involving NaN is #f (IEEE-754 unordered)" do
+      assert run("(< +nan.0 1)") == Value.bool(false)
+      assert run("(< 1 +nan.0)") == Value.bool(false)
+      assert run("(> +nan.0 1)") == Value.bool(false)
+      assert run("(<= +nan.0 +inf.0)") == Value.bool(false)
+      assert run("(>= +nan.0 +nan.0)") == Value.bool(false)
+      assert run("(= +nan.0 +nan.0)") == Value.bool(false)
+      assert run("(= +nan.0 1)") == Value.bool(false)
+    end
+
+    test "+inf.0 is greater than every finite real" do
+      assert run("(> +inf.0 1)") == Value.bool(true)
+      assert run("(> +inf.0 1.0)") == Value.bool(true)
+      assert run("(> +inf.0 1000000000000000000000)") == Value.bool(true)
+      assert run("(< 1 +inf.0)") == Value.bool(true)
+    end
+
+    test "-inf.0 is less than every finite real" do
+      assert run("(< -inf.0 -1)") == Value.bool(true)
+      assert run("(< -inf.0 -1000000000000000000000)") == Value.bool(true)
+      assert run("(> -1 -inf.0)") == Value.bool(true)
+    end
+
+    test "= between like specials (other than NaN) holds" do
+      assert run("(= +inf.0 +inf.0)") == Value.bool(true)
+      assert run("(= -inf.0 -inf.0)") == Value.bool(true)
+      assert run("(= +inf.0 -inf.0)") == Value.bool(false)
+    end
+
+    test "<= and >= follow ordinary rules between specials" do
+      assert run("(< -inf.0 +inf.0)") == Value.bool(true)
+      assert run("(<= -inf.0 +inf.0)") == Value.bool(true)
+      assert run("(<= +inf.0 +inf.0)") == Value.bool(true)
+      assert run("(>= +inf.0 1)") == Value.bool(true)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Non-finite floats — predicates
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite predicates" do
+    test "type predicates classify specials as inexact, non-integer numbers" do
+      for lit <- ["+inf.0", "-inf.0", "+nan.0"] do
+        assert run("(number? #{lit})") == Value.bool(true)
+        assert run("(inexact? #{lit})") == Value.bool(true)
+        assert run("(exact? #{lit})") == Value.bool(false)
+        assert run("(integer? #{lit})") == Value.bool(false)
+      end
+    end
+
+    test "zero? is false for all specials" do
+      assert run("(zero? +inf.0)") == Value.bool(false)
+      assert run("(zero? -inf.0)") == Value.bool(false)
+      assert run("(zero? +nan.0)") == Value.bool(false)
+    end
+
+    test "positive?/negative? per spec" do
+      assert run("(positive? +inf.0)") == Value.bool(true)
+      assert run("(positive? -inf.0)") == Value.bool(false)
+      assert run("(positive? +nan.0)") == Value.bool(false)
+      assert run("(negative? -inf.0)") == Value.bool(true)
+      assert run("(negative? +inf.0)") == Value.bool(false)
+      assert run("(negative? +nan.0)") == Value.bool(false)
+    end
+
+    test "odd?/even? raise — specials are not integers" do
+      for lit <- ["+inf.0", "-inf.0", "+nan.0"] do
+        assert_raise PError, fn -> run("(odd? #{lit})") end
+        assert_raise PError, fn -> run("(even? #{lit})") end
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Non-finite floats — min/max/expt/sqrt/exact-inexact
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite min/max/expt/sqrt/exact-inexact" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+    @nan {:float_special, :nan}
+
+    test "min/max with NaN propagate NaN" do
+      assert run("(min +nan.0 1 2)") == @nan
+      assert run("(max 1 +nan.0 2)") == @nan
+    end
+
+    test "min/max with infinities" do
+      assert run("(max 1 2 +inf.0)") == @pos_inf
+      assert run("(min 1 2 -inf.0)") == @neg_inf
+      assert run("(min 1 +inf.0)") === 1.0
+      assert run("(max -inf.0 -1)") === -1.0
+    end
+
+    test "sqrt of specials" do
+      assert run("(sqrt +inf.0)") == @pos_inf
+      assert run("(sqrt -inf.0)") == @nan
+      assert run("(sqrt +nan.0)") == @nan
+    end
+
+    test "expt with infinities" do
+      assert run("(expt +inf.0 2)") == @pos_inf
+      assert run("(expt +inf.0 -2)") === 0.0
+      assert run("(expt 2 +inf.0)") == @pos_inf
+      assert run("(expt 0.5 +inf.0)") === 0.0
+      assert run("(expt 2 -inf.0)") === 0.0
+      assert run("(expt 0.5 -inf.0)") == @pos_inf
+    end
+
+    test "expt -inf.0 base preserves sign for odd integer exponents" do
+      assert run("(expt -inf.0 3)") == @neg_inf
+      assert run("(expt -inf.0 2)") == @pos_inf
+      assert run("(expt -inf.0 -3)") === 0.0
+    end
+
+    test "expt — anything to the 0 is 1.0; 1 to anything is 1.0" do
+      assert run("(expt +inf.0 0)") === 1.0
+      assert run("(expt +nan.0 0)") === 1.0
+      assert run("(expt 1 +inf.0)") === 1.0
+    end
+
+    test "expt with NaN propagates (except the 0 / 1 short-circuits)" do
+      assert run("(expt +nan.0 1)") == @nan
+      assert run("(expt 2 +nan.0)") == @nan
+    end
+
+    test "exact->inexact is identity on specials" do
+      assert run("(exact->inexact +inf.0)") == @pos_inf
+      assert run("(exact->inexact -inf.0)") == @neg_inf
+      assert run("(exact->inexact +nan.0)") == @nan
+    end
+
+    test "inexact->exact raises on specials — no exact form" do
+      for lit <- ["+inf.0", "-inf.0", "+nan.0"] do
+        e = assert_raise PError, fn -> run("(inexact->exact #{lit})") end
+        assert match?({:not_representable_exact, _}, e.reason)
+      end
     end
   end
 end

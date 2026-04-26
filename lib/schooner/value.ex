@@ -19,6 +19,10 @@ defmodule Schooner.Value do
     * Character — `{:char, codepoint}`
     * Exact integer — bare Elixir integer
     * Inexact real — bare Elixir float
+    * Non-finite inexact — `{:float_special, :pos_inf | :neg_inf | :nan}`
+      (BEAM floats cannot represent these; tagged forms carry IEEE-754
+      semantics through arithmetic and comparison without smuggling
+      forbidden bit patterns into Elixir floats.)
     * Vector — `{:vector, tuple}`
     * Bytevector — `{:bytevector, binary}`
     * Closure — `{:closure, params, body, env, name_or_nil}`
@@ -38,6 +42,7 @@ defmodule Schooner.Value do
   @type closure_v :: {:closure, term(), term(), term(), binary() | nil}
   @type primitive_v :: {:primitive, binary(), arity_spec(), (list() -> t())}
   @type record_v :: {:record, term(), tuple()}
+  @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
   @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
 
   @type t ::
@@ -49,6 +54,7 @@ defmodule Schooner.Value do
           | char_v()
           | integer()
           | float()
+          | float_special_v()
           | vector_v()
           | bytevector_v()
           | closure_v()
@@ -163,6 +169,7 @@ defmodule Schooner.Value do
 
   @spec number?(term()) :: boolean()
   def number?(n) when is_integer(n) or is_float(n), do: true
+  def number?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
   def number?(_), do: false
 
   @spec integer?(term()) :: boolean()
@@ -182,7 +189,12 @@ defmodule Schooner.Value do
 
   @spec inexact?(term()) :: boolean()
   def inexact?(n) when is_float(n), do: true
+  def inexact?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
   def inexact?(_), do: false
+
+  @spec float_special?(term()) :: boolean()
+  def float_special?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
+  def float_special?(_), do: false
 
   @doc """
   Scheme truthiness: only `{:bool, false}` is false; every other value is
@@ -210,6 +222,9 @@ defmodule Schooner.Value do
   because integers and floats are distinct terms.
   """
   @spec eqv?(t(), t()) :: boolean()
+  # IEEE-754: NaN is never equal to anything, including another NaN.
+  def eqv?({:float_special, :nan}, _), do: false
+  def eqv?(_, {:float_special, :nan}), do: false
   def eqv?(a, b), do: a === b
 
   @doc """
@@ -217,6 +232,9 @@ defmodule Schooner.Value do
   strings, and records. For everything else it falls through to `eqv?`.
   """
   @spec equal?(t(), t()) :: boolean()
+  # IEEE-754: NaN is never equal to anything, including another NaN.
+  def equal?({:float_special, :nan}, _), do: false
+  def equal?(_, {:float_special, :nan}), do: false
   def equal?(a, a), do: true
   def equal?({:pair, a1, b1}, {:pair, a2, b2}), do: equal?(a1, a2) and equal?(b1, b2)
   def equal?({:vector, t1}, {:vector, t2}), do: equal_tuples?(t1, t2)
@@ -278,6 +296,9 @@ defmodule Schooner.Value do
   defp render({:closure, _, _, _, name}, _), do: render_closure(name)
   defp render({:primitive, name, _, _}, _), do: ["#<primitive ", name, ">"]
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
+  defp render({:float_special, :pos_inf}, _), do: "+inf.0"
+  defp render({:float_special, :neg_inf}, _), do: "-inf.0"
+  defp render({:float_special, :nan}, _), do: "+nan.0"
   defp render(n, _) when is_integer(n), do: Integer.to_string(n)
   defp render(n, _) when is_float(n), do: render_float(n)
 
