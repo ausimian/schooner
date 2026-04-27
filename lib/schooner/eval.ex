@@ -26,6 +26,7 @@ defmodule Schooner.Eval do
   def eval({:sym, name}, env) do
     case Env.lookup(env, name) do
       {:ok, value} -> value
+      {:uninitialised, n} -> raise Error, reason: {:rec_uninitialised, n}
       :error -> raise Error, reason: {:unbound, name}
     end
   end
@@ -91,7 +92,7 @@ defmodule Schooner.Eval do
   end
 
   defp eval_lambda({:pair, params_form, body}, env) do
-    Value.closure(parse_params(params_form), body, env, nil)
+    Value.closure(parse_params(params_form), desugar_body(body), env, nil)
   end
 
   defp eval_lambda(_, _env), do: raise(Error, reason: {:bad_special_form, "lambda"})
@@ -127,7 +128,7 @@ defmodule Schooner.Eval do
   end
 
   defp eval_define({:pair, {:pair, {:sym, name}, params_form}, body}, env) do
-    closure = Value.closure(parse_params(params_form), body, env, name)
+    closure = Value.closure(parse_params(params_form), desugar_body(body), env, name)
     Env.define(env, name, closure)
     :unspecified
   end
@@ -238,7 +239,7 @@ defmodule Schooner.Eval do
 
   defp eval_when({:pair, test, body}, env) when body != :null do
     if Value.truthy?(eval(test, env)) do
-      eval_sequence(body, env)
+      eval_body(body, env)
     else
       :unspecified
     end
@@ -250,7 +251,7 @@ defmodule Schooner.Eval do
     if Value.truthy?(eval(test, env)) do
       :unspecified
     else
-      eval_sequence(body, env)
+      eval_body(body, env)
     end
   end
 
@@ -262,7 +263,7 @@ defmodule Schooner.Eval do
   defp eval_cond(:null, _env), do: :unspecified
 
   defp eval_cond({:pair, {:pair, {:sym, "else"}, body}, _rest}, env) when body != :null do
-    eval_sequence(body, env)
+    eval_body(body, env)
   end
 
   defp eval_cond({:pair, {:pair, {:sym, "else"}, _}, _}, _env) do
@@ -289,7 +290,7 @@ defmodule Schooner.Eval do
 
   defp eval_cond({:pair, {:pair, test, body}, rest}, env) do
     if Value.truthy?(eval(test, env)) do
-      eval_sequence(body, env)
+      eval_body(body, env)
     else
       eval_cond(rest, env)
     end
@@ -327,7 +328,7 @@ defmodule Schooner.Eval do
   end
 
   defp eval_case_body(_key, :null, _env), do: raise(Error, reason: {:bad_special_form, "case"})
-  defp eval_case_body(_key, body, env), do: eval_sequence(body, env)
+  defp eval_case_body(_key, body, env), do: eval_body(body, env)
 
   defp case_match?(_key, :null), do: false
 
@@ -345,7 +346,7 @@ defmodule Schooner.Eval do
   defp eval_let({:pair, bindings_form, body}, env) when body != :null do
     {names, inits} = parse_bindings(bindings_form, "let")
     values = Enum.map(inits, &eval(&1, env))
-    eval_sequence(body, Env.extend(env, Enum.zip(names, values)))
+    eval_body(body, Env.extend(env, Enum.zip(names, values)))
   end
 
   defp eval_let(_, _env), do: raise(Error, reason: {:bad_special_form, "let"})
@@ -355,10 +356,13 @@ defmodule Schooner.Eval do
     values = Enum.map(inits, &eval(&1, env))
 
     rec_env = Env.extend_rec(env, [name])
-    closure = Value.closure({:fixed, length(param_names), param_names}, body, rec_env, name)
+
+    closure =
+      Value.closure({:fixed, length(param_names), param_names}, desugar_body(body), rec_env, name)
+
     Env.rec_set(rec_env, name, closure)
 
-    apply_proc(closure, values)
+    with_rec_frame(rec_env, fn -> apply_proc(closure, values) end)
   end
 
   defp eval_let_star({:pair, bindings_form, body}, env) when body != :null do
@@ -371,7 +375,7 @@ defmodule Schooner.Eval do
         Env.extend(e, [{name, eval(init, e)}])
       end)
 
-    eval_sequence(body, new_env)
+    eval_body(body, new_env)
   end
 
   defp eval_let_star(_, _env), do: raise(Error, reason: {:bad_special_form, "let*"})
@@ -383,13 +387,15 @@ defmodule Schooner.Eval do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
 
-    names
-    |> Enum.zip(inits)
-    |> Enum.each(fn {name, init} ->
-      Env.rec_set(rec_env, name, eval(init, rec_env))
-    end)
+    with_rec_frame(rec_env, fn ->
+      names
+      |> Enum.zip(inits)
+      |> Enum.each(fn {name, init} ->
+        Env.rec_set(rec_env, name, eval(init, rec_env))
+      end)
 
-    eval_sequence(body, rec_env)
+      eval_body(body, rec_env)
+    end)
   end
 
   defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
@@ -492,4 +498,96 @@ defmodule Schooner.Eval do
 
   defp scheme_list_to_elixir(:null), do: []
   defp scheme_list_to_elixir({:pair, h, t}), do: [h | scheme_list_to_elixir(t)]
+
+  # ---------------------------------------------------------------------------
+  # Internal definitions / body splicing
+  # ---------------------------------------------------------------------------
+
+  # `eval_body/2` is the entry point for evaluating any r7rs body
+  # (lambda, let-family, when/unless, cond/case clauses): it splices
+  # leading internal defines into a `letrec*` and then evaluates the
+  # resulting sequence. Lambda bodies are pre-desugared at closure
+  # creation time so per-application cost stays at zero.
+  defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
+
+  # Run `body_fun` and release `rec_env`'s recursive frame on every
+  # exit path. The body's tail-recursive calls bounce through
+  # `eval`/`eval_sequence`/`apply_proc` and never return through this
+  # frame, so TCO across the body is preserved — see `eval_tco_test`.
+  defp with_rec_frame(rec_env, body_fun) do
+    body_fun.()
+  after
+    Env.release_rec(rec_env)
+  end
+
+  # r7rs §5.3.3 lets a body begin with a sequence of `define` forms
+  # followed by a sequence of expressions; the defines splice into a
+  # `letrec*` whose body is the rest of the forms. `desugar_body/1`
+  # performs that rewrite. Forms with no leading defines are returned
+  # unchanged.
+  #
+  # `define` after a non-define form in the same body is a syntax
+  # error, raised here rather than at evaluation time so the whole
+  # body is rejected before any side-effecting init runs.
+  defp desugar_body(:null), do: :null
+
+  defp desugar_body(body) do
+    case scan_defines(body, []) do
+      {[], _rest} ->
+        body
+
+      {_defs, :null} ->
+        raise(Error, reason: :empty_body)
+
+      {defs, rest} ->
+        bindings = build_letrec_bindings(defs)
+        letrec_form = {:pair, {:sym, "letrec*"}, {:pair, bindings, rest}}
+        {:pair, letrec_form, :null}
+    end
+  end
+
+  defp scan_defines(:null, acc), do: {Enum.reverse(acc), :null}
+
+  defp scan_defines({:pair, form, rest}, acc) do
+    case parse_internal_define(form) do
+      nil ->
+        check_no_more_defines(rest)
+        {Enum.reverse(acc), {:pair, form, rest}}
+
+      binding ->
+        scan_defines(rest, [binding | acc])
+    end
+  end
+
+  defp parse_internal_define({:pair, {:sym, "define"}, body}) do
+    case body do
+      {:pair, {:sym, name}, {:pair, expr, :null}} ->
+        {name, expr}
+
+      {:pair, {:pair, {:sym, name}, params}, body_forms} when body_forms != :null ->
+        {name, {:pair, {:sym, "lambda"}, {:pair, params, body_forms}}}
+
+      _ ->
+        raise(Error, reason: {:bad_special_form, "define"})
+    end
+  end
+
+  defp parse_internal_define(_), do: nil
+
+  defp check_no_more_defines(:null), do: :ok
+
+  defp check_no_more_defines({:pair, form, rest}) do
+    if parse_internal_define(form) != nil do
+      raise(Error, reason: :define_after_expression)
+    else
+      check_no_more_defines(rest)
+    end
+  end
+
+  defp build_letrec_bindings([]), do: :null
+
+  defp build_letrec_bindings([{name, init} | rest]) do
+    binding = {:pair, {:sym, name}, {:pair, init, :null}}
+    {:pair, binding, build_letrec_bindings(rest)}
+  end
 end

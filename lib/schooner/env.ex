@@ -14,15 +14,36 @@ defmodule Schooner.Env do
   The globals table is owned by the process that calls `new/0` and is
   GC'd when that process exits, so per-execution sandboxing falls out
   of the BEAM's process model.
+
+  ## Recursive lexical frames
+
+  `letrec`, `letrec*`, named `let`, and the `letrec*` produced by
+  internal-define splicing each push a *recursive* frame. A recursive
+  frame is a map of name → value backed by a process-dictionary slot
+  keyed by `make_ref/0`, so closures captured during init evaluation
+  see later bindings via frame identity.
+
+  Each such frame must be released by `release_rec/1` once the body of
+  the binding form finishes. The recommended pattern is to wrap the
+  body in `try ... after`. Closures that escape the body and continue
+  to reference recursive bindings after the slot is released will
+  raise — Schooner does not currently support that case.
   """
 
   alias Schooner.Value
+
+  # Sentinel held in a recursive frame for a binding whose init has
+  # not yet been evaluated. Distinct from any user-constructible value
+  # so a forward reference within an init can be flagged as a runtime
+  # error rather than silently returning `:unspecified`.
+  @rec_uninitialised :__schooner_rec_uninitialised__
 
   @enforce_keys [:globals, :lex]
   defstruct [:globals, :lex]
 
   @type frame :: %{optional(binary()) => Value.t()} | {:rec, reference()}
   @type t :: %__MODULE__{globals: :ets.tid(), lex: [frame()]}
+  @type lookup_result :: {:ok, Value.t()} | :error | {:uninitialised, binary()}
 
   @spec new() :: t()
   def new do
@@ -30,11 +51,18 @@ defmodule Schooner.Env do
     %__MODULE__{globals: table, lex: []}
   end
 
-  @doc "Look up `name`. Walks lexical frames innermost-first, then globals."
-  @spec lookup(t(), binary()) :: {:ok, Value.t()} | :error
+  @doc """
+  Look up `name`. Walks lexical frames innermost-first, then globals.
+
+  Returns `{:uninitialised, name}` when `name` is bound by an enclosing
+  recursive frame whose init expression has not yet been evaluated;
+  callers should treat this as a forward-reference runtime error.
+  """
+  @spec lookup(t(), binary()) :: lookup_result()
   def lookup(%__MODULE__{lex: lex, globals: globals}, name) when is_binary(name) do
     case lex_lookup(lex, name) do
       {:ok, _} = ok -> ok
+      {:uninitialised, _} = u -> u
       :error -> globals_lookup(globals, name)
     end
   end
@@ -43,6 +71,7 @@ defmodule Schooner.Env do
 
   defp lex_lookup([{:rec, ref} | rest], name) do
     case Map.fetch(Process.get(ref), name) do
+      {:ok, @rec_uninitialised} -> {:uninitialised, name}
       {:ok, _} = ok -> ok
       :error -> lex_lookup(rest, name)
     end
@@ -79,17 +108,23 @@ defmodule Schooner.Env do
   end
 
   @doc """
-  Push a fresh `letrec`-style frame whose bindings can be assigned later
-  via `rec_set/3`. Closures created against the returned env see the
-  bindings by frame identity, so forward references resolve once the
-  frame has been populated. Backed by a process-dictionary slot keyed by
-  a fresh reference; the slot is process-local and is GC'd with the
-  owning process.
+  Push a fresh `letrec`-style frame whose bindings start uninitialised
+  and can be assigned later via `rec_set/3`. Closures created against
+  the returned env see the bindings by frame identity, so forward
+  references resolve once the frame has been populated. Backed by a
+  process-dictionary slot keyed by a fresh reference; the slot must
+  be released with `release_rec/1` once the binding form's body has
+  finished evaluating.
   """
   @spec extend_rec(t(), [binary()]) :: t()
   def extend_rec(%__MODULE__{lex: lex} = env, names) when is_list(names) do
     ref = make_ref()
-    Process.put(ref, Map.new(names, fn name when is_binary(name) -> {name, :unspecified} end))
+
+    Process.put(
+      ref,
+      Map.new(names, fn name when is_binary(name) -> {name, @rec_uninitialised} end)
+    )
+
     %{env | lex: [{:rec, ref} | lex]}
   end
 
@@ -98,6 +133,18 @@ defmodule Schooner.Env do
   def rec_set(%__MODULE__{lex: [{:rec, ref} | _]} = env, name, value) when is_binary(name) do
     Process.put(ref, Map.put(Process.get(ref), name, value))
     env
+  end
+
+  @doc """
+  Release the topmost recursive frame on `env`, deleting the
+  process-dictionary slot that backs it. Must be paired with
+  `extend_rec/2`. Idempotent — releasing a frame whose slot was
+  already deleted is a no-op.
+  """
+  @spec release_rec(t()) :: :ok
+  def release_rec(%__MODULE__{lex: [{:rec, ref} | _]}) do
+    Process.delete(ref)
+    :ok
   end
 
   @doc "Pop the topmost lexical frame on `env`."
