@@ -153,7 +153,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
              (define-syntax mk
                (syntax-rules () ((_ x ...) (list x ...))))
              (list (mk) (mk 1) (mk 1 2 3))
-             """) == Value.list([:null, Value.list([1]), Value.list([1, 2, 3])])
+             """) == Value.list([[], Value.list([1]), Value.list([1, 2, 3])])
     end
 
     test "ellipsis with leading and trailing fixed elements" do
@@ -166,7 +166,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                    (bracketed 1 'a 'b 'c 'z))
              """) ==
                Value.list([
-                 Value.list([1, :null, 2]),
+                 Value.list([1, [], 2]),
                  Value.list([1, Value.list([9]), Value.symbol("last")]),
                  Value.list([
                    1,
@@ -182,7 +182,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                (syntax-rules ()
                  ((_ ((x ...) ...)) (list (list x ...) ...))))
              (flatten-shape ((1 2) (3 4 5) ()))
-             """) == Value.list([Value.list([1, 2]), Value.list([3, 4, 5]), :null])
+             """) == Value.list([Value.list([1, 2]), Value.list([3, 4, 5]), []])
     end
 
     test "two pattern variables under one ellipsis stay paired" do
@@ -193,9 +193,9 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
              (zip-cons (1 'a) (2 'b) (3 'c))
              """) ==
                Value.list([
-                 {:pair, 1, Value.symbol("a")},
-                 {:pair, 2, Value.symbol("b")},
-                 {:pair, 3, Value.symbol("c")}
+                 [1 | Value.symbol("a")],
+                 [2 | Value.symbol("b")],
+                 [3 | Value.symbol("c")]
                ])
     end
   end
@@ -214,7 +214,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                    (head-tail 1 2 3))
              """) ==
                Value.list([
-                 Value.list([Value.symbol("head"), 1, Value.symbol("tail"), :null]),
+                 Value.list([Value.symbol("head"), 1, Value.symbol("tail"), []]),
                  Value.list([
                    Value.symbol("head"),
                    1,
@@ -232,7 +232,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                (syntax-rules ()
                  ((_ #(a b)) (cons a b))))
              (pair-of #(1 2))
-             """) == {:pair, 1, 2}
+             """) == [1 | 2]
     end
 
     test "vector pattern with ellipsis collects every element" do
@@ -241,7 +241,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                (syntax-rules ()
                  ((_ #(x ...)) (list x ...))))
              (list (vec->list #()) (vec->list #(1 2 3)))
-             """) == Value.list([:null, Value.list([1, 2, 3])])
+             """) == Value.list([[], Value.list([1, 2, 3])])
     end
   end
 
@@ -337,7 +337,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
                           (let ((t (cons t t)))
                             t)))))
              (double-or 'x)
-             """) == {:pair, Value.symbol("x"), Value.symbol("x")}
+             """) == [Value.symbol("x") | Value.symbol("x")]
     end
   end
 

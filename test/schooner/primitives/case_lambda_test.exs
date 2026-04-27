@@ -25,7 +25,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
     end
 
     test "rest-only formals also accept zero args" do
-      assert run("((case-lambda (xs xs)))") == :null
+      assert run("((case-lambda (xs xs)))") == []
     end
 
     test "dotted-rest formals bind the head positionally and the tail as a list" do
@@ -35,7 +35,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
 
     test "dotted-rest with empty tail still matches the at-least arity" do
       assert run("((case-lambda ((a b . rest) (list a b rest))) 10 20)") ==
-               Value.list([10, 20, :null])
+               Value.list([10, 20, []])
     end
   end
 
@@ -94,14 +94,14 @@ defmodule Schooner.Primitives.CaseLambdaTest do
       """
 
       e = assert_raise Schooner.Error, fn -> run(source) end
-      assert {:error_obj, :user, {:string, msg}, [args]} = e.value
+      assert {:error_obj, :user, msg, [args]} = e.value
       assert msg == "case-lambda: no matching clause"
       assert args == Value.list([1, 2, 3])
     end
 
     test "(case-lambda) with zero clauses errors on every call" do
       e = assert_raise Schooner.Error, fn -> run("((case-lambda) 1)") end
-      assert {:error_obj, :user, {:string, "case-lambda: no matching clause"}, _} = e.value
+      assert {:error_obj, :user, "case-lambda: no matching clause", _} = e.value
     end
   end
 

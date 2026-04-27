@@ -117,12 +117,12 @@ defmodule Schooner.Expander do
     end
   end
 
-  defp expand_top({:pair, {:sym, "define-syntax"}, tail}, env) do
+  defp expand_top([{:sym, "define-syntax"} | tail], env) do
     {name, transformer} = parse_define_syntax(tail, env)
     {:syntax_def, SyntaxEnv.define_macro(env, name, transformer)}
   end
 
-  defp expand_top({:pair, {:sym, "begin"}, body}, env) do
+  defp expand_top([{:sym, "begin"} | body], env) do
     case expand_top_begin(body, env, []) do
       {:syntax_def, env2} -> {:syntax_def, env2}
       expanded -> expanded
@@ -131,12 +131,12 @@ defmodule Schooner.Expander do
 
   defp expand_top(form, env), do: expand(form, env)
 
-  defp expand_top_begin(:null, env, acc) do
-    {:pair, {:sym, "begin"}, Value.list(Enum.reverse(acc))}
+  defp expand_top_begin([], env, acc) do
+    [{:sym, "begin"} | Value.list(Enum.reverse(acc))]
     |> finalise_top_begin(env, acc)
   end
 
-  defp expand_top_begin({:pair, form, rest}, env, acc) do
+  defp expand_top_begin([form | rest], env, acc) do
     case expand_top(form, env) do
       {:syntax_def, env2} -> expand_top_begin(rest, env2, acc)
       expanded -> expand_top_begin(rest, env, [expanded | acc])
@@ -155,43 +155,43 @@ defmodule Schooner.Expander do
 
   @doc "Expand a single form to a fixed point."
   @spec expand(Value.t(), SyntaxEnv.t()) :: Value.t()
-  def expand({:pair, {:sym, "quote"}, _} = form, _env), do: form
+  def expand([{:sym, "quote"} | _] = form, _env), do: form
 
-  def expand({:pair, {:sym, "lambda"}, tail}, env), do: expand_lambda(tail, env)
+  def expand([{:sym, "lambda"} | tail], env), do: expand_lambda(tail, env)
 
-  def expand({:pair, {:sym, "define"}, tail}, env), do: expand_define(tail, env)
+  def expand([{:sym, "define"} | tail], env), do: expand_define(tail, env)
 
-  def expand({:pair, {:sym, "if"}, tail}, env), do: expand_if(tail, env)
+  def expand([{:sym, "if"} | tail], env), do: expand_if(tail, env)
 
-  def expand({:pair, {:sym, "begin"}, tail}, env) do
-    {:pair, {:sym, "begin"}, expand_each(tail, env)}
+  def expand([{:sym, "begin"} | tail], env) do
+    [{:sym, "begin"} | expand_each(tail, env)]
   end
 
-  def expand({:pair, {:sym, "letrec*"}, tail}, env), do: expand_letrec_star(tail, env)
+  def expand([{:sym, "letrec*"} | tail], env), do: expand_letrec_star(tail, env)
 
-  def expand({:pair, {:sym, "set!"}, _tail}, _env) do
+  def expand([{:sym, "set!"} | _tail], _env) do
     raise Error, reason: {:bad_special_form, "set!"}
   end
 
-  def expand({:pair, {:sym, "let-syntax"}, tail}, env), do: expand_let_syntax(tail, env)
+  def expand([{:sym, "let-syntax"} | tail], env), do: expand_let_syntax(tail, env)
 
-  def expand({:pair, {:sym, "letrec-syntax"}, tail}, env), do: expand_letrec_syntax(tail, env)
+  def expand([{:sym, "letrec-syntax"} | tail], env), do: expand_letrec_syntax(tail, env)
 
-  def expand({:pair, {:sym, "define-syntax"}, _tail}, _env) do
+  def expand([{:sym, "define-syntax"} | _tail], _env) do
     raise Error, reason: :nested_define_syntax_unsupported
   end
 
-  def expand({:pair, {:sym, "quasiquote"}, _tail} = form, env) do
+  def expand([{:sym, "quasiquote"} | _tail] = form, env) do
     expand_quasiquote(form, env, 1)
   end
 
-  def expand({:pair, {:sym, "define-record-type"}, tail}, env) do
+  def expand([{:sym, "define-record-type"} | tail], env) do
     expand_define_record_type(tail, env)
   end
 
-  def expand({:pair, {:sym, "guard"}, tail}, env), do: expand_guard(tail, env)
+  def expand([{:sym, "guard"} | tail], env), do: expand_guard(tail, env)
 
-  def expand({:pair, {:sym, name}, _args} = form, env) do
+  def expand([{:sym, name} | _args] = form, env) do
     case lookup_with_fallback(env, name) do
       {:macro, transformer} ->
         new_form = transformer.(form)
@@ -208,26 +208,26 @@ defmodule Schooner.Expander do
     end
   end
 
-  def expand({:pair, _head, _tail} = form, env), do: expand_application(form, env)
+  def expand([_head | _tail] = form, env), do: expand_application(form, env)
 
   def expand({:sym, _} = sym, _env), do: sym
-  def expand(:null, _env), do: :null
+  def expand([], _env), do: []
   def expand(other, _env), do: other
 
   # ---------------------------------------------------------------------------
   # Special-form expanders
   # ---------------------------------------------------------------------------
 
-  defp expand_application({:pair, head, args}, env) do
-    {:pair, expand(head, env), expand_each(args, env)}
+  defp expand_application([head | args], env) do
+    [expand(head, env) | expand_each(args, env)]
   end
 
   # A core special form's name reached us with a hygiene mark — i.e.
   # a template wrote one of `quote`/`if`/`lambda`/etc. without
   # listing it in `SyntaxRules`'s `@core_keywords`. Re-dispatch on
   # the canonical name so the dedicated handlers fire.
-  defp canonicalise_special(base, {:pair, {:sym, _}, tail}, env) do
-    expand({:pair, {:sym, base}, tail}, env)
+  defp canonicalise_special(base, [{:sym, _} | tail], env) do
+    expand([{:sym, base} | tail], env)
   end
 
   # Walk the syntax env for `name`. If unbound, strip a hygiene mark
@@ -258,55 +258,57 @@ defmodule Schooner.Expander do
     end
   end
 
-  defp expand_each(:null, _env), do: :null
+  defp expand_each([], _env), do: []
 
-  defp expand_each({:pair, h, t}, env) do
-    {:pair, expand(h, env), expand_each(t, env)}
+  defp expand_each([h | t], env) do
+    [expand(h, env) | expand_each(t, env)]
   end
 
   defp expand_each(other, _env), do: other
 
-  defp expand_lambda({:pair, params_form, body}, env) when body != :null do
+  defp expand_lambda([params_form | body], env) when body != [] do
     inner = SyntaxEnv.push_variables(env, collect_param_names(params_form))
-    {:pair, {:sym, "lambda"}, {:pair, params_form, expand_each(body, inner)}}
+    [{:sym, "lambda"} | [params_form | expand_each(body, inner)]]
   end
 
   defp expand_lambda(_, _env), do: raise(Error, reason: {:bad_special_form, "lambda"})
 
   defp collect_param_names({:sym, name}), do: [name]
-  defp collect_param_names(:null), do: []
+  defp collect_param_names([]), do: []
 
-  defp collect_param_names({:pair, {:sym, name}, rest}) do
+  defp collect_param_names([{:sym, name} | rest]) do
     [name | collect_param_names(rest)]
   end
 
   defp collect_param_names(_), do: raise(Error, reason: {:bad_special_form, "lambda"})
 
-  defp expand_define({:pair, {:sym, name}, {:pair, expr, :null}}, env) do
-    {:pair, {:sym, "define"}, {:pair, {:sym, name}, {:pair, expand(expr, env), :null}}}
+  defp expand_define([{:sym, name} | [expr | []]], env) do
+    [{:sym, "define"} | [{:sym, name} | [expand(expr, env) | []]]]
   end
 
-  defp expand_define({:pair, {:pair, {:sym, name}, params}, body}, env) when body != :null do
+  defp expand_define([[{:sym, name} | params] | body], env) when body != [] do
     inner = SyntaxEnv.push_variables(env, collect_param_names(params))
     expanded_body = expand_each(body, inner)
 
-    {:pair, {:sym, "define"}, {:pair, {:pair, {:sym, name}, params}, expanded_body}}
+    [{:sym, "define"} | [[{:sym, name} | params] | expanded_body]]
   end
 
   defp expand_define(_, _env), do: raise(Error, reason: {:bad_special_form, "define"})
 
-  defp expand_if({:pair, test, {:pair, then_e, :null}}, env) do
-    {:pair, {:sym, "if"}, {:pair, expand(test, env), {:pair, expand(then_e, env), :null}}}
+  defp expand_if([test | [then_e | []]], env) do
+    [{:sym, "if"} | [expand(test, env) | [expand(then_e, env) | []]]]
   end
 
-  defp expand_if({:pair, test, {:pair, then_e, {:pair, else_e, :null}}}, env) do
-    {:pair, {:sym, "if"},
-     {:pair, expand(test, env), {:pair, expand(then_e, env), {:pair, expand(else_e, env), :null}}}}
+  defp expand_if([test | [then_e | [else_e | []]]], env) do
+    [
+      {:sym, "if"}
+      | [expand(test, env) | [expand(then_e, env) | [expand(else_e, env) | []]]]
+    ]
   end
 
   defp expand_if(_, _env), do: raise(Error, reason: {:bad_special_form, "if"})
 
-  defp expand_letrec_star({:pair, bindings_form, body}, env) when body != :null do
+  defp expand_letrec_star([bindings_form | body], env) when body != [] do
     parsed = parse_letrec_bindings(bindings_form, [])
     names = Enum.map(parsed, fn {sym, _} -> sym_name(sym) end)
     inner = SyntaxEnv.push_variables(env, names)
@@ -314,11 +316,11 @@ defmodule Schooner.Expander do
     expanded_bindings =
       parsed
       |> Enum.map(fn {sym, init} ->
-        {:pair, sym, {:pair, expand(init, inner), :null}}
+        [sym | [expand(init, inner) | []]]
       end)
       |> Value.list()
 
-    {:pair, {:sym, "letrec*"}, {:pair, expanded_bindings, expand_each(body, inner)}}
+    [{:sym, "letrec*"} | [expanded_bindings | expand_each(body, inner)]]
   end
 
   defp expand_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
@@ -331,10 +333,10 @@ defmodule Schooner.Expander do
   # already-shadowed env), avoiding the duplicate parse the previous
   # split into `letrec_binding_names/1` and `expand_letrec_bindings/2`
   # required.
-  defp parse_letrec_bindings(:null, acc), do: Enum.reverse(acc)
+  defp parse_letrec_bindings([], acc), do: Enum.reverse(acc)
 
   defp parse_letrec_bindings(
-         {:pair, {:pair, {:sym, _} = sym, {:pair, init, :null}}, rest},
+         [[{:sym, _} = sym | [init | []]] | rest],
          acc
        ) do
     parse_letrec_bindings(rest, [{sym, init} | acc])
@@ -363,16 +365,14 @@ defmodule Schooner.Expander do
       | record_accessor_defs(fields, type_id)
     ]
 
-    expand({:pair, {:sym, "begin"}, Value.list(defs)}, env)
+    expand([{:sym, "begin"} | Value.list(defs)], env)
   end
 
   defp fresh_record_type_id(name) when is_binary(name) do
     {:record_type, name, :erlang.unique_integer([:positive])}
   end
 
-  defp parse_record_type(
-         {:pair, {:sym, name}, {:pair, ctor_spec, {:pair, {:sym, pred_name}, field_specs_form}}}
-       )
+  defp parse_record_type([{:sym, name} | [ctor_spec | [{:sym, pred_name} | field_specs_form]]])
        when is_binary(name) and is_binary(pred_name) do
     {name, parse_record_ctor(ctor_spec), pred_name,
      parse_record_field_specs(field_specs_form, [])}
@@ -380,25 +380,25 @@ defmodule Schooner.Expander do
 
   defp parse_record_type(_), do: raise(Error, reason: {:bad_special_form, "define-record-type"})
 
-  defp parse_record_ctor({:pair, {:sym, ctor_name}, fields_form}) when is_binary(ctor_name) do
+  defp parse_record_ctor([{:sym, ctor_name} | fields_form]) when is_binary(ctor_name) do
     {ctor_name, parse_record_ctor_fields(fields_form, [])}
   end
 
   defp parse_record_ctor(_), do: raise(Error, reason: {:bad_special_form, "define-record-type"})
 
-  defp parse_record_ctor_fields(:null, acc), do: Enum.reverse(acc)
+  defp parse_record_ctor_fields([], acc), do: Enum.reverse(acc)
 
-  defp parse_record_ctor_fields({:pair, {:sym, name}, rest}, acc) when is_binary(name) do
+  defp parse_record_ctor_fields([{:sym, name} | rest], acc) when is_binary(name) do
     parse_record_ctor_fields(rest, [name | acc])
   end
 
   defp parse_record_ctor_fields(_, _),
     do: raise(Error, reason: {:bad_special_form, "define-record-type"})
 
-  defp parse_record_field_specs(:null, acc), do: Enum.reverse(acc)
+  defp parse_record_field_specs([], acc), do: Enum.reverse(acc)
 
   defp parse_record_field_specs(
-         {:pair, {:pair, {:sym, fname}, {:pair, {:sym, accessor}, :null}}, rest},
+         [[{:sym, fname} | [{:sym, accessor} | []]] | rest],
          acc
        )
        when is_binary(fname) and is_binary(accessor) do
@@ -434,7 +434,7 @@ defmodule Schooner.Expander do
   end
 
   # Build `(define (<name> <param> ...) <body>)`. Centralises the
-  # `:pair`/`:null` skeleton the three record-machinery emitters
+  # `:pair`/`[]` skeleton the three record-machinery emitters
   # would otherwise duplicate.
   defp make_define_form(name, params, body) do
     Value.list([{:sym, "define"}, Value.list([{:sym, name} | params]), body])
@@ -446,21 +446,21 @@ defmodule Schooner.Expander do
   # but does not yet exist. The expander walks the variable shadow,
   # the clause tests/bodies, and the body so that user macros inside
   # any of those positions get a chance to expand.
-  defp expand_guard({:pair, {:pair, {:sym, var}, clauses_form}, body}, env)
-       when body != :null and is_binary(var) do
+  defp expand_guard([[{:sym, var} | clauses_form] | body], env)
+       when body != [] and is_binary(var) do
     inner = SyntaxEnv.push_variables(env, [var])
     expanded_clauses = expand_guard_clauses(clauses_form, inner)
     expanded_body = expand_each(body, env)
 
-    {:pair, {:sym, "guard"}, {:pair, {:pair, {:sym, var}, expanded_clauses}, expanded_body}}
+    [{:sym, "guard"} | [[{:sym, var} | expanded_clauses] | expanded_body]]
   end
 
   defp expand_guard(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp expand_guard_clauses(:null, _env), do: :null
+  defp expand_guard_clauses([], _env), do: []
 
-  defp expand_guard_clauses({:pair, clause, rest}, env) do
-    {:pair, expand_guard_clause(clause, env), expand_guard_clauses(rest, env)}
+  defp expand_guard_clauses([clause | rest], env) do
+    [expand_guard_clause(clause, env) | expand_guard_clauses(rest, env)]
   end
 
   defp expand_guard_clauses(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
@@ -469,21 +469,21 @@ defmodule Schooner.Expander do
   # body sequence that gets recursively expanded. `=>` clauses keep
   # the literal arrow and expand the test and the proc expression.
   # Bare `(test)` and `(test e1 e2 ...)` expand the test plus body.
-  defp expand_guard_clause({:pair, {:sym, "else"}, body}, env) when body != :null do
-    {:pair, {:sym, "else"}, expand_each(body, env)}
+  defp expand_guard_clause([{:sym, "else"} | body], env) when body != [] do
+    [{:sym, "else"} | expand_each(body, env)]
   end
 
-  defp expand_guard_clause({:pair, test, {:pair, {:sym, "=>"}, {:pair, proc, :null}}}, env) do
-    {:pair, expand(test, env), {:pair, {:sym, "=>"}, {:pair, expand(proc, env), :null}}}
+  defp expand_guard_clause([test | [{:sym, "=>"} | [proc | []]]], env) do
+    [expand(test, env) | [{:sym, "=>"} | [expand(proc, env) | []]]]
   end
 
-  defp expand_guard_clause({:pair, test, body}, env) do
-    {:pair, expand(test, env), expand_each(body, env)}
+  defp expand_guard_clause([test | body], env) do
+    [expand(test, env) | expand_each(body, env)]
   end
 
   defp expand_guard_clause(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp expand_let_syntax({:pair, bindings_form, body}, env) when body != :null do
+  defp expand_let_syntax([bindings_form | body], env) when body != [] do
     bindings = parse_syntax_bindings(bindings_form, env, "let-syntax")
     inner = SyntaxEnv.push_macros(env, bindings)
     expanded = expand_each(body, inner)
@@ -492,7 +492,7 @@ defmodule Schooner.Expander do
 
   defp expand_let_syntax(_, _env), do: raise(Error, reason: {:bad_special_form, "let-syntax"})
 
-  defp expand_letrec_syntax({:pair, bindings_form, body}, env) when body != :null do
+  defp expand_letrec_syntax([bindings_form | body], env) when body != [] do
     # Collect names first; compile transformers in an env that already
     # knows about all the new macro names so a transformer can refer to
     # its peers (mutually recursive macros).
@@ -514,32 +514,32 @@ defmodule Schooner.Expander do
   defp expand_letrec_syntax(_, _env),
     do: raise(Error, reason: {:bad_special_form, "letrec-syntax"})
 
-  defp wrap_body_as_form(_ctx, {:pair, single, :null}), do: single
-  defp wrap_body_as_form(_ctx, body), do: {:pair, {:sym, "begin"}, body}
+  defp wrap_body_as_form(_ctx, [single | []]), do: single
+  defp wrap_body_as_form(_ctx, body), do: [{:sym, "begin"} | body]
 
   # ---------------------------------------------------------------------------
   # define-syntax parsing
   # ---------------------------------------------------------------------------
 
-  defp parse_define_syntax({:pair, {:sym, name}, {:pair, spec, :null}}, _env) do
+  defp parse_define_syntax([{:sym, name} | [spec | []]], _env) do
     {name, SyntaxRules.compile(spec)}
   end
 
   defp parse_define_syntax(_, _env),
     do: raise(Error, reason: {:bad_special_form, "define-syntax"})
 
-  defp parse_syntax_bindings(:null, _env, _ctx), do: []
+  defp parse_syntax_bindings([], _env, _ctx), do: []
 
-  defp parse_syntax_bindings({:pair, {:pair, {:sym, name}, {:pair, spec, :null}}, rest}, env, ctx) do
+  defp parse_syntax_bindings([[{:sym, name} | [spec | []]] | rest], env, ctx) do
     [{name, SyntaxRules.compile(spec)} | parse_syntax_bindings(rest, env, ctx)]
   end
 
   defp parse_syntax_bindings(_, _env, ctx), do: raise(Error, reason: {:bad_special_form, ctx})
 
-  defp collect_macro_binding_names(:null, _ctx), do: []
+  defp collect_macro_binding_names([], _ctx), do: []
 
   defp collect_macro_binding_names(
-         {:pair, {:pair, {:sym, name}, {:pair, _spec, :null}}, rest},
+         [[{:sym, name} | [_spec | []]] | rest],
          ctx
        ) do
     [name | collect_macro_binding_names(rest, ctx)]
@@ -551,35 +551,35 @@ defmodule Schooner.Expander do
   # Quasiquote — recurse into unquoted positions but leave quoted data
   # ---------------------------------------------------------------------------
 
-  defp expand_quasiquote({:pair, {:sym, "quasiquote"}, {:pair, datum, :null}}, env, level) do
-    {:pair, {:sym, "quasiquote"}, {:pair, walk_quasi(datum, env, level), :null}}
+  defp expand_quasiquote([{:sym, "quasiquote"} | [datum | []]], env, level) do
+    [{:sym, "quasiquote"} | [walk_quasi(datum, env, level) | []]]
   end
 
   defp expand_quasiquote(_, _env, _level),
     do: raise(Error, reason: {:bad_special_form, "quasiquote"})
 
-  defp walk_quasi({:pair, {:sym, "unquote"}, {:pair, expr, :null}}, env, 1) do
-    {:pair, {:sym, "unquote"}, {:pair, expand(expr, env), :null}}
+  defp walk_quasi([{:sym, "unquote"} | [expr | []]], env, 1) do
+    [{:sym, "unquote"} | [expand(expr, env) | []]]
   end
 
-  defp walk_quasi({:pair, {:sym, "unquote"}, {:pair, expr, :null}}, env, n) when n > 1 do
-    {:pair, {:sym, "unquote"}, {:pair, walk_quasi(expr, env, n - 1), :null}}
+  defp walk_quasi([{:sym, "unquote"} | [expr | []]], env, n) when n > 1 do
+    [{:sym, "unquote"} | [walk_quasi(expr, env, n - 1) | []]]
   end
 
-  defp walk_quasi({:pair, {:sym, "unquote-splicing"}, {:pair, expr, :null}}, env, 1) do
-    {:pair, {:sym, "unquote-splicing"}, {:pair, expand(expr, env), :null}}
+  defp walk_quasi([{:sym, "unquote-splicing"} | [expr | []]], env, 1) do
+    [{:sym, "unquote-splicing"} | [expand(expr, env) | []]]
   end
 
-  defp walk_quasi({:pair, {:sym, "unquote-splicing"}, {:pair, expr, :null}}, env, n) when n > 1 do
-    {:pair, {:sym, "unquote-splicing"}, {:pair, walk_quasi(expr, env, n - 1), :null}}
+  defp walk_quasi([{:sym, "unquote-splicing"} | [expr | []]], env, n) when n > 1 do
+    [{:sym, "unquote-splicing"} | [walk_quasi(expr, env, n - 1) | []]]
   end
 
-  defp walk_quasi({:pair, {:sym, "quasiquote"}, {:pair, expr, :null}}, env, n) do
-    {:pair, {:sym, "quasiquote"}, {:pair, walk_quasi(expr, env, n + 1), :null}}
+  defp walk_quasi([{:sym, "quasiquote"} | [expr | []]], env, n) do
+    [{:sym, "quasiquote"} | [walk_quasi(expr, env, n + 1) | []]]
   end
 
-  defp walk_quasi({:pair, h, t}, env, level) do
-    {:pair, walk_quasi(h, env, level), walk_quasi(t, env, level)}
+  defp walk_quasi([h | t], env, level) do
+    [walk_quasi(h, env, level) | walk_quasi(t, env, level)]
   end
 
   defp walk_quasi({:vector, t}, env, level) do

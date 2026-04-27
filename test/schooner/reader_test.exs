@@ -17,12 +17,12 @@ defmodule Schooner.ReaderTest do
       assert Reader.read_string("-0.5") == [-0.5]
     end
 
-    test "boolean literal reads to {:bool, _}" do
+    test "boolean literal reads to a bare boolean" do
       assert Reader.read_string("#t") == [Value.bool(true)]
       assert Reader.read_string("#false") == [Value.bool(false)]
     end
 
-    test "string literal reads to {:string, _}" do
+    test "string literal reads to a bare binary" do
       assert Reader.read_string(~S("hello")) == [Value.string("hello")]
     end
 
@@ -46,7 +46,7 @@ defmodule Schooner.ReaderTest do
 
   describe "lists" do
     test "empty list reads to :null" do
-      assert Reader.read_string("()") == [:null]
+      assert Reader.read_string("()") == [[]]
     end
 
     test "proper list reads to nested pairs" do
@@ -77,7 +77,7 @@ defmodule Schooner.ReaderTest do
 
     test "deeply nested" do
       datum = Reader.read_string("(((())))") |> hd()
-      expected = Value.list([Value.list([Value.list([:null])])])
+      expected = Value.list([Value.list([Value.list([[]])])])
       assert datum == expected
     end
   end

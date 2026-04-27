@@ -252,7 +252,7 @@ defmodule Schooner.EvalDerivedTest do
     test "trivial quasiquote of a literal returns it" do
       assert run("`5") == 5
       assert run("`foo") == Value.symbol("foo")
-      assert run("`()") == :null
+      assert run("`()") == []
     end
 
     test "unquote splices a single value into a list" do
@@ -304,7 +304,7 @@ defmodule Schooner.EvalDerivedTest do
     end
 
     test "improper quasiquoted lists preserve their dotted tail" do
-      assert run("`(1 ,(+ 1 1) . 3)") == {:pair, 1, {:pair, 2, 3}}
+      assert run("`(1 ,(+ 1 1) . 3)") == [1 | [2 | 3]]
     end
 
     test "splicing a non-list raises" do

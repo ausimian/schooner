@@ -8,7 +8,7 @@ defmodule Schooner.Primitives.BasePairsTest do
 
   describe "cons / car / cdr" do
     test "cons builds a pair, car/cdr destructure it" do
-      assert run("(cons 1 2)") == {:pair, 1, 2}
+      assert run("(cons 1 2)") == [1 | 2]
       assert run("(car (cons 1 2))") == 1
       assert run("(cdr (cons 1 2))") == 2
     end
@@ -24,7 +24,7 @@ defmodule Schooner.Primitives.BasePairsTest do
 
   describe "list constructors and predicates" do
     test "(list ...) builds proper lists" do
-      assert run("(list)") == :null
+      assert run("(list)") == []
       assert run("(list 1 2 3)") == Value.list([1, 2, 3])
     end
 
@@ -38,7 +38,7 @@ defmodule Schooner.Primitives.BasePairsTest do
 
     test "list-copy returns a structurally equal list" do
       assert run("(list-copy '(1 2 3))") == Value.list([1, 2, 3])
-      assert run("(list-copy '())") == :null
+      assert run("(list-copy '())") == []
     end
 
     test "list-copy on improper list raises" do
@@ -60,7 +60,7 @@ defmodule Schooner.Primitives.BasePairsTest do
     end
 
     test "reverse" do
-      assert run("(reverse '())") == :null
+      assert run("(reverse '())") == []
       assert run("(reverse '(1))") == Value.list([1])
       assert run("(reverse '(1 2 3))") == Value.list([3, 2, 1])
     end
@@ -73,7 +73,7 @@ defmodule Schooner.Primitives.BasePairsTest do
 
   describe "append" do
     test "append of zero, one, many" do
-      assert run("(append)") == :null
+      assert run("(append)") == []
       assert run("(append '(1 2 3))") == Value.list([1, 2, 3])
       assert run("(append '(1 2) '(3 4))") == Value.list([1, 2, 3, 4])
       assert run("(append '(1) '(2) '(3))") == Value.list([1, 2, 3])
@@ -81,7 +81,7 @@ defmodule Schooner.Primitives.BasePairsTest do
     end
 
     test "last argument may be any value (allows building improper tails)" do
-      assert run("(append '(1 2) 3)") == {:pair, 1, {:pair, 2, 3}}
+      assert run("(append '(1 2) 3)") == [1 | [2 | 3]]
       assert run("(append '() 7)") == 7
     end
 
@@ -102,7 +102,7 @@ defmodule Schooner.Primitives.BasePairsTest do
                ])
 
       assert run("(list-tail '(a b c d) 2)") == Value.list([Value.symbol("c"), Value.symbol("d")])
-      assert run("(list-tail '(1 2 3) 3)") == :null
+      assert run("(list-tail '(1 2 3) 3)") == []
     end
 
     test "list-tail past end raises index_out_of_range" do
@@ -197,7 +197,7 @@ defmodule Schooner.Primitives.BasePairsTest do
   describe "apply" do
     test "applies a procedure to a list of args" do
       assert run("(apply + '(1 2 3 4))") == 10
-      assert run("(apply list '())") == :null
+      assert run("(apply list '())") == []
     end
 
     test "splices a trailing list after positional leading args" do

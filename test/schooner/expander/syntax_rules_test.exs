@@ -34,7 +34,7 @@ defmodule Schooner.Expander.SyntaxRulesTest do
     end
   end
 
-  defp unmark({:pair, h, t}), do: {:pair, unmark(h), unmark(t)}
+  defp unmark([h | t]), do: [unmark(h) | unmark(t)]
 
   defp unmark({:vector, t}),
     do: {:vector, t |> Tuple.to_list() |> Enum.map(&unmark/1) |> List.to_tuple()}
@@ -170,14 +170,14 @@ defmodule Schooner.Expander.SyntaxRulesTest do
     test "free identifier in template carries a per-expansion mark" do
       t = transformer("(syntax-rules () ((_ x) (foo x)))")
       result = expand(t, "(u 7)")
-      assert {:pair, {:sym, marked}, {:pair, 7, :null}} = result
+      assert [{:sym, marked} | [7 | []]] = result
       assert {:ok, "foo"} = SyntaxRules.strip_mark(marked)
     end
 
     test "core keywords in template are emitted unmarked" do
       t = transformer("(syntax-rules () ((_ x) (lambda (x) x)))")
       result = expand(t, "(u y)")
-      assert {:pair, {:sym, "lambda"}, _} = result
+      assert [{:sym, "lambda"} | _] = result
     end
 
     test "two expansions of the same template get distinct marks" do
@@ -239,7 +239,7 @@ defmodule Schooner.Expander.SyntaxRulesTest do
     end
 
     test "syntax-rules called on a non-pair spec is rejected" do
-      assert_raise Schooner.Expander.Error, fn -> SyntaxRules.compile(:null) end
+      assert_raise Schooner.Expander.Error, fn -> SyntaxRules.compile([]) end
     end
 
     test "no matching rule reports the form's keyword" do

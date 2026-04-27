@@ -54,8 +54,8 @@ defmodule Schooner.Primitives.Cxr do
   end
 
   defp apply_chain(_name, [], v), do: v
-  defp apply_chain(name, ["a" | rest], {:pair, a, _}), do: apply_chain(name, rest, a)
-  defp apply_chain(name, ["d" | rest], {:pair, _, d}), do: apply_chain(name, rest, d)
+  defp apply_chain(name, ["a" | rest], [a | _]), do: apply_chain(name, rest, a)
+  defp apply_chain(name, ["d" | rest], [_ | d]), do: apply_chain(name, rest, d)
 
   defp apply_chain(name, _ops, other),
     do: raise(Error, reason: {:type_error, name, "pair", other})

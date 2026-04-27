@@ -43,17 +43,17 @@ defmodule Schooner.Eval do
     end
   end
 
-  def eval(:null, _env), do: raise(Error, reason: :empty_application)
+  def eval([], _env), do: raise(Error, reason: :empty_application)
 
-  def eval({:pair, {:sym, "quote"}, tail}, _env), do: eval_quote(tail)
-  def eval({:pair, {:sym, "if"}, tail}, env), do: eval_if(tail, env)
-  def eval({:pair, {:sym, "lambda"}, tail}, env), do: eval_lambda(tail, env)
-  def eval({:pair, {:sym, "define"}, tail}, env), do: eval_define(tail, env)
-  def eval({:pair, {:sym, "begin"}, tail}, env), do: eval_sequence(tail, env)
-  def eval({:pair, {:sym, "letrec*"}, tail}, env), do: eval_letrec_star(tail, env)
-  def eval({:pair, {:sym, "quasiquote"}, tail}, env), do: eval_quasiquote_top(tail, env)
-  def eval({:pair, {:sym, "guard"}, tail}, env), do: eval_guard(tail, env)
-  def eval({:pair, head, tail}, env), do: eval_apply(head, tail, env)
+  def eval([{:sym, "quote"} | tail], _env), do: eval_quote(tail)
+  def eval([{:sym, "if"} | tail], env), do: eval_if(tail, env)
+  def eval([{:sym, "lambda"} | tail], env), do: eval_lambda(tail, env)
+  def eval([{:sym, "define"} | tail], env), do: eval_define(tail, env)
+  def eval([{:sym, "begin"} | tail], env), do: eval_sequence(tail, env)
+  def eval([{:sym, "letrec*"} | tail], env), do: eval_letrec_star(tail, env)
+  def eval([{:sym, "quasiquote"} | tail], env), do: eval_quasiquote_top(tail, env)
+  def eval([{:sym, "guard"} | tail], env), do: eval_guard(tail, env)
+  def eval([head | tail], env), do: eval_apply(head, tail, env)
 
   def eval(value, _env), do: value
 
@@ -74,14 +74,14 @@ defmodule Schooner.Eval do
   # quote
   # ---------------------------------------------------------------------------
 
-  defp eval_quote({:pair, datum, :null}), do: datum
+  defp eval_quote([datum | []]), do: datum
   defp eval_quote(_), do: raise(Error, reason: {:bad_special_form, "quote"})
 
   # ---------------------------------------------------------------------------
   # if
   # ---------------------------------------------------------------------------
 
-  defp eval_if({:pair, test, {:pair, then_e, :null}}, env) do
+  defp eval_if([test | [then_e | []]], env) do
     if Value.truthy?(eval(test, env)) do
       eval(then_e, env)
     else
@@ -89,7 +89,7 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_if({:pair, test, {:pair, then_e, {:pair, else_e, :null}}}, env) do
+  defp eval_if([test | [then_e | [else_e | []]]], env) do
     if Value.truthy?(eval(test, env)) do
       eval(then_e, env)
     else
@@ -103,28 +103,28 @@ defmodule Schooner.Eval do
   # lambda
   # ---------------------------------------------------------------------------
 
-  defp eval_lambda({:pair, _params_form, :null}, _env) do
+  defp eval_lambda([_params_form | []], _env) do
     raise(Error, reason: {:bad_special_form, "lambda"})
   end
 
-  defp eval_lambda({:pair, params_form, body}, env) do
+  defp eval_lambda([params_form | body], env) do
     Value.closure(parse_params(params_form), desugar_body(body), env, nil)
   end
 
   defp eval_lambda(_, _env), do: raise(Error, reason: {:bad_special_form, "lambda"})
 
   defp parse_params({:sym, name}), do: {:any, name}
-  defp parse_params(:null), do: {:fixed, 0, []}
-  defp parse_params({:pair, _, _} = list), do: collect_params(list, [], 0)
+  defp parse_params([]), do: {:fixed, 0, []}
+  defp parse_params([_ | _] = list), do: collect_params(list, [], 0)
   defp parse_params(_), do: raise(Error, reason: :invalid_params)
 
-  defp collect_params(:null, acc, n), do: {:fixed, n, Enum.reverse(acc)}
+  defp collect_params([], acc, n), do: {:fixed, n, Enum.reverse(acc)}
 
   defp collect_params({:sym, rest_name}, acc, n) do
     {:fixed_rest, n, Enum.reverse(acc), rest_name}
   end
 
-  defp collect_params({:pair, {:sym, name}, t}, acc, n) do
+  defp collect_params([{:sym, name} | t], acc, n) do
     collect_params(t, [name | acc], n + 1)
   end
 
@@ -134,16 +134,16 @@ defmodule Schooner.Eval do
   # define — top-level only at MVP; not enforced syntactically yet
   # ---------------------------------------------------------------------------
 
-  defp eval_define({:pair, {:sym, name}, {:pair, expr, :null}}, env) do
+  defp eval_define([{:sym, name} | [expr | []]], env) do
     Env.define(env, name, eval(expr, env))
     :unspecified
   end
 
-  defp eval_define({:pair, {:pair, {:sym, _name}, _params}, :null}, _env) do
+  defp eval_define([[{:sym, _name} | _params] | []], _env) do
     raise(Error, reason: {:bad_special_form, "define"})
   end
 
-  defp eval_define({:pair, {:pair, {:sym, name}, params_form}, body}, env) do
+  defp eval_define([[{:sym, name} | params_form] | body], env) do
     closure = Value.closure(parse_params(params_form), desugar_body(body), env, name)
     Env.define(env, name, closure)
     :unspecified
@@ -155,14 +155,14 @@ defmodule Schooner.Eval do
   # sequence — body of begin / lambda / define-fn
   # ---------------------------------------------------------------------------
 
-  defp eval_sequence({:pair, last, :null}, env), do: eval(last, env)
+  defp eval_sequence([last | []], env), do: eval(last, env)
 
-  defp eval_sequence({:pair, head, rest}, env) do
+  defp eval_sequence([head | rest], env) do
     _ = eval(head, env)
     eval_sequence(rest, env)
   end
 
-  defp eval_sequence(:null, _env), do: :unspecified
+  defp eval_sequence([], _env), do: :unspecified
 
   # ---------------------------------------------------------------------------
   # application
@@ -174,8 +174,8 @@ defmodule Schooner.Eval do
     apply_proc(proc, args)
   end
 
-  defp eval_args(:null, _env, acc), do: Enum.reverse(acc)
-  defp eval_args({:pair, h, t}, env, acc), do: eval_args(t, env, [eval(h, env) | acc])
+  defp eval_args([], _env, acc), do: Enum.reverse(acc)
+  defp eval_args([h | t], env, acc), do: eval_args(t, env, [eval(h, env) | acc])
   defp eval_args(_, _env, _acc), do: raise(Error, reason: :improper_application)
 
   @spec apply_proc(Value.t(), [Value.t()]) :: Value.t()
@@ -235,7 +235,7 @@ defmodule Schooner.Eval do
   # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
   # knot without any after-the-fact mutation of the closures
   # themselves.
-  defp eval_letrec_star({:pair, bindings_form, body}, env) when body != :null do
+  defp eval_letrec_star([bindings_form | body], env) when body != [] do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
 
@@ -254,11 +254,11 @@ defmodule Schooner.Eval do
 
   defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [], [])
 
-  defp parse_bindings(:null, _ctx, names, inits) do
+  defp parse_bindings([], _ctx, names, inits) do
     {Enum.reverse(names), Enum.reverse(inits)}
   end
 
-  defp parse_bindings({:pair, {:pair, {:sym, name}, {:pair, init, :null}}, rest}, ctx, ns, is) do
+  defp parse_bindings([[{:sym, name} | [init | []]] | rest], ctx, ns, is) do
     parse_bindings(rest, ctx, [name | ns], [init | is])
   end
 
@@ -266,31 +266,31 @@ defmodule Schooner.Eval do
 
   # `unquote` and `unquote-splicing` only fire at quasi level 1; nested
   # `quasiquote` raises the level, nested `unquote` lowers it.
-  defp eval_quasiquote_top({:pair, datum, :null}, env) do
+  defp eval_quasiquote_top([datum | []], env) do
     quasi(datum, env, 1)
   end
 
   defp eval_quasiquote_top(_, _env), do: raise(Error, reason: {:bad_special_form, "quasiquote"})
 
-  defp quasi({:pair, {:sym, "unquote"}, {:pair, expr, :null}}, env, 1), do: eval(expr, env)
+  defp quasi([{:sym, "unquote"} | [expr | []]], env, 1), do: eval(expr, env)
 
-  defp quasi({:pair, {:sym, "unquote"}, {:pair, expr, :null}}, env, n) when n > 1 do
+  defp quasi([{:sym, "unquote"} | [expr | []]], env, n) when n > 1 do
     Value.list([Value.symbol("unquote"), quasi(expr, env, n - 1)])
   end
 
-  defp quasi({:pair, {:sym, "quasiquote"}, {:pair, expr, :null}}, env, n) do
+  defp quasi([{:sym, "quasiquote"} | [expr | []]], env, n) do
     Value.list([Value.symbol("quasiquote"), quasi(expr, env, n + 1)])
   end
 
-  defp quasi({:pair, head, tail}, env, level) do
+  defp quasi([head | tail], env, level) do
     case head do
-      {:pair, {:sym, "unquote-splicing"}, {:pair, expr, :null}} when level == 1 ->
+      [{:sym, "unquote-splicing"} | [expr | []]] when level == 1 ->
         spliced = eval(expr, env)
         rest = quasi(tail, env, level)
         splice_append(spliced, rest, "unquote-splicing")
 
       _ ->
-        {:pair, quasi(head, env, level), quasi(tail, env, level)}
+        [quasi(head, env, level) | quasi(tail, env, level)]
     end
   end
 
@@ -301,16 +301,16 @@ defmodule Schooner.Eval do
 
   defp quasi(other, _env, _level), do: other
 
-  defp splice_append(:null, rest, _ctx), do: rest
+  defp splice_append([], rest, _ctx), do: rest
 
-  defp splice_append({:pair, h, t}, rest, ctx) do
-    {:pair, h, splice_append(t, rest, ctx)}
+  defp splice_append([h | t], rest, ctx) do
+    [h | splice_append(t, rest, ctx)]
   end
 
   defp splice_append(_, _, ctx), do: raise(Error, reason: {:bad_special_form, ctx})
 
-  defp scheme_list_to_elixir(:null), do: []
-  defp scheme_list_to_elixir({:pair, h, t}), do: [h | scheme_list_to_elixir(t)]
+  defp scheme_list_to_elixir([]), do: []
+  defp scheme_list_to_elixir([h | t]), do: [h | scheme_list_to_elixir(t)]
 
   # ---------------------------------------------------------------------------
   # Internal definitions / body splicing
@@ -342,24 +342,24 @@ defmodule Schooner.Eval do
   # `define` after a non-define form in the same body is a syntax
   # error, raised here rather than at evaluation time so the whole
   # body is rejected before any side-effecting init runs.
-  defp desugar_body(:null), do: :null
+  defp desugar_body([]), do: []
 
   defp desugar_body(body) do
     case scan_defines(body, []) do
       {[], _rest} ->
         body
 
-      {_defs, :null} ->
+      {_defs, []} ->
         raise(Error, reason: :empty_body)
 
       {defs, rest} ->
         bindings = build_letrec_bindings(defs)
-        letrec_form = {:pair, {:sym, "letrec*"}, {:pair, bindings, rest}}
-        {:pair, letrec_form, :null}
+        letrec_form = [{:sym, "letrec*"} | [bindings | rest]]
+        [letrec_form | []]
     end
   end
 
-  defp scan_defines(:null, acc), do: {Enum.reverse(acc), :null}
+  defp scan_defines([], acc), do: {Enum.reverse(acc), []}
 
   # r7rs §5.3.3: a `(begin <form> ...)` at the head of a body is
   # spliced into the body in place. This is what lets
@@ -367,28 +367,28 @@ defmodule Schooner.Eval do
   # the expander emits a `(begin (define ...) (define ...) ...)`
   # for each record type and the splicing here makes those defines
   # behave as if they were written at the body level directly.
-  defp scan_defines({:pair, {:pair, {:sym, "begin"}, inner}, rest}, acc) do
+  defp scan_defines([[{:sym, "begin"} | inner] | rest], acc) do
     scan_defines(splice_append(inner, rest, "begin"), acc)
   end
 
-  defp scan_defines({:pair, form, rest}, acc) do
+  defp scan_defines([form | rest], acc) do
     case parse_internal_define(form) do
       nil ->
         check_no_more_defines(rest)
-        {Enum.reverse(acc), {:pair, form, rest}}
+        {Enum.reverse(acc), [form | rest]}
 
       binding ->
         scan_defines(rest, [binding | acc])
     end
   end
 
-  defp parse_internal_define({:pair, {:sym, "define"}, body}) do
+  defp parse_internal_define([{:sym, "define"} | body]) do
     case body do
-      {:pair, {:sym, name}, {:pair, expr, :null}} ->
+      [{:sym, name} | [expr | []]] ->
         {name, expr}
 
-      {:pair, {:pair, {:sym, name}, params}, body_forms} when body_forms != :null ->
-        {name, {:pair, {:sym, "lambda"}, {:pair, params, body_forms}}}
+      [[{:sym, name} | params] | body_forms] when body_forms != [] ->
+        {name, [{:sym, "lambda"} | [params | body_forms]]}
 
       _ ->
         raise(Error, reason: {:bad_special_form, "define"})
@@ -397,13 +397,13 @@ defmodule Schooner.Eval do
 
   defp parse_internal_define(_), do: nil
 
-  defp check_no_more_defines(:null), do: :ok
+  defp check_no_more_defines([]), do: :ok
 
-  defp check_no_more_defines({:pair, {:pair, {:sym, "begin"}, inner}, rest}) do
+  defp check_no_more_defines([[{:sym, "begin"} | inner] | rest]) do
     check_no_more_defines(splice_append(inner, rest, "begin"))
   end
 
-  defp check_no_more_defines({:pair, form, rest}) do
+  defp check_no_more_defines([form | rest]) do
     if parse_internal_define(form) != nil do
       raise(Error, reason: :define_after_expression)
     else
@@ -411,11 +411,11 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp build_letrec_bindings([]), do: :null
+  defp build_letrec_bindings([]), do: []
 
   defp build_letrec_bindings([{name, init} | rest]) do
-    binding = {:pair, {:sym, name}, {:pair, init, :null}}
-    {:pair, binding, build_letrec_bindings(rest)}
+    binding = [{:sym, name} | [init | []]]
+    [binding | build_letrec_bindings(rest)]
   end
 
   # ---------------------------------------------------------------------------
@@ -429,8 +429,8 @@ defmodule Schooner.Eval do
   # `apply_proc/2` invokes it with the same machinery as a user
   # handler — `with-exception-handler` and `guard` are
   # indistinguishable from the raise side.
-  defp eval_guard({:pair, {:pair, {:sym, var}, clauses_form}, body}, env)
-       when is_binary(var) and body != :null do
+  defp eval_guard([[{:sym, var} | clauses_form] | body], env)
+       when is_binary(var) and body != [] do
     tag = make_ref()
     handler = build_guard_handler(var, clauses_form, env, tag)
     # Snapshot/restore the whole stack rather than `pop`ing once in
@@ -463,14 +463,14 @@ defmodule Schooner.Eval do
     end)
   end
 
-  defp eval_guard_clauses(:null, _env), do: :no_match
+  defp eval_guard_clauses([], _env), do: :no_match
 
-  defp eval_guard_clauses({:pair, {:pair, {:sym, "else"}, body}, _rest}, env)
-       when body != :null do
+  defp eval_guard_clauses([[{:sym, "else"} | body] | _rest], env)
+       when body != [] do
     {:matched, eval_body(body, env)}
   end
 
-  defp eval_guard_clauses({:pair, clause, rest}, env) do
+  defp eval_guard_clauses([clause | rest], env) do
     case eval_guard_clause(clause, env) do
       :no_match -> eval_guard_clauses(rest, env)
       {:matched, _} = m -> m
@@ -479,16 +479,16 @@ defmodule Schooner.Eval do
 
   defp eval_guard_clauses(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp eval_guard_clause({:pair, test, :null}, env) do
+  defp eval_guard_clause([test | []], env) do
     case eval(test, env) do
-      {:bool, false} -> :no_match
+      false -> :no_match
       val -> {:matched, val}
     end
   end
 
-  defp eval_guard_clause({:pair, test, {:pair, {:sym, "=>"}, {:pair, proc_expr, :null}}}, env) do
+  defp eval_guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], env) do
     case eval(test, env) do
-      {:bool, false} ->
+      false ->
         :no_match
 
       val ->
@@ -497,9 +497,9 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard_clause({:pair, test, body}, env) when body != :null do
+  defp eval_guard_clause([test | body], env) when body != [] do
     case eval(test, env) do
-      {:bool, false} -> :no_match
+      false -> :no_match
       _ -> {:matched, eval_body(body, env)}
     end
   end

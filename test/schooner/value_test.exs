@@ -5,43 +5,43 @@ defmodule Schooner.ValueTest do
 
   describe "constructors and predicates" do
     test "booleans" do
-      assert Value.bool(true) == {:bool, true}
-      assert Value.bool(false) == {:bool, false}
-      assert Value.boolean?({:bool, true})
-      assert Value.boolean?({:bool, false})
-      refute Value.boolean?(:null)
+      assert Value.bool(true) == true
+      assert Value.bool(false) == false
+      assert Value.boolean?(true)
+      assert Value.boolean?(false)
+      refute Value.boolean?([])
       refute Value.boolean?(0)
       refute Value.boolean?({:sym, "true"})
     end
 
     test "null" do
-      assert Value.null?(:null)
-      refute Value.null?({:bool, false})
-      refute Value.null?({:pair, :null, :null})
+      assert Value.null?([])
+      refute Value.null?(false)
+      refute Value.null?([[] | []])
     end
 
     test "pairs" do
-      assert Value.pair(1, 2) == {:pair, 1, 2}
-      assert Value.pair?({:pair, :null, :null})
-      refute Value.pair?(:null)
+      assert Value.pair(1, 2) == [1 | 2]
+      assert Value.pair?([[] | []])
+      refute Value.pair?([])
     end
 
     test "list? recognises proper lists only" do
-      assert Value.list?(:null)
+      assert Value.list?([])
       assert Value.list?(Value.list([1, 2, 3]))
       refute Value.list?(Value.improper_list([1, 2], 3))
       refute Value.list?(42)
-      refute Value.list?({:string, "abc"})
+      refute Value.list?("abc")
     end
 
     test "list builders" do
-      assert Value.list([]) == :null
-      assert Value.list([1, 2, 3]) == {:pair, 1, {:pair, 2, {:pair, 3, :null}}}
+      assert Value.list([]) == []
+      assert Value.list([1, 2, 3]) == [1 | [2 | [3 | []]]]
 
       assert Value.improper_list([1, 2], 3) ==
-               {:pair, 1, {:pair, 2, 3}}
+               [1 | [2 | 3]]
 
-      assert Value.improper_list([1], 2) == {:pair, 1, 2}
+      assert Value.improper_list([1], 2) == [1 | 2]
     end
 
     test "symbols are tagged binaries, never atoms" do
@@ -57,7 +57,7 @@ defmodule Schooner.ValueTest do
       assert Value.char?(Value.char(?a))
       assert Value.number?(0)
       assert Value.number?(1.5)
-      refute Value.number?({:bool, false})
+      refute Value.number?(false)
       assert Value.integer?(1)
       assert Value.integer?(1.0)
       refute Value.integer?(1.5)
@@ -93,17 +93,17 @@ defmodule Schooner.ValueTest do
       refute Value.record?({:vector, {1, 2}})
       assert Value.eof?(:eof)
       assert Value.unspecified?(:unspecified)
-      refute Value.unspecified?(:null)
-      refute Value.unspecified?({:bool, false})
+      refute Value.unspecified?([])
+      refute Value.unspecified?(false)
     end
 
     test "error_object? / error_kind?" do
-      err = {:error_obj, :user, {:string, "boom"}, []}
+      err = {:error_obj, :user, "boom", []}
       assert Value.error_object?(err)
-      refute Value.error_object?({:string, "boom"})
+      refute Value.error_object?("boom")
       assert Value.error_kind?(err, :user)
       refute Value.error_kind?(err, :read)
-      refute Value.error_kind?({:string, "x"}, :user)
+      refute Value.error_kind?("x", :user)
     end
 
     test "integer? on non-finite floats is false (ArgumentError fallback)" do
@@ -114,9 +114,9 @@ defmodule Schooner.ValueTest do
     end
 
     test "truthiness — only #f is false" do
-      refute Value.truthy?({:bool, false})
-      assert Value.truthy?({:bool, true})
-      assert Value.truthy?(:null)
+      refute Value.truthy?(false)
+      assert Value.truthy?(true)
+      assert Value.truthy?([])
       assert Value.truthy?(0)
       assert Value.truthy?(0.0)
       assert Value.truthy?(Value.string(""))
@@ -134,8 +134,8 @@ defmodule Schooner.ValueTest do
     test "symbols, booleans, null, eof compare structurally" do
       assert Value.eq?(Value.symbol("a"), Value.symbol("a"))
       refute Value.eq?(Value.symbol("a"), Value.symbol("b"))
-      assert Value.eq?({:bool, true}, {:bool, true})
-      assert Value.eq?(:null, :null)
+      assert Value.eq?(true, true)
+      assert Value.eq?([], [])
       assert Value.eq?(:eof, :eof)
     end
 
@@ -200,9 +200,9 @@ defmodule Schooner.ValueTest do
 
   describe "write / display" do
     test "atoms" do
-      assert Value.write({:bool, true}) == "#t"
-      assert Value.write({:bool, false}) == "#f"
-      assert Value.write(:null) == "()"
+      assert Value.write(true) == "#t"
+      assert Value.write(false) == "#f"
+      assert Value.write([]) == "()"
       assert Value.write(:eof) == "#<eof>"
       assert Value.write(:unspecified) == "#<unspecified>"
     end
@@ -256,7 +256,7 @@ defmodule Schooner.ValueTest do
 
     test "lists, dotted lists, nested" do
       assert Value.write(Value.list([1, 2, 3])) == "(1 2 3)"
-      assert Value.write({:pair, 1, 2}) == "(1 . 2)"
+      assert Value.write([1 | 2]) == "(1 . 2)"
       assert Value.write(Value.improper_list([1, 2], 3)) == "(1 2 . 3)"
 
       nested = Value.list([Value.symbol("a"), Value.list([1, 2]), Value.string("hi")])
@@ -287,13 +287,13 @@ defmodule Schooner.ValueTest do
     end
 
     test "error objects render kind, message, and irritants" do
-      e = {:error_obj, :user, {:string, "boom"}, []}
+      e = {:error_obj, :user, "boom", []}
       assert Value.write(e) == "#<error \"boom\">"
 
-      with_irrs = {:error_obj, :read, {:string, "bad input"}, [1, Value.symbol("x")]}
+      with_irrs = {:error_obj, :read, "bad input", [1, Value.symbol("x")]}
       assert Value.write(with_irrs) == "#<read-error \"bad input\" 1 x>"
 
-      file_kind = {:error_obj, :file, {:string, "missing"}, []}
+      file_kind = {:error_obj, :file, "missing", []}
       assert Value.write(file_kind) == "#<file-error \"missing\">"
     end
 

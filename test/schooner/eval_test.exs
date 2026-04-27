@@ -58,7 +58,7 @@ defmodule Schooner.EvalTest do
       assert run("(quote 5)") == 5
       assert run("'5") == 5
       assert run("'foo") == Value.symbol("foo")
-      assert run("'()") == :null
+      assert run("'()") == []
       assert run("'(1 2 3)") == Value.list([1, 2, 3])
     end
 
@@ -107,12 +107,12 @@ defmodule Schooner.EvalTest do
 
     test "variadic lambda binds all args to a list" do
       assert run("((lambda args args) 1 2 3)") == Value.list([1, 2, 3])
-      assert run("((lambda args args))") == :null
+      assert run("((lambda args args))") == []
     end
 
     test "dotted-rest lambda binds head fixed and rest as a list" do
       assert run("((lambda (a . rest) rest) 1 2 3)") == Value.list([2, 3])
-      assert run("((lambda (a b . rest) rest) 1 2)") == :null
+      assert run("((lambda (a b . rest) rest) 1 2)") == []
     end
 
     test "arity mismatch on fixed lambda raises" do
@@ -129,14 +129,16 @@ defmodule Schooner.EvalTest do
       # Synthesise a `(lambda 1 1)` form directly — the expander
       # rejects this kind of shape, but Eval.parse_params/1 has its
       # own catch-all that we want to pin behaviour on.
-      bad_head = {:pair, {:sym, "lambda"}, {:pair, 1, {:pair, 1, :null}}}
+      bad_head = [{:sym, "lambda"} | [1 | [1 | []]]]
       e = assert_raise Error, fn -> Schooner.Eval.eval(bad_head, Env.new()) end
       assert e.reason == :invalid_params
 
       # Non-symbol inside the parameter list reaches collect_params/3.
       bad_param =
-        {:pair, {:sym, "lambda"},
-         {:pair, {:pair, {:sym, "x"}, {:pair, 1, :null}}, {:pair, {:sym, "x"}, :null}}}
+        [
+          {:sym, "lambda"}
+          | [[{:sym, "x"} | [1 | []]] | [{:sym, "x"} | []]]
+        ]
 
       e = assert_raise Error, fn -> Schooner.Eval.eval(bad_param, Env.new()) end
       assert e.reason == :invalid_params
@@ -214,7 +216,7 @@ defmodule Schooner.EvalTest do
       err =
         assert_raise Error, fn ->
           Schooner.Eval.eval(
-            {:pair, {:sym, "+"}, {:pair, 1, 2}},
+            [{:sym, "+"} | [1 | 2]],
             base_env()
           )
         end
