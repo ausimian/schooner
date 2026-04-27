@@ -9,8 +9,8 @@ defmodule Schooner.Value do
 
   ## Representations
 
-    * Booleans  — `{:bool, true}` / `{:bool, false}`. Only `{:bool, false}`
-      is Scheme-falsy. Every other value is truthy, including `:null` and `0`.
+    * Booleans  — bare Elixir `true` / `false`. Only `false` is
+      Scheme-falsy. Every other value is truthy, including `:null` and `0`.
     * Empty list — `:null`
     * Pair — `{:pair, car, cdr}`
     * Symbol — `{:sym, binary}` (binaries, not atoms; user-supplied
@@ -43,7 +43,7 @@ defmodule Schooner.Value do
     * Unspecified — `:unspecified`
   """
 
-  @type bool_v :: {:bool, boolean()}
+  @type bool_v :: boolean()
   @type pair_v :: {:pair, t(), t()}
   @type sym_v :: {:sym, binary()}
   @type string_v :: {:string, binary()}
@@ -86,8 +86,8 @@ defmodule Schooner.Value do
   # ---------------------------------------------------------------------------
 
   @spec bool(boolean()) :: bool_v()
-  def bool(true), do: {:bool, true}
-  def bool(false), do: {:bool, false}
+  def bool(true), do: true
+  def bool(false), do: false
 
   @spec pair(t(), t()) :: pair_v()
   def pair(car, cdr), do: {:pair, car, cdr}
@@ -172,7 +172,8 @@ defmodule Schooner.Value do
   # ---------------------------------------------------------------------------
 
   @spec boolean?(term()) :: boolean()
-  def boolean?({:bool, _}), do: true
+  def boolean?(true), do: true
+  def boolean?(false), do: true
   def boolean?(_), do: false
 
   @spec null?(term()) :: boolean()
@@ -271,11 +272,11 @@ defmodule Schooner.Value do
   def promise?(_), do: false
 
   @doc """
-  Scheme truthiness: only `{:bool, false}` is false; every other value is
+  Scheme truthiness: only `false` is false; every other value is
   truthy, including `:null`, `0`, and the empty string.
   """
   @spec truthy?(t()) :: boolean()
-  def truthy?({:bool, false}), do: false
+  def truthy?(false), do: false
   def truthy?(_), do: true
 
   # ---------------------------------------------------------------------------
@@ -354,8 +355,8 @@ defmodule Schooner.Value do
   @spec display_iodata(t()) :: iodata()
   def display_iodata(value), do: render(value, :display)
 
-  defp render({:bool, true}, _), do: "#t"
-  defp render({:bool, false}, _), do: "#f"
+  defp render(true, _), do: "#t"
+  defp render(false, _), do: "#f"
   defp render(:null, _), do: "()"
   defp render(:eof, _), do: "#<eof>"
   defp render(:unspecified, _), do: "#<unspecified>"

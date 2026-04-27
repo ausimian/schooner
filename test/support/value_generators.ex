@@ -58,8 +58,8 @@ defmodule Schooner.Test.ValueGenerators do
 
   def atom_value do
     one_of([
-      constant({:bool, true}),
-      constant({:bool, false}),
+      constant(true),
+      constant(false),
       constant(:null),
       constant(:eof),
       constant(:unspecified)
@@ -68,8 +68,8 @@ defmodule Schooner.Test.ValueGenerators do
 
   def readable_atom_value do
     one_of([
-      constant({:bool, true}),
-      constant({:bool, false}),
+      constant(true),
+      constant(false),
       constant(:null)
     ])
   end

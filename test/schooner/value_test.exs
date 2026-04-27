@@ -5,10 +5,10 @@ defmodule Schooner.ValueTest do
 
   describe "constructors and predicates" do
     test "booleans" do
-      assert Value.bool(true) == {:bool, true}
-      assert Value.bool(false) == {:bool, false}
-      assert Value.boolean?({:bool, true})
-      assert Value.boolean?({:bool, false})
+      assert Value.bool(true) == true
+      assert Value.bool(false) == false
+      assert Value.boolean?(true)
+      assert Value.boolean?(false)
       refute Value.boolean?(:null)
       refute Value.boolean?(0)
       refute Value.boolean?({:sym, "true"})
@@ -16,7 +16,7 @@ defmodule Schooner.ValueTest do
 
     test "null" do
       assert Value.null?(:null)
-      refute Value.null?({:bool, false})
+      refute Value.null?(false)
       refute Value.null?({:pair, :null, :null})
     end
 
@@ -57,7 +57,7 @@ defmodule Schooner.ValueTest do
       assert Value.char?(Value.char(?a))
       assert Value.number?(0)
       assert Value.number?(1.5)
-      refute Value.number?({:bool, false})
+      refute Value.number?(false)
       assert Value.integer?(1)
       assert Value.integer?(1.0)
       refute Value.integer?(1.5)
@@ -94,7 +94,7 @@ defmodule Schooner.ValueTest do
       assert Value.eof?(:eof)
       assert Value.unspecified?(:unspecified)
       refute Value.unspecified?(:null)
-      refute Value.unspecified?({:bool, false})
+      refute Value.unspecified?(false)
     end
 
     test "error_object? / error_kind?" do
@@ -114,8 +114,8 @@ defmodule Schooner.ValueTest do
     end
 
     test "truthiness — only #f is false" do
-      refute Value.truthy?({:bool, false})
-      assert Value.truthy?({:bool, true})
+      refute Value.truthy?(false)
+      assert Value.truthy?(true)
       assert Value.truthy?(:null)
       assert Value.truthy?(0)
       assert Value.truthy?(0.0)
@@ -134,7 +134,7 @@ defmodule Schooner.ValueTest do
     test "symbols, booleans, null, eof compare structurally" do
       assert Value.eq?(Value.symbol("a"), Value.symbol("a"))
       refute Value.eq?(Value.symbol("a"), Value.symbol("b"))
-      assert Value.eq?({:bool, true}, {:bool, true})
+      assert Value.eq?(true, true)
       assert Value.eq?(:null, :null)
       assert Value.eq?(:eof, :eof)
     end
@@ -200,8 +200,8 @@ defmodule Schooner.ValueTest do
 
   describe "write / display" do
     test "atoms" do
-      assert Value.write({:bool, true}) == "#t"
-      assert Value.write({:bool, false}) == "#f"
+      assert Value.write(true) == "#t"
+      assert Value.write(false) == "#f"
       assert Value.write(:null) == "()"
       assert Value.write(:eof) == "#<eof>"
       assert Value.write(:unspecified) == "#<unspecified>"

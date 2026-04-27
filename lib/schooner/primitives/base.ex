@@ -597,7 +597,7 @@ defmodule Schooner.Primitives.Base do
 
   defp boolean_equal([first | rest] = args) do
     Enum.each(args, fn
-      {:bool, _} -> :ok
+      b when is_boolean(b) -> :ok
       other -> raise(Error, reason: {:type_error, "boolean=?", "boolean", other})
     end)
 

@@ -116,7 +116,7 @@ defmodule Schooner.Library.LoaderTest do
 
       reg = Loader.load_string(source, standard())
       lib = Library.fetch!(reg, ["cx-lib"])
-      assert {:var, {:bool, true}} = Map.fetch!(lib.exports, "saw-cxr")
+      assert {:var, true} = Map.fetch!(lib.exports, "saw-cxr")
     end
 
     test "and / or / not requirement combinators" do

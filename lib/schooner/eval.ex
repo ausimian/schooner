@@ -481,14 +481,14 @@ defmodule Schooner.Eval do
 
   defp eval_guard_clause({:pair, test, :null}, env) do
     case eval(test, env) do
-      {:bool, false} -> :no_match
+      false -> :no_match
       val -> {:matched, val}
     end
   end
 
   defp eval_guard_clause({:pair, test, {:pair, {:sym, "=>"}, {:pair, proc_expr, :null}}}, env) do
     case eval(test, env) do
-      {:bool, false} ->
+      false ->
         :no_match
 
       val ->
@@ -499,7 +499,7 @@ defmodule Schooner.Eval do
 
   defp eval_guard_clause({:pair, test, body}, env) when body != :null do
     case eval(test, env) do
-      {:bool, false} -> :no_match
+      false -> :no_match
       _ -> {:matched, eval_body(body, env)}
     end
   end

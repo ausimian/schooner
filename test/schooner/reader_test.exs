@@ -17,7 +17,7 @@ defmodule Schooner.ReaderTest do
       assert Reader.read_string("-0.5") == [-0.5]
     end
 
-    test "boolean literal reads to {:bool, _}" do
+    test "boolean literal reads to a bare boolean" do
       assert Reader.read_string("#t") == [Value.bool(true)]
       assert Reader.read_string("#false") == [Value.bool(false)]
     end
