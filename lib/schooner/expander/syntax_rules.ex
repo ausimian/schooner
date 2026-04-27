@@ -75,7 +75,7 @@ defmodule Schooner.Expander.SyntaxRules do
   special-casing for the expansion-time exception class.
   """
   @spec compile(Value.t()) :: (Value.t() -> Value.t())
-  def compile({:pair, {:sym, "syntax-rules"}, tail}) do
+  def compile([{:sym, "syntax-rules"} | tail]) do
     {literals, rules_form} = parse_spec_head(tail)
     rules = parse_rules(rules_form, literals)
 
@@ -114,23 +114,23 @@ defmodule Schooner.Expander.SyntaxRules do
   # syntax-rules parsing
   # ---------------------------------------------------------------------------
 
-  defp parse_spec_head({:pair, literals_form, rules_form}) do
+  defp parse_spec_head([literals_form | rules_form]) do
     {parse_literals(literals_form, MapSet.new()), rules_form}
   end
 
   defp parse_spec_head(_), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
 
-  defp parse_literals(:null, acc), do: acc
+  defp parse_literals([], acc), do: acc
 
-  defp parse_literals({:pair, {:sym, name}, rest}, acc) do
+  defp parse_literals([{:sym, name} | rest], acc) do
     parse_literals(rest, MapSet.put(acc, name))
   end
 
   defp parse_literals(_, _), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
 
-  defp parse_rules(:null, _literals), do: []
+  defp parse_rules([], _literals), do: []
 
-  defp parse_rules({:pair, {:pair, pat, {:pair, tmpl, :null}}, rest}, literals) do
+  defp parse_rules([[pat | [tmpl | []]] | rest], literals) do
     cpat = compile_pattern(pat, literals, 0)
     pvars = collect_pvars(cpat, %{})
     ctmpl = compile_template(tmpl, pvars)
@@ -157,9 +157,9 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp compile_pattern(:null, _literals, _depth), do: {:list, [], :null}
+  defp compile_pattern([], _literals, _depth), do: {:list, [], []}
 
-  defp compile_pattern({:pair, _, _} = list, literals, depth) do
+  defp compile_pattern([_ | _] = list, literals, depth) do
     compile_list_pattern(list, literals, depth, [])
   end
 
@@ -167,8 +167,8 @@ defmodule Schooner.Expander.SyntaxRules do
     items = t |> Tuple.to_list() |> Value.list()
 
     case compile_list_pattern(items, literals, depth, []) do
-      {:list, head, :null} -> {:vector, head}
-      {:list_ell, pre, ell, post, :null} -> {:vector_ell, pre, ell, post}
+      {:list, head, []} -> {:vector, head}
+      {:list_ell, pre, ell, post, []} -> {:vector_ell, pre, ell, post}
       _ -> raise Error, reason: {:bad_pattern, "vector pattern with dotted tail"}
     end
   end
@@ -176,7 +176,7 @@ defmodule Schooner.Expander.SyntaxRules do
   defp compile_pattern(other, _literals, _depth), do: {:const, other}
 
   defp compile_list_pattern(
-         {:pair, head, {:pair, {:sym, @ellipsis}, rest}},
+         [head | [{:sym, @ellipsis} | rest]],
          literals,
          depth,
          acc
@@ -186,25 +186,25 @@ defmodule Schooner.Expander.SyntaxRules do
     {:list_ell, Enum.reverse(acc), ell_pat, post, tail}
   end
 
-  defp compile_list_pattern({:pair, head, rest}, literals, depth, acc) do
+  defp compile_list_pattern([head | rest], literals, depth, acc) do
     compile_list_pattern(rest, literals, depth, [compile_pattern(head, literals, depth) | acc])
   end
 
-  defp compile_list_pattern(:null, _literals, _depth, acc) do
-    {:list, Enum.reverse(acc), :null}
+  defp compile_list_pattern([], _literals, _depth, acc) do
+    {:list, Enum.reverse(acc), []}
   end
 
   defp compile_list_pattern(other, literals, depth, acc) do
     {:list, Enum.reverse(acc), compile_pattern(other, literals, depth)}
   end
 
-  defp compile_post_ellipsis(:null, _literals, _depth, acc), do: {Enum.reverse(acc), :null}
+  defp compile_post_ellipsis([], _literals, _depth, acc), do: {Enum.reverse(acc), []}
 
-  defp compile_post_ellipsis({:pair, {:sym, @ellipsis}, _}, _literals, _depth, _acc) do
+  defp compile_post_ellipsis([{:sym, @ellipsis} | _], _literals, _depth, _acc) do
     raise Error, reason: {:bad_pattern, "two ellipses in one list"}
   end
 
-  defp compile_post_ellipsis({:pair, head, rest}, literals, depth, acc) do
+  defp compile_post_ellipsis([head | rest], literals, depth, acc) do
     compile_post_ellipsis(rest, literals, depth, [compile_pattern(head, literals, depth) | acc])
   end
 
@@ -217,7 +217,7 @@ defmodule Schooner.Expander.SyntaxRules do
   # ---------------------------------------------------------------------------
 
   defp collect_pvars(:wild, acc), do: acc
-  defp collect_pvars(:null, acc), do: acc
+  defp collect_pvars([], acc), do: acc
   defp collect_pvars({:literal, _}, acc), do: acc
   defp collect_pvars({:const, _}, acc), do: acc
 
@@ -266,7 +266,7 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp compile_template(:null, _pvars), do: {:t_list, [], :null}
+  defp compile_template([], _pvars), do: {:t_list, [], []}
 
   # `(quote datum)` in a template emits `(quote datum)` verbatim. The
   # datum is data — its non-pattern-variable identifiers must NOT
@@ -274,11 +274,11 @@ defmodule Schooner.Expander.SyntaxRules do
   # author wrote it. Pattern variables inside the datum do still
   # substitute (the standard `case` macro relies on `'(d ...)` to
   # produce a list of the literal datums for `memv`).
-  defp compile_template({:pair, {:sym, "quote"}, {:pair, datum, :null}}, pvars) do
+  defp compile_template([{:sym, "quote"} | [datum | []]], pvars) do
     {:t_quote, compile_quoted_datum(datum, pvars)}
   end
 
-  defp compile_template({:pair, _, _} = list, pvars) do
+  defp compile_template([_ | _] = list, pvars) do
     compile_template_list(list, pvars, [])
   end
 
@@ -290,19 +290,19 @@ defmodule Schooner.Expander.SyntaxRules do
 
   defp compile_template(other, _pvars), do: {:t_const, other}
 
-  defp compile_template_list({:pair, head, rest}, pvars, acc) do
+  defp compile_template_list([head | rest], pvars, acc) do
     item_tmpl = compile_template(head, pvars)
     {n, after_dots} = count_template_ellipses(rest, 0)
     compile_template_list(after_dots, pvars, [{item_tmpl, n} | acc])
   end
 
-  defp compile_template_list(:null, _pvars, acc), do: {:t_list, Enum.reverse(acc), :null}
+  defp compile_template_list([], _pvars, acc), do: {:t_list, Enum.reverse(acc), []}
 
   defp compile_template_list(other, pvars, acc) do
     {:t_list, Enum.reverse(acc), compile_template(other, pvars)}
   end
 
-  defp count_template_ellipses({:pair, {:sym, @ellipsis}, rest}, n) do
+  defp count_template_ellipses([{:sym, @ellipsis} | rest], n) do
     count_template_ellipses(rest, n + 1)
   end
 
@@ -325,9 +325,9 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp compile_quoted_datum(:null, _pvars), do: {:q_list, [], :q_null}
+  defp compile_quoted_datum([], _pvars), do: {:q_list, [], :q_null}
 
-  defp compile_quoted_datum({:pair, _, _} = list, pvars) do
+  defp compile_quoted_datum([_ | _] = list, pvars) do
     compile_quoted_list(list, pvars, [])
   end
 
@@ -346,13 +346,13 @@ defmodule Schooner.Expander.SyntaxRules do
 
   defp compile_quoted_datum(other, _pvars), do: {:q_const, other}
 
-  defp compile_quoted_list({:pair, head, rest}, pvars, acc) do
+  defp compile_quoted_list([head | rest], pvars, acc) do
     item = compile_quoted_datum(head, pvars)
     {n, after_dots} = count_template_ellipses(rest, 0)
     compile_quoted_list(after_dots, pvars, [{item, n} | acc])
   end
 
-  defp compile_quoted_list(:null, _pvars, acc), do: {:q_list, Enum.reverse(acc), :q_null}
+  defp compile_quoted_list([], _pvars, acc), do: {:q_list, Enum.reverse(acc), :q_null}
 
   defp compile_quoted_list(other, pvars, acc) do
     {:q_list, Enum.reverse(acc), compile_quoted_datum(other, pvars)}
@@ -380,7 +380,7 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp form_keyword({:pair, {:sym, name}, _}), do: name
+  defp form_keyword([{:sym, name} | _]), do: name
   defp form_keyword(_), do: "<form>"
 
   # ---------------------------------------------------------------------------
@@ -389,12 +389,12 @@ defmodule Schooner.Expander.SyntaxRules do
 
   defp match(:wild, _input, env), do: {:ok, env}
 
-  # `:null` shows up both as a compiled pattern (from a `()` literal)
-  # and as the "no dotted tail" sentinel inside a `{:list, _, :null}`
+  # `[]` shows up both as a compiled pattern (from a `()` literal)
+  # and as the "no dotted tail" sentinel inside a `{:list, _, []}`
   # term. In either reading the matching rule is the same: only
   # the empty list satisfies it.
-  defp match(:null, :null, env), do: {:ok, env}
-  defp match(:null, _, _), do: :no_match
+  defp match([], [], env), do: {:ok, env}
+  defp match([], _, _), do: :no_match
 
   defp match({:literal, name}, {:sym, sym}, env) do
     if same_identifier?(sym, name), do: {:ok, env}, else: :no_match
@@ -425,21 +425,21 @@ defmodule Schooner.Expander.SyntaxRules do
     list = Value.list(Tuple.to_list(t))
 
     case match_each(items, list, env) do
-      {:ok, env2, :null} -> {:ok, env2}
+      {:ok, env2, []} -> {:ok, env2}
       _ -> :no_match
     end
   end
 
   defp match({:vector_ell, pre, ell, post}, {:vector, t}, env) do
     list = Value.list(Tuple.to_list(t))
-    match_list_ell(pre, ell, post, :null, list, env)
+    match_list_ell(pre, ell, post, [], list, env)
   end
 
   defp match(_, _, _), do: :no_match
 
   defp match_each([], rest, env), do: {:ok, env, rest}
 
-  defp match_each([p | rest_pats], {:pair, h, t}, env) do
+  defp match_each([p | rest_pats], [h | t], env) do
     case match(p, h, env) do
       {:ok, env2} -> match_each(rest_pats, t, env2)
       :no_match -> :no_match
@@ -480,9 +480,9 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp collect_proper(:null), do: {[], :null}
+  defp collect_proper([]), do: {[], []}
 
-  defp collect_proper({:pair, h, t}) do
+  defp collect_proper([h | t]) do
     {rest, tail} = collect_proper(t)
     {[h | rest], tail}
   end
@@ -490,7 +490,7 @@ defmodule Schooner.Expander.SyntaxRules do
   defp collect_proper(other), do: {[], other}
 
   defp list_with_tail([], tail), do: tail
-  defp list_with_tail([h | t], tail), do: {:pair, h, list_with_tail(t, tail)}
+  defp list_with_tail([h | t], tail), do: [h | list_with_tail(t, tail)]
 
   defp match_ellipsis(ell_pat, items) do
     pvars = collect_pvars(ell_pat, %{}) |> Map.keys()
@@ -543,7 +543,7 @@ defmodule Schooner.Expander.SyntaxRules do
   # Template instantiation
   # ---------------------------------------------------------------------------
 
-  defp instantiate(:null, _env, _mark), do: :null
+  defp instantiate([], _env, _mark), do: []
 
   defp instantiate({:t_sym, name}, _env, mark) do
     if MapSet.member?(@core_keywords, name) do
@@ -569,7 +569,7 @@ defmodule Schooner.Expander.SyntaxRules do
   defp instantiate({:t_const, value}, _env, _mark), do: value
 
   defp instantiate({:t_quote, q_datum}, env, _mark) do
-    {:pair, {:sym, "quote"}, {:pair, instantiate_quoted(q_datum, env), :null}}
+    [{:sym, "quote"} | [instantiate_quoted(q_datum, env) | []]]
   end
 
   defp instantiate({:t_list, items, tail}, env, mark) do
@@ -583,7 +583,7 @@ defmodule Schooner.Expander.SyntaxRules do
     {:vector, List.to_tuple(forms)}
   end
 
-  defp instantiate_quoted(:q_null, _env), do: :null
+  defp instantiate_quoted(:q_null, _env), do: []
   defp instantiate_quoted({:q_sym, name}, _env), do: {:sym, name}
   defp instantiate_quoted({:q_const, v}, _env), do: v
 
@@ -721,7 +721,7 @@ defmodule Schooner.Expander.SyntaxRules do
   # All template-side pattern variables of depth ≥ `min_depth`. Used to
   # decide which pvars drive an ellipsis: only those whose pattern depth
   # is at least the number of enclosing ellipses are eligible.
-  defp template_pvars_at_depth(:null, _min), do: []
+  defp template_pvars_at_depth([], _min), do: []
   defp template_pvars_at_depth({:t_pvar, name, depth}, min) when depth >= min, do: [name]
   defp template_pvars_at_depth({:t_pvar, _, _}, _min), do: []
   defp template_pvars_at_depth({:t_sym, _}, _min), do: []

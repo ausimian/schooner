@@ -46,7 +46,7 @@ defmodule Schooner.ReaderTest do
 
   describe "lists" do
     test "empty list reads to :null" do
-      assert Reader.read_string("()") == [:null]
+      assert Reader.read_string("()") == [[]]
     end
 
     test "proper list reads to nested pairs" do
@@ -77,7 +77,7 @@ defmodule Schooner.ReaderTest do
 
     test "deeply nested" do
       datum = Reader.read_string("(((())))") |> hd()
-      expected = Value.list([Value.list([Value.list([:null])])])
+      expected = Value.list([Value.list([Value.list([[]])])])
       assert datum == expected
     end
   end

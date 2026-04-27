@@ -634,10 +634,10 @@ defmodule Schooner.Primitives.Base do
 
   defp cons_([a, b]), do: Value.pair(a, b)
 
-  defp car_([{:pair, a, _}]), do: a
+  defp car_([[a | _]]), do: a
   defp car_([other]), do: raise(Error, reason: {:type_error, "car", "pair", other})
 
-  defp cdr_([{:pair, _, b}]), do: b
+  defp cdr_([[_ | b]]), do: b
   defp cdr_([other]), do: raise(Error, reason: {:type_error, "cdr", "pair", other})
 
   defp list_ctor(args), do: Value.list(args)
@@ -654,19 +654,19 @@ defmodule Schooner.Primitives.Base do
     end
   end
 
-  defp proper_length(:null, n), do: {:ok, n}
-  defp proper_length({:pair, _, t}, n), do: proper_length(t, n + 1)
+  defp proper_length([], n), do: {:ok, n}
+  defp proper_length([_ | t], n), do: proper_length(t, n + 1)
   defp proper_length(_, _), do: :error
 
-  defp reverse_([list]), do: do_reverse(list, :null)
+  defp reverse_([list]), do: do_reverse(list, [])
 
-  defp do_reverse(:null, acc), do: acc
-  defp do_reverse({:pair, h, t}, acc), do: do_reverse(t, {:pair, h, acc})
+  defp do_reverse([], acc), do: acc
+  defp do_reverse([h | t], acc), do: do_reverse(t, [h | acc])
   defp do_reverse(other, _acc), do: raise(Error, reason: {:improper_list, "reverse", other})
 
   # `(append a b c)` ⇒ all but the last must be proper lists; the last is
   # spliced in as-is, so it can be any value (including an improper tail).
-  defp append_([]), do: :null
+  defp append_([]), do: []
   defp append_([only]), do: only
 
   defp append_(args) do
@@ -678,8 +678,8 @@ defmodule Schooner.Primitives.Base do
   defp do_append([], tail), do: tail
   defp do_append([list | rest], tail), do: append_pair(list, do_append(rest, tail))
 
-  defp append_pair(:null, tail), do: tail
-  defp append_pair({:pair, h, t}, tail), do: {:pair, h, append_pair(t, tail)}
+  defp append_pair([], tail), do: tail
+  defp append_pair([h | t], tail), do: [h | append_pair(t, tail)]
 
   defp list_tail([list, k]) do
     require_integer!("list-tail", k)
@@ -689,7 +689,7 @@ defmodule Schooner.Primitives.Base do
 
   defp do_list_tail(rest, 0, _consumed), do: rest
 
-  defp do_list_tail({:pair, _, t}, k, consumed),
+  defp do_list_tail([_ | t], k, consumed),
     do: do_list_tail(t, k - 1, consumed + 1)
 
   defp do_list_tail(_other, k, consumed) do
@@ -702,9 +702,9 @@ defmodule Schooner.Primitives.Base do
     do_list_ref(list, trunc_int(k), 0)
   end
 
-  defp do_list_ref({:pair, h, _}, 0, _consumed), do: h
+  defp do_list_ref([h | _], 0, _consumed), do: h
 
-  defp do_list_ref({:pair, _, t}, k, consumed),
+  defp do_list_ref([_ | t], k, consumed),
     do: do_list_ref(t, k - 1, consumed + 1)
 
   defp do_list_ref(_other, k, consumed) do
@@ -715,9 +715,9 @@ defmodule Schooner.Primitives.Base do
   defp memv_([obj, list]), do: do_member("memv", obj, list, &Value.eqv?/2)
   defp memq_([obj, list]), do: do_member("memq", obj, list, &Value.eq?/2)
 
-  defp do_member(_op, _obj, :null, _eq), do: Value.bool(false)
+  defp do_member(_op, _obj, [], _eq), do: Value.bool(false)
 
-  defp do_member(op, obj, {:pair, h, t} = pair, eq) do
+  defp do_member(op, obj, [h | t] = pair, eq) do
     if eq.(obj, h), do: pair, else: do_member(op, obj, t, eq)
   end
 
@@ -729,13 +729,13 @@ defmodule Schooner.Primitives.Base do
   defp assv_([obj, list]), do: do_assoc("assv", obj, list, &Value.eqv?/2)
   defp assq_([obj, list]), do: do_assoc("assq", obj, list, &Value.eq?/2)
 
-  defp do_assoc(_op, _obj, :null, _eq), do: Value.bool(false)
+  defp do_assoc(_op, _obj, [], _eq), do: Value.bool(false)
 
-  defp do_assoc(op, obj, {:pair, {:pair, k, _} = entry, rest}, eq) do
+  defp do_assoc(op, obj, [[k | _] = entry | rest], eq) do
     if eq.(obj, k), do: entry, else: do_assoc(op, obj, rest, eq)
   end
 
-  defp do_assoc(op, _obj, {:pair, other, _}, _eq) do
+  defp do_assoc(op, _obj, [other | _], _eq) do
     raise(Error, reason: {:type_error, op, "pair as alist entry", other})
   end
 
@@ -764,9 +764,9 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp split_heads_tails([], hs, ts), do: {Enum.reverse(hs), Enum.reverse(ts)}
-  defp split_heads_tails([:null | _], _hs, _ts), do: :exhausted
+  defp split_heads_tails([[] | _], _hs, _ts), do: :exhausted
 
-  defp split_heads_tails([{:pair, h, t} | r], hs, ts),
+  defp split_heads_tails([[h | t] | r], hs, ts),
     do: split_heads_tails(r, [h | hs], [t | ts])
 
   # r7rs §6.10: `(apply proc arg1 ... argn list)`. The leading args are
@@ -785,8 +785,8 @@ defmodule Schooner.Primitives.Base do
 
   defp build_apply_args([head | rest]), do: [head | build_apply_args(rest)]
 
-  defp flatten_scheme_list(:null, acc), do: Enum.reverse(acc)
-  defp flatten_scheme_list({:pair, h, t}, acc), do: flatten_scheme_list(t, [h | acc])
+  defp flatten_scheme_list([], acc), do: Enum.reverse(acc)
+  defp flatten_scheme_list([h | t], acc), do: flatten_scheme_list(t, [h | acc])
 
   # ---------------------------------------------------------------------------
   # Vectors
@@ -1313,9 +1313,9 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp scheme_list_to_elixir!(op, list), do: do_scheme_list_to_elixir(op, list, [])
-  defp do_scheme_list_to_elixir(_op, :null, acc), do: Enum.reverse(acc)
+  defp do_scheme_list_to_elixir(_op, [], acc), do: Enum.reverse(acc)
 
-  defp do_scheme_list_to_elixir(op, {:pair, h, t}, acc),
+  defp do_scheme_list_to_elixir(op, [h | t], acc),
     do: do_scheme_list_to_elixir(op, t, [h | acc])
 
   defp do_scheme_list_to_elixir(op, other, _acc),

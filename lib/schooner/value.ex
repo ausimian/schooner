@@ -1,18 +1,21 @@
 defmodule Schooner.Value do
   @moduledoc """
-  Tagged-term representation of Scheme values.
+  Term representation of Scheme values.
 
-  All Scheme values map to Elixir terms with deliberate tags so that types
-  which would otherwise alias on the BEAM remain distinguishable: Scheme
-  `#f` from `'()` from unspecified, strings from bytevectors, symbols from
-  strings, exact integers from inexact reals.
+  Where the BEAM already distinguishes types cleanly we use them
+  directly: booleans, the empty list, cons cells, integers, floats, and
+  strings (binaries) all live as their native Elixir form. Where types
+  would otherwise alias — symbols vs strings vs bytevectors (all binaries),
+  characters vs integers, vectors vs records vs closures (all tuples) —
+  the colliding side is tagged.
 
   ## Representations
 
     * Booleans  — bare Elixir `true` / `false`. Only `false` is
       Scheme-falsy. Every other value is truthy, including `:null` and `0`.
-    * Empty list — `:null`
-    * Pair — `{:pair, car, cdr}`
+    * Empty list — bare Elixir `[]`
+    * Pair — Elixir cons cell `[car | cdr]`. Improper Scheme pairs are
+      improper Erlang lists (`[a | b]` where `b` is not a list).
     * Symbol — `{:sym, binary}` (binaries, not atoms; user-supplied
       identifiers must not exhaust the BEAM atom table)
     * String — bare Elixir binary. Disambiguated from symbol/bytevector
@@ -45,7 +48,7 @@ defmodule Schooner.Value do
   """
 
   @type bool_v :: boolean()
-  @type pair_v :: {:pair, t(), t()}
+  @type pair_v :: nonempty_maybe_improper_list(t(), t())
   @type sym_v :: {:sym, binary()}
   @type string_v :: binary()
   @type char_v :: {:char, non_neg_integer()}
@@ -63,7 +66,7 @@ defmodule Schooner.Value do
 
   @type t ::
           bool_v()
-          | :null
+          | []
           | pair_v()
           | sym_v()
           | string_v()
@@ -91,7 +94,7 @@ defmodule Schooner.Value do
   def bool(false), do: false
 
   @spec pair(t(), t()) :: pair_v()
-  def pair(car, cdr), do: {:pair, car, cdr}
+  def pair(car, cdr), do: [car | cdr]
 
   @spec symbol(binary()) :: sym_v()
   def symbol(name) when is_binary(name), do: {:sym, name}
@@ -143,27 +146,32 @@ defmodule Schooner.Value do
   @spec lazy_promise(term()) :: promise_v()
   def lazy_promise(thunk), do: {:promise, :lazy, thunk}
 
-  @doc "Build a Scheme list (proper, null-terminated) from an Elixir list."
+  @doc """
+  Build a Scheme list (proper, null-terminated) from an Elixir list.
+
+  After the pair/null untagging this is the identity on Elixir lists.
+  Kept as a named constructor so call sites stay self-documenting and
+  the seam survives any future representation change.
+  """
   @spec list([t()]) :: t()
-  def list([]), do: :null
-  def list([h | t]), do: {:pair, h, list(t)}
+  def list(items) when is_list(items), do: items
 
   @doc """
   Build an improper Scheme list. The last argument becomes the cdr of the
   innermost pair.
   """
   @spec improper_list([t(), ...], t()) :: t()
-  def improper_list([only], tail), do: {:pair, only, tail}
-  def improper_list([h | t], tail), do: {:pair, h, improper_list(t, tail)}
+  def improper_list([only], tail), do: [only | tail]
+  def improper_list([h | t], tail), do: [h | improper_list(t, tail)]
 
   @doc """
-  Convert a proper Scheme list (cons cells terminated by `:null`) into
+  Convert a proper Scheme list (cons cells terminated by `[]`) into
   an Elixir list. Raises `ArgumentError` on an improper list — the
   inverse of `list/1`.
   """
   @spec to_list(t()) :: [t()]
-  def to_list(:null), do: []
-  def to_list({:pair, h, t}), do: [h | to_list(t)]
+  def to_list([]), do: []
+  def to_list([h | t]) when is_list(t), do: [h | to_list(t)]
 
   def to_list(other),
     do: raise(ArgumentError, "expected proper Scheme list, got #{inspect(other)}")
@@ -178,11 +186,11 @@ defmodule Schooner.Value do
   def boolean?(_), do: false
 
   @spec null?(term()) :: boolean()
-  def null?(:null), do: true
+  def null?([]), do: true
   def null?(_), do: false
 
   @spec pair?(term()) :: boolean()
-  def pair?({:pair, _, _}), do: true
+  def pair?([_ | _]), do: true
   def pair?(_), do: false
 
   @spec symbol?(term()) :: boolean()
@@ -227,12 +235,12 @@ defmodule Schooner.Value do
   def eof?(_), do: false
 
   @doc """
-  Scheme `list?` — true for `:null` and proper (null-terminated) pair chains;
+  Scheme `list?` — true for `[]` and proper (null-terminated) cons chains;
   false for improper lists, atoms, and anything that ends in a non-pair non-null.
   """
   @spec list?(term()) :: boolean()
-  def list?(:null), do: true
-  def list?({:pair, _, cdr}), do: list?(cdr)
+  def list?([]), do: true
+  def list?([_ | t]), do: list?(t)
   def list?(_), do: false
 
   @spec unspecified?(term()) :: boolean()
@@ -312,7 +320,7 @@ defmodule Schooner.Value do
   def equal?({:float_special, :nan}, _), do: false
   def equal?(_, {:float_special, :nan}), do: false
   def equal?(a, a), do: true
-  def equal?({:pair, a1, b1}, {:pair, a2, b2}), do: equal?(a1, a2) and equal?(b1, b2)
+  def equal?([h1 | t1], [h2 | t2]), do: equal?(h1, h2) and equal?(t1, t2)
   def equal?({:vector, t1}, {:vector, t2}), do: equal_tuples?(t1, t2)
   def equal?({:bytevector, b1}, {:bytevector, b2}), do: b1 == b2
 
@@ -357,7 +365,7 @@ defmodule Schooner.Value do
 
   defp render(true, _), do: "#t"
   defp render(false, _), do: "#f"
-  defp render(:null, _), do: "()"
+  defp render([], _), do: "()"
   defp render(:eof, _), do: "#<eof>"
   defp render(:unspecified, _), do: "#<unspecified>"
   defp render({:sym, name}, _), do: render_symbol(name)
@@ -367,7 +375,7 @@ defmodule Schooner.Value do
   defp render({:char, cp}, :display), do: <<cp::utf8>>
   defp render({:bytevector, b}, _), do: render_bytevector(b)
   defp render({:vector, t}, mode), do: render_vector(t, mode)
-  defp render({:pair, _, _} = p, mode), do: render_pair(p, mode)
+  defp render([_ | _] = p, mode), do: render_pair(p, mode)
   defp render({:closure, _, _, _, name}, _), do: render_closure(name)
   defp render({:primitive, name, _, _}, _), do: ["#<primitive ", name, ">"]
   defp render({:record, {:record_type, name, _}, _}, _), do: ["#<record ", name, ">"]
@@ -389,12 +397,12 @@ defmodule Schooner.Value do
     head = items |> Enum.reverse() |> Enum.map(&render(&1, mode)) |> Enum.intersperse(?\s)
 
     case tail do
-      :null -> [?(, head, ?)]
+      [] -> [?(, head, ?)]
       _ -> [?(, head, " . ", render(tail, mode), ?)]
     end
   end
 
-  defp collect_pair({:pair, car, cdr}, acc), do: collect_pair(cdr, [car | acc])
+  defp collect_pair([car | cdr], acc), do: collect_pair(cdr, [car | acc])
   defp collect_pair(other, acc), do: {acc, other}
 
   defp render_vector(t, mode) do

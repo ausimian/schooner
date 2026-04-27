@@ -60,7 +60,7 @@ defmodule Schooner.Test.ValueGenerators do
     one_of([
       constant(true),
       constant(false),
-      constant(:null),
+      constant([]),
       constant(:eof),
       constant(:unspecified)
     ])
@@ -70,7 +70,7 @@ defmodule Schooner.Test.ValueGenerators do
     one_of([
       constant(true),
       constant(false),
-      constant(:null)
+      constant([])
     ])
   end
 

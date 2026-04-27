@@ -74,7 +74,7 @@ defmodule Schooner.Library.Loader do
   end
 
   defp compile_positioned(
-         {:pair, {:sym, "define-library"}, {:pair, name_datum, decls_list}} = datum,
+         [{:sym, "define-library"} | [name_datum | decls_list]] = datum,
          pos_tree,
          registry,
          ctx
@@ -162,7 +162,7 @@ defmodule Schooner.Library.Loader do
       source
       |> Reader.read_string_positioned()
       |> Enum.map(fn
-        {{:pair, {:sym, "define-library"}, _} = d, p} ->
+        {[{:sym, "define-library"} | _] = d, p} ->
           {d, p}
 
         {other, p} ->
@@ -181,20 +181,20 @@ defmodule Schooner.Library.Loader do
   # Declarations
   # ---------------------------------------------------------------------------
 
-  defp apply_decl({:pair, {:sym, "import"}, specs}, _pos, acc, _registry, _ctx) do
+  defp apply_decl([{:sym, "import"} | specs], _pos, acc, _registry, _ctx) do
     %{acc | imports: acc.imports ++ Value.to_list(specs)}
   end
 
-  defp apply_decl({:pair, {:sym, "begin"}, forms}, _pos, acc, _registry, _ctx) do
+  defp apply_decl([{:sym, "begin"} | forms], _pos, acc, _registry, _ctx) do
     %{acc | body: acc.body ++ Value.to_list(forms)}
   end
 
-  defp apply_decl({:pair, {:sym, "export"}, names}, pos_tree, acc, _registry, _ctx) do
+  defp apply_decl([{:sym, "export"} | names], pos_tree, acc, _registry, _ctx) do
     entries = Enum.zip(Value.to_list(names), tail_positions(pos_tree, 1))
     %{acc | exports: acc.exports ++ entries}
   end
 
-  defp apply_decl({:pair, {:sym, "cond-expand"}, clauses}, pos_tree, acc, registry, ctx) do
+  defp apply_decl([{:sym, "cond-expand"} | clauses], pos_tree, acc, registry, ctx) do
     case select_cond_expand(Value.to_list(clauses), tail_positions(pos_tree, 1), registry, ctx) do
       {:ok, sub_decls, sub_positions} ->
         sub_decls
@@ -206,7 +206,7 @@ defmodule Schooner.Library.Loader do
     end
   end
 
-  defp apply_decl({:pair, {:sym, "include"}, paths}, pos_tree, acc, _registry, ctx) do
+  defp apply_decl([{:sym, "include"} | paths], pos_tree, acc, _registry, ctx) do
     forms =
       paths
       |> Value.to_list()
@@ -222,7 +222,7 @@ defmodule Schooner.Library.Loader do
   end
 
   defp apply_decl(
-         {:pair, {:sym, "include-library-declarations"}, paths},
+         [{:sym, "include-library-declarations"} | paths],
          pos_tree,
          acc,
          registry,
@@ -314,7 +314,7 @@ defmodule Schooner.Library.Loader do
   defp select_cond_expand([], [], _registry, _ctx), do: :no_match
 
   defp select_cond_expand(
-         [{:pair, {:sym, "else"}, body} | _],
+         [[{:sym, "else"} | body] | _],
          [body_clause_pos | _],
          _registry,
          _ctx
@@ -323,7 +323,7 @@ defmodule Schooner.Library.Loader do
   end
 
   defp select_cond_expand(
-         [{:pair, requirement, body} | rest],
+         [[requirement | body] | rest],
          [clause_pos | rest_positions],
          registry,
          ctx
@@ -340,7 +340,7 @@ defmodule Schooner.Library.Loader do
   defp requirement_satisfied?({:sym, name}, _pos, _registry, _ctx), do: feature_present?(name)
 
   defp requirement_satisfied?(
-         {:pair, {:sym, "library"}, {:pair, lib_name_datum, :null}},
+         [{:sym, "library"} | [lib_name_datum | []]],
          _pos,
          registry,
          _ctx
@@ -348,14 +348,14 @@ defmodule Schooner.Library.Loader do
     match?({:ok, _}, Library.lookup(registry, Library.canonicalise_name(lib_name_datum)))
   end
 
-  defp requirement_satisfied?({:pair, {:sym, "and"}, body}, pos, registry, ctx) do
+  defp requirement_satisfied?([{:sym, "and"} | body], pos, registry, ctx) do
     body
     |> Value.to_list()
     |> Enum.zip(tail_positions(pos, 1))
     |> Enum.all?(fn {req, p} -> requirement_satisfied?(req, p, registry, ctx) end)
   end
 
-  defp requirement_satisfied?({:pair, {:sym, "or"}, body}, pos, registry, ctx) do
+  defp requirement_satisfied?([{:sym, "or"} | body], pos, registry, ctx) do
     body
     |> Value.to_list()
     |> Enum.zip(tail_positions(pos, 1))
@@ -363,7 +363,7 @@ defmodule Schooner.Library.Loader do
   end
 
   defp requirement_satisfied?(
-         {:pair, {:sym, "not"}, {:pair, inner, :null}},
+         [{:sym, "not"} | [inner | []]],
          pos,
          registry,
          ctx
@@ -395,7 +395,7 @@ defmodule Schooner.Library.Loader do
   defp parse_export_entry({:sym, name}, _pos, _ctx), do: {name, name}
 
   defp parse_export_entry(
-         {:pair, {:sym, "rename"}, {:pair, {:sym, internal}, {:pair, {:sym, external}, :null}}},
+         [{:sym, "rename"} | [{:sym, internal} | [{:sym, external} | []]]],
          _pos,
          _ctx
        ) do
@@ -477,11 +477,11 @@ defmodule Schooner.Library.Loader do
   # Datum / position helpers
   # ---------------------------------------------------------------------------
 
-  defp extract_name({:pair, {:sym, "define-library"}, {:pair, name_datum, _}}) do
+  defp extract_name([{:sym, "define-library"} | [name_datum | _]]) do
     Library.canonicalise_name(name_datum)
   end
 
-  defp local_deps({:pair, {:sym, "define-library"}, {:pair, _, decls}}, by_name, ctx) do
+  defp local_deps([{:sym, "define-library"} | [_ | decls]], by_name, ctx) do
     decls
     |> Value.to_list()
     |> Enum.flat_map(&decl_imports(&1, ctx))
@@ -489,9 +489,9 @@ defmodule Schooner.Library.Loader do
     |> Enum.filter(&Map.has_key?(by_name, &1))
   end
 
-  defp decl_imports({:pair, {:sym, "import"}, specs}, _ctx), do: Value.to_list(specs)
+  defp decl_imports([{:sym, "import"} | specs], _ctx), do: Value.to_list(specs)
 
-  defp decl_imports({:pair, {:sym, "include-library-declarations"}, paths}, ctx) do
+  defp decl_imports([{:sym, "include-library-declarations"} | paths], ctx) do
     paths
     |> Value.to_list()
     |> Enum.flat_map(fn path_datum ->
@@ -507,7 +507,7 @@ defmodule Schooner.Library.Loader do
 
   # Reduce an import spec to the canonical name of the library it
   # ultimately points at, ignoring any wrapping modifiers.
-  defp spec_to_canonical_dependency({:pair, {:sym, head}, {:pair, inner, _rest}})
+  defp spec_to_canonical_dependency([{:sym, head} | [inner | _rest]])
        when head in ["only", "except", "prefix", "rename"] do
     spec_to_canonical_dependency(inner)
   end
@@ -527,9 +527,9 @@ defmodule Schooner.Library.Loader do
   # in every position slot. Used when `compile/3` is called directly
   # without a positioned tree from the reader: callers can still walk
   # the parallel structure, and diagnostics simply omit line/column.
-  defp synthetic_pos_tree(:null), do: {:atom, nil}
+  defp synthetic_pos_tree([]), do: {:atom, nil}
 
-  defp synthetic_pos_tree({:pair, car, cdr}),
+  defp synthetic_pos_tree([car | cdr]),
     do: {:pair, nil, synthetic_pos_tree(car), synthetic_pos_tree(cdr)}
 
   defp synthetic_pos_tree({:vector, t}) do

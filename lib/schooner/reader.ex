@@ -39,7 +39,7 @@ defmodule Schooner.Reader do
   A position tree mirrors the spine of a datum.
 
     * `{:atom, pos}` — non-compound datum (symbol, number, string, char,
-      bool, `:null`, etc.) or the terminating `:null` of a proper list.
+      bool, `[]`, etc.) or the terminating `[]` of a proper list.
     * `{:pair, pos, car_tree, cdr_tree}` — cons cell. `pos` is the
       position of the opening `(` of the surrounding list.
     * `{:vector, pos, [item_tree]}` — `#(...)` literal.
@@ -170,7 +170,7 @@ defmodule Schooner.Reader do
   defp read_list(tokens, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
-        {:null, rest}
+        {[], rest}
 
       [{:dot, _, pos} | _] ->
         raise Error, reason: :dot_at_list_start, position: pos
@@ -333,7 +333,7 @@ defmodule Schooner.Reader do
   defp read_list_pos(tokens, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
-        {:null, {:atom, start}, rest}
+        {[], {:atom, start}, rest}
 
       [{:dot, _, pos} | _] ->
         raise Error, reason: :dot_at_list_start, position: pos

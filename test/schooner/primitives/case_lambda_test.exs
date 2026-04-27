@@ -25,7 +25,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
     end
 
     test "rest-only formals also accept zero args" do
-      assert run("((case-lambda (xs xs)))") == :null
+      assert run("((case-lambda (xs xs)))") == []
     end
 
     test "dotted-rest formals bind the head positionally and the tail as a list" do
@@ -35,7 +35,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
 
     test "dotted-rest with empty tail still matches the at-least arity" do
       assert run("((case-lambda ((a b . rest) (list a b rest))) 10 20)") ==
-               Value.list([10, 20, :null])
+               Value.list([10, 20, []])
     end
   end
 

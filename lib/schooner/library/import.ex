@@ -49,12 +49,12 @@ defmodule Schooner.Library.Import do
     do_extract([], forms)
   end
 
-  defp do_extract(acc, [{:pair, {:sym, "import"}, tail} | rest]) do
+  defp do_extract(acc, [[{:sym, "import"} | tail] | rest]) do
     do_extract([Value.to_list(tail) | acc], rest)
   end
 
   defp do_extract(acc, rest) do
-    {acc |> Enum.reverse() |> List.flatten(), rest}
+    {acc |> Enum.reverse() |> Enum.concat(), rest}
   end
 
   @doc """
@@ -72,20 +72,20 @@ defmodule Schooner.Library.Import do
   end
 
   # (only spec n1 n2 ...)
-  defp resolve_one({:pair, {:sym, "only"}, {:pair, inner, name_list}}, registry) do
+  defp resolve_one([{:sym, "only"} | [inner | name_list]], registry) do
     names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
     Map.take(resolve_one(inner, registry), names)
   end
 
   # (except spec n1 n2 ...)
-  defp resolve_one({:pair, {:sym, "except"}, {:pair, inner, name_list}}, registry) do
+  defp resolve_one([{:sym, "except"} | [inner | name_list]], registry) do
     names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
     Map.drop(resolve_one(inner, registry), names)
   end
 
   # (prefix spec p)
   defp resolve_one(
-         {:pair, {:sym, "prefix"}, {:pair, inner, {:pair, {:sym, prefix}, :null}}},
+         [{:sym, "prefix"} | [inner | [{:sym, prefix} | []]]],
          registry
        ) do
     inner_exports = resolve_one(inner, registry)
@@ -93,7 +93,7 @@ defmodule Schooner.Library.Import do
   end
 
   # (rename spec (old new) ...)
-  defp resolve_one({:pair, {:sym, "rename"}, {:pair, inner, rename_list}}, registry) do
+  defp resolve_one([{:sym, "rename"} | [inner | rename_list]], registry) do
     renames = parse_renames(rename_list)
     inner_exports = resolve_one(inner, registry)
 
@@ -106,7 +106,7 @@ defmodule Schooner.Library.Import do
   end
 
   # Bare library name like (scheme base) or (srfi 1).
-  defp resolve_one({:pair, _, _} = name_datum, registry) do
+  defp resolve_one([_ | _] = name_datum, registry) do
     Library.fetch!(registry, Library.canonicalise_name(name_datum)).exports
   end
 
@@ -114,9 +114,9 @@ defmodule Schooner.Library.Import do
     raise ArgumentError, "invalid import spec: #{inspect(other)}"
   end
 
-  defp parse_renames(:null), do: []
+  defp parse_renames([]), do: []
 
-  defp parse_renames({:pair, {:pair, {:sym, old}, {:pair, {:sym, new}, :null}}, rest}) do
+  defp parse_renames([[{:sym, old} | [{:sym, new} | []]] | rest]) do
     [{old, new} | parse_renames(rest)]
   end
 

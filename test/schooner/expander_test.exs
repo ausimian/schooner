@@ -17,7 +17,7 @@ defmodule Schooner.ExpanderTest do
                (syntax-rules ()
                  ((_ x) (cons 'hello x))))
              (greet 'world)
-             """) == {:pair, Value.symbol("hello"), Value.symbol("world")}
+             """) == [Value.symbol("hello") | Value.symbol("world")]
     end
 
     test "redefining a macro replaces the previous transformer" do
@@ -117,9 +117,9 @@ defmodule Schooner.ExpanderTest do
              (zipped (1 'x) (2 'y) (3 'z))
              """) ==
                Value.list([
-                 {:pair, 1, Value.symbol("x")},
-                 {:pair, 2, Value.symbol("y")},
-                 {:pair, 3, Value.symbol("z")}
+                 [1 | Value.symbol("x")],
+                 [2 | Value.symbol("y")],
+                 [3 | Value.symbol("z")]
                ])
     end
 

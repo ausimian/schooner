@@ -9,25 +9,25 @@ defmodule Schooner.ValueTest do
       assert Value.bool(false) == false
       assert Value.boolean?(true)
       assert Value.boolean?(false)
-      refute Value.boolean?(:null)
+      refute Value.boolean?([])
       refute Value.boolean?(0)
       refute Value.boolean?({:sym, "true"})
     end
 
     test "null" do
-      assert Value.null?(:null)
+      assert Value.null?([])
       refute Value.null?(false)
-      refute Value.null?({:pair, :null, :null})
+      refute Value.null?([[] | []])
     end
 
     test "pairs" do
-      assert Value.pair(1, 2) == {:pair, 1, 2}
-      assert Value.pair?({:pair, :null, :null})
-      refute Value.pair?(:null)
+      assert Value.pair(1, 2) == [1 | 2]
+      assert Value.pair?([[] | []])
+      refute Value.pair?([])
     end
 
     test "list? recognises proper lists only" do
-      assert Value.list?(:null)
+      assert Value.list?([])
       assert Value.list?(Value.list([1, 2, 3]))
       refute Value.list?(Value.improper_list([1, 2], 3))
       refute Value.list?(42)
@@ -35,13 +35,13 @@ defmodule Schooner.ValueTest do
     end
 
     test "list builders" do
-      assert Value.list([]) == :null
-      assert Value.list([1, 2, 3]) == {:pair, 1, {:pair, 2, {:pair, 3, :null}}}
+      assert Value.list([]) == []
+      assert Value.list([1, 2, 3]) == [1 | [2 | [3 | []]]]
 
       assert Value.improper_list([1, 2], 3) ==
-               {:pair, 1, {:pair, 2, 3}}
+               [1 | [2 | 3]]
 
-      assert Value.improper_list([1], 2) == {:pair, 1, 2}
+      assert Value.improper_list([1], 2) == [1 | 2]
     end
 
     test "symbols are tagged binaries, never atoms" do
@@ -93,7 +93,7 @@ defmodule Schooner.ValueTest do
       refute Value.record?({:vector, {1, 2}})
       assert Value.eof?(:eof)
       assert Value.unspecified?(:unspecified)
-      refute Value.unspecified?(:null)
+      refute Value.unspecified?([])
       refute Value.unspecified?(false)
     end
 
@@ -116,7 +116,7 @@ defmodule Schooner.ValueTest do
     test "truthiness — only #f is false" do
       refute Value.truthy?(false)
       assert Value.truthy?(true)
-      assert Value.truthy?(:null)
+      assert Value.truthy?([])
       assert Value.truthy?(0)
       assert Value.truthy?(0.0)
       assert Value.truthy?(Value.string(""))
@@ -135,7 +135,7 @@ defmodule Schooner.ValueTest do
       assert Value.eq?(Value.symbol("a"), Value.symbol("a"))
       refute Value.eq?(Value.symbol("a"), Value.symbol("b"))
       assert Value.eq?(true, true)
-      assert Value.eq?(:null, :null)
+      assert Value.eq?([], [])
       assert Value.eq?(:eof, :eof)
     end
 
@@ -202,7 +202,7 @@ defmodule Schooner.ValueTest do
     test "atoms" do
       assert Value.write(true) == "#t"
       assert Value.write(false) == "#f"
-      assert Value.write(:null) == "()"
+      assert Value.write([]) == "()"
       assert Value.write(:eof) == "#<eof>"
       assert Value.write(:unspecified) == "#<unspecified>"
     end
@@ -256,7 +256,7 @@ defmodule Schooner.ValueTest do
 
     test "lists, dotted lists, nested" do
       assert Value.write(Value.list([1, 2, 3])) == "(1 2 3)"
-      assert Value.write({:pair, 1, 2}) == "(1 . 2)"
+      assert Value.write([1 | 2]) == "(1 . 2)"
       assert Value.write(Value.improper_list([1, 2], 3)) == "(1 2 . 3)"
 
       nested = Value.list([Value.symbol("a"), Value.list([1, 2]), Value.string("hi")])

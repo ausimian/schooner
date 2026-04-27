@@ -36,7 +36,7 @@ defmodule Schooner.Conformance.R7rsSection4Test do
     end
 
     test "'() ==> ()" do
-      assert run("'()") == :null
+      assert run("'()") == []
     end
 
     test "'(+ 1 2) ==> (+ 1 2)" do
