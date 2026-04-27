@@ -33,6 +33,12 @@ defmodule Schooner.Value do
       `define-record-type`. Self-evaluating; compared with `===` so
       two definitions with the same record name in different
       lexical scopes produce distinct identities.
+    * Error object — `{:error_obj, kind, message, irritants}` where
+      `kind` is `:user | :read | :file`, `message` is a Scheme string
+      value, and `irritants` is an Elixir list of Scheme values
+      (rendered as a Scheme list by the accessor). Constructed by
+      `(error msg irritant ...)` and reachable via `error?`,
+      `error-object?`, `read-error?`, `file-error?`.
     * EOF — `:eof`
     * Unspecified — `:unspecified`
   """
@@ -49,6 +55,8 @@ defmodule Schooner.Value do
   @type record_v :: {:record, term(), tuple()}
   @type record_type_id_v :: {:record_type, binary(), pos_integer()}
   @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
+  @type error_kind :: :user | :read | :file
+  @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
   @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
 
   @type t ::
@@ -67,6 +75,7 @@ defmodule Schooner.Value do
           | primitive_v()
           | record_v()
           | record_type_id_v()
+          | error_obj_v()
           | :eof
           | :unspecified
 
@@ -107,6 +116,12 @@ defmodule Schooner.Value do
 
   @spec record(term(), tuple()) :: record_v()
   def record(type_id, fields) when is_tuple(fields), do: {:record, type_id, fields}
+
+  @spec error_object(error_kind(), t(), [t()]) :: error_obj_v()
+  def error_object(kind, message, irritants)
+      when kind in [:user, :read, :file] and is_list(irritants) do
+    {:error_obj, kind, message, irritants}
+  end
 
   @doc "Build a Scheme list (proper, null-terminated) from an Elixir list."
   @spec list([t()]) :: t()
@@ -165,6 +180,14 @@ defmodule Schooner.Value do
   @spec record?(term()) :: boolean()
   def record?({:record, _, _}), do: true
   def record?(_), do: false
+
+  @spec error_object?(term()) :: boolean()
+  def error_object?({:error_obj, _, _, _}), do: true
+  def error_object?(_), do: false
+
+  @spec error_kind?(term(), error_kind()) :: boolean()
+  def error_kind?({:error_obj, kind, _, _}, kind), do: true
+  def error_kind?(_, _), do: false
 
   @spec eof?(term()) :: boolean()
   def eof?(:eof), do: true
@@ -313,6 +336,10 @@ defmodule Schooner.Value do
   defp render({:primitive, name, _, _}, _), do: ["#<primitive ", name, ">"]
   defp render({:record, {:record_type, name, _}, _}, _), do: ["#<record ", name, ">"]
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
+
+  defp render({:error_obj, kind, message, irritants}, mode),
+    do: render_error(kind, message, irritants, mode)
+
   defp render({:float_special, :pos_inf}, _), do: "+inf.0"
   defp render({:float_special, :neg_inf}, _), do: "-inf.0"
   defp render({:float_special, :nan}, _), do: "+nan.0"
@@ -354,6 +381,17 @@ defmodule Schooner.Value do
 
   defp render_closure(nil), do: "#<procedure>"
   defp render_closure(name) when is_binary(name), do: ["#<procedure ", name, ">"]
+
+  defp render_error(kind, message, irritants, mode) do
+    msg = render(message, mode)
+    irrs = irritants |> Enum.map(&render(&1, mode)) |> Enum.intersperse(?\s)
+    tail = if irritants == [], do: [], else: [" ", irrs]
+    ["#<", error_kind_label(kind), " ", msg, tail, ">"]
+  end
+
+  defp error_kind_label(:user), do: "error"
+  defp error_kind_label(:read), do: "read-error"
+  defp error_kind_label(:file), do: "file-error"
 
   defp render_float(f) do
     s = :erlang.float_to_binary(f, [:short])

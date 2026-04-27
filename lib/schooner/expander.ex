@@ -39,7 +39,9 @@ defmodule Schooner.Expander do
   # fresh type identity at expansion time and embed it as a literal
   # in the bindings it generates — `syntax-rules` templates are pure
   # substitution and can't introduce a fresh constant per use.
-  @core_specials MapSet.new(~w(quote if lambda define begin set! letrec* define-record-type))
+  @core_specials MapSet.new(
+                   ~w(quote if lambda define begin set! letrec* define-record-type guard)
+                 )
 
   @doc """
   Expand a list of top-level forms in `env`. Returns a list of
@@ -161,6 +163,8 @@ defmodule Schooner.Expander do
   def expand({:pair, {:sym, "define-record-type"}, tail}, env) do
     expand_define_record_type(tail, env)
   end
+
+  def expand({:pair, {:sym, "guard"}, tail}, env), do: expand_guard(tail, env)
 
   def expand({:pair, {:sym, name}, _args} = form, env) do
     case lookup_with_fallback(env, name) do
@@ -410,6 +414,49 @@ defmodule Schooner.Expander do
   defp make_define_form(name, params, body) do
     Value.list([{:sym, "define"}, Value.list([{:sym, name} | params]), body])
   end
+
+  # `guard` is a core form rather than a `syntax-rules` macro because
+  # it must escape the body via Elixir `throw`/`catch` once a clause
+  # matches — `call/cc` (phase 12) is the macro-friendly alternative
+  # but does not yet exist. The expander walks the variable shadow,
+  # the clause tests/bodies, and the body so that user macros inside
+  # any of those positions get a chance to expand.
+  defp expand_guard({:pair, {:pair, {:sym, var}, clauses_form}, body}, env)
+       when body != :null and is_binary(var) do
+    inner = SyntaxEnv.push_variables(env, [var])
+    expanded_clauses = expand_guard_clauses(clauses_form, inner)
+    expanded_body = expand_each(body, env)
+
+    {:pair, {:sym, "guard"}, {:pair, {:pair, {:sym, var}, expanded_clauses}, expanded_body}}
+  end
+
+  defp expand_guard(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
+
+  defp expand_guard_clauses(:null, _env), do: :null
+
+  defp expand_guard_clauses({:pair, clause, rest}, env) do
+    {:pair, expand_guard_clause(clause, env), expand_guard_clauses(rest, env)}
+  end
+
+  defp expand_guard_clauses(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
+
+  # `else` clauses keep their literal head; everything after is a
+  # body sequence that gets recursively expanded. `=>` clauses keep
+  # the literal arrow and expand the test and the proc expression.
+  # Bare `(test)` and `(test e1 e2 ...)` expand the test plus body.
+  defp expand_guard_clause({:pair, {:sym, "else"}, body}, env) when body != :null do
+    {:pair, {:sym, "else"}, expand_each(body, env)}
+  end
+
+  defp expand_guard_clause({:pair, test, {:pair, {:sym, "=>"}, {:pair, proc, :null}}}, env) do
+    {:pair, expand(test, env), {:pair, {:sym, "=>"}, {:pair, expand(proc, env), :null}}}
+  end
+
+  defp expand_guard_clause({:pair, test, body}, env) do
+    {:pair, expand(test, env), expand_each(body, env)}
+  end
+
+  defp expand_guard_clause(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 
   defp expand_let_syntax({:pair, bindings_form, body}, env) when body != :null do
     bindings = parse_syntax_bindings(bindings_form, env, "let-syntax")
