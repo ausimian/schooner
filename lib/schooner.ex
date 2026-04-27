@@ -42,7 +42,7 @@ defmodule Schooner do
   @default_run_imports_forms Reader.read_string(
                                "(import (scheme base) (scheme cxr) (scheme char) " <>
                                  "(scheme inexact) (scheme write) (scheme read) " <>
-                                 "(scheme lazy))"
+                                 "(scheme case-lambda) (scheme lazy))"
                              )
 
   @doc """

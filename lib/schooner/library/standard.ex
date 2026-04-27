@@ -19,10 +19,10 @@ defmodule Schooner.Library.Standard do
     * `(scheme lazy)` → `Primitives.Lazy` plus the `delay` and
       `delay-force` macros from `priv/scheme/lazy.scm`.
 
-  `(scheme case-lambda)` is registered with empty exports — its macro
-  is deferred to a later sub-phase (the syntax-rules implementation
-  needs an arity-counting helper that the current matcher does not
-  yet support cleanly).
+  `(scheme case-lambda)` exposes the `case-lambda` macro defined in
+  `priv/scheme/case-lambda.scm`, which lowers to a chain of plain
+  `lambda`s wrapped in a rest-only outer lambda that dispatches by
+  arity at call time.
 
   Idempotent: calling `boot/0` repeatedly rebuilds and re-persists the
   same registry. The first call from `Schooner.Application.start/2` is
@@ -122,9 +122,11 @@ defmodule Schooner.Library.Standard do
   end
 
   defp scheme_case_lambda do
-    # Macro deferred. The library entry exists so importers do not
-    # error out at registration; the macros land in a later sub-phase.
-    Library.new(name: ["scheme", "case-lambda"], features: [:r7rs])
+    Library.new(
+      name: ["scheme", "case-lambda"],
+      exports: macros_from_priv("case-lambda.scm"),
+      features: [:r7rs]
+    )
   end
 
   defp scheme_lazy do
