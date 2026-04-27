@@ -27,6 +27,7 @@ defmodule Schooner.Expander do
   alias Schooner.Expander.Derived
   alias Schooner.Expander.SyntaxEnv
   alias Schooner.Expander.SyntaxRules
+  alias Schooner.Primitives.Record, as: RecordPrim
   alias Schooner.Reader
   alias Schooner.Value
 
@@ -34,7 +35,11 @@ defmodule Schooner.Expander do
   # user-facing recursive bindings and the internal-define splicing
   # done at evaluation time, and a fully-macroised replacement would
   # need either mutation or a hand-built fix-point combinator.
-  @core_specials MapSet.new(~w(quote if lambda define begin set! letrec*))
+  # `define-record-type` joins the core set because it has to mint a
+  # fresh type identity at expansion time and embed it as a literal
+  # in the bindings it generates — `syntax-rules` templates are pure
+  # substitution and can't introduce a fresh constant per use.
+  @core_specials MapSet.new(~w(quote if lambda define begin set! letrec* define-record-type))
 
   @doc """
   Expand a list of top-level forms in `env`. Returns a list of
@@ -151,6 +156,10 @@ defmodule Schooner.Expander do
 
   def expand({:pair, {:sym, "quasiquote"}, _tail} = form, env) do
     expand_quasiquote(form, env, 1)
+  end
+
+  def expand({:pair, {:sym, "define-record-type"}, tail}, env) do
+    expand_define_record_type(tail, env)
   end
 
   def expand({:pair, {:sym, name}, _args} = form, env) do
@@ -304,6 +313,103 @@ defmodule Schooner.Expander do
 
   defp parse_letrec_bindings(_, _),
     do: raise(Error, reason: {:bad_special_form, "letrec*"})
+
+  # ---------------------------------------------------------------------------
+  # define-record-type
+  # ---------------------------------------------------------------------------
+
+  # `define-record-type` is a core form rather than a macro because
+  # it has to mint a fresh type identity at expansion time and embed
+  # it as a literal in the bindings it generates — `syntax-rules`
+  # templates are pure substitution and can't introduce a fresh
+  # constant per use.
+  defp expand_define_record_type(form, env) do
+    {name, {ctor_name, ctor_fields}, pred_name, fields} = parse_record_type(form)
+    type_id = fresh_record_type_id(name)
+    field_names = Enum.map(fields, fn {fname, _accessor} -> fname end)
+
+    defs = [
+      record_constructor_def(ctor_name, ctor_fields, field_names, type_id),
+      record_predicate_def(pred_name, type_id)
+      | record_accessor_defs(fields, type_id)
+    ]
+
+    expand({:pair, {:sym, "begin"}, Value.list(defs)}, env)
+  end
+
+  defp fresh_record_type_id(name) when is_binary(name) do
+    {:record_type, name, :erlang.unique_integer([:positive])}
+  end
+
+  defp parse_record_type(
+         {:pair, {:sym, name}, {:pair, ctor_spec, {:pair, {:sym, pred_name}, field_specs_form}}}
+       )
+       when is_binary(name) and is_binary(pred_name) do
+    {name, parse_record_ctor(ctor_spec), pred_name,
+     parse_record_field_specs(field_specs_form, [])}
+  end
+
+  defp parse_record_type(_), do: raise(Error, reason: {:bad_special_form, "define-record-type"})
+
+  defp parse_record_ctor({:pair, {:sym, ctor_name}, fields_form}) when is_binary(ctor_name) do
+    {ctor_name, parse_record_ctor_fields(fields_form, [])}
+  end
+
+  defp parse_record_ctor(_), do: raise(Error, reason: {:bad_special_form, "define-record-type"})
+
+  defp parse_record_ctor_fields(:null, acc), do: Enum.reverse(acc)
+
+  defp parse_record_ctor_fields({:pair, {:sym, name}, rest}, acc) when is_binary(name) do
+    parse_record_ctor_fields(rest, [name | acc])
+  end
+
+  defp parse_record_ctor_fields(_, _),
+    do: raise(Error, reason: {:bad_special_form, "define-record-type"})
+
+  defp parse_record_field_specs(:null, acc), do: Enum.reverse(acc)
+
+  defp parse_record_field_specs(
+         {:pair, {:pair, {:sym, fname}, {:pair, {:sym, accessor}, :null}}, rest},
+         acc
+       )
+       when is_binary(fname) and is_binary(accessor) do
+    parse_record_field_specs(rest, [{fname, accessor} | acc])
+  end
+
+  defp parse_record_field_specs(_, _),
+    do: raise(Error, reason: {:bad_special_form, "define-record-type"})
+
+  defp record_constructor_def(ctor_name, ctor_fields, field_names, type_id) do
+    ctor_set = MapSet.new(ctor_fields)
+    arg_syms = Enum.map(ctor_fields, &{:sym, &1})
+
+    field_values =
+      Enum.map(field_names, fn fname ->
+        if MapSet.member?(ctor_set, fname), do: {:sym, fname}, else: :unspecified
+      end)
+
+    body = Value.list([{:sym, RecordPrim.instance_name()}, type_id | field_values])
+    make_define_form(ctor_name, arg_syms, body)
+  end
+
+  defp record_predicate_def(pred_name, type_id) do
+    body = Value.list([{:sym, RecordPrim.predicate_name()}, type_id, {:sym, "v"}])
+    make_define_form(pred_name, [{:sym, "v"}], body)
+  end
+
+  defp record_accessor_defs(fields, type_id) do
+    Enum.with_index(fields, fn {_fname, accessor}, idx ->
+      body = Value.list([{:sym, RecordPrim.ref_name()}, type_id, {:sym, "v"}, idx])
+      make_define_form(accessor, [{:sym, "v"}], body)
+    end)
+  end
+
+  # Build `(define (<name> <param> ...) <body>)`. Centralises the
+  # `:pair`/`:null` skeleton the three record-machinery emitters
+  # would otherwise duplicate.
+  defp make_define_form(name, params, body) do
+    Value.list([{:sym, "define"}, Value.list([{:sym, name} | params]), body])
+  end
 
   defp expand_let_syntax({:pair, bindings_form, body}, env) when body != :null do
     bindings = parse_syntax_bindings(bindings_form, env, "let-syntax")

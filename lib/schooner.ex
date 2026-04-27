@@ -33,6 +33,7 @@ defmodule Schooner do
     |> Primitives.Base.register_into()
     |> Primitives.Cxr.register_into()
     |> Primitives.Char.register_into()
+    |> Primitives.Record.register_into()
   end
 
   @doc """
