@@ -73,6 +73,27 @@ defmodule Schooner.Primitives.BaseStringsTest do
       assert run(~S|(string-copy "hello" 1)|) == Value.string("ello")
       assert run(~S|(string-copy "hello" 1 3)|) == Value.string("el")
     end
+
+    test "slicing at end-of-string boundary is allowed" do
+      assert run(~S|(substring "abc" 3 3)|) == Value.string("")
+      assert run(~S|(string-copy "abc" 3 3)|) == Value.string("")
+      assert run(~S|(string-copy "abc" 3)|) == Value.string("")
+    end
+
+    test "negative start raises with codepoint length in the error" do
+      e = assert_raise PError, fn -> run(~S|(substring "café" -1 2)|) end
+      assert e.reason == {:index_out_of_range, "substring", -1, 4}
+    end
+
+    test "stop < start raises with codepoint length in the error" do
+      e = assert_raise PError, fn -> run(~S|(substring "café" 3 1)|) end
+      assert e.reason == {:index_out_of_range, "substring", 1, 4}
+    end
+
+    test "string-ref negative index raises with codepoint length" do
+      e = assert_raise PError, fn -> run(~S|(string-ref "café" -1)|) end
+      assert e.reason == {:index_out_of_range, "string-ref", -1, 4}
+    end
   end
 
   describe "comparison" do
