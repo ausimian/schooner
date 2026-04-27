@@ -29,6 +29,7 @@ defmodule Schooner.Eval do
 
   alias Schooner.Env
   alias Schooner.Eval.Error
+  alias Schooner.Eval.ExceptionState
   alias Schooner.Expander.SyntaxRules
   alias Schooner.Value
 
@@ -51,6 +52,7 @@ defmodule Schooner.Eval do
   def eval({:pair, {:sym, "begin"}, tail}, env), do: eval_sequence(tail, env)
   def eval({:pair, {:sym, "letrec*"}, tail}, env), do: eval_letrec_star(tail, env)
   def eval({:pair, {:sym, "quasiquote"}, tail}, env), do: eval_quasiquote_top(tail, env)
+  def eval({:pair, {:sym, "guard"}, tail}, env), do: eval_guard(tail, env)
   def eval({:pair, head, tail}, env), do: eval_apply(head, tail, env)
 
   def eval(value, _env), do: value
@@ -415,4 +417,92 @@ defmodule Schooner.Eval do
     binding = {:pair, {:sym, name}, {:pair, init, :null}}
     {:pair, binding, build_letrec_bindings(rest)}
   end
+
+  # ---------------------------------------------------------------------------
+  # guard
+  # ---------------------------------------------------------------------------
+
+  # `guard` is a core form rather than a `syntax-rules` macro because
+  # it has to escape the body once a clause matches, and the only
+  # tools available pre-`call/cc` (phase 12) are Elixir `throw` /
+  # `catch`. The handler is wrapped as a `:primitive` so
+  # `apply_proc/2` invokes it with the same machinery as a user
+  # handler — `with-exception-handler` and `guard` are
+  # indistinguishable from the raise side.
+  defp eval_guard({:pair, {:pair, {:sym, var}, clauses_form}, body}, env)
+       when is_binary(var) and body != :null do
+    tag = make_ref()
+    handler = build_guard_handler(var, clauses_form, env, tag)
+    # Snapshot/restore the whole stack rather than `pop`ing once in
+    # the after-clause: by the time we exit (matched-and-thrown,
+    # re-raised, or normal-return) the handler may already have been
+    # popped by `ExceptionState.raise_value/1`, and a blind pop
+    # would discard an outer handler we didn't install.
+    prev = ExceptionState.snapshot()
+    ExceptionState.push(handler)
+
+    try do
+      eval_body(body, env)
+    catch
+      :throw, {:schooner_guard, ^tag, value} -> value
+    after
+      ExceptionState.restore(prev)
+    end
+  end
+
+  defp eval_guard(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
+
+  defp build_guard_handler(var, clauses_form, env, tag) do
+    Value.primitive("%guard-handler", 1, fn [raised] ->
+      handler_env = Env.extend(env, [{var, raised}])
+
+      case eval_guard_clauses(clauses_form, handler_env) do
+        {:matched, value} -> throw({:schooner_guard, tag, value})
+        :no_match -> ExceptionState.raise_value(raised)
+      end
+    end)
+  end
+
+  defp eval_guard_clauses(:null, _env), do: :no_match
+
+  defp eval_guard_clauses({:pair, {:pair, {:sym, "else"}, body}, _rest}, env)
+       when body != :null do
+    {:matched, eval_body(body, env)}
+  end
+
+  defp eval_guard_clauses({:pair, clause, rest}, env) do
+    case eval_guard_clause(clause, env) do
+      :no_match -> eval_guard_clauses(rest, env)
+      {:matched, _} = m -> m
+    end
+  end
+
+  defp eval_guard_clauses(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
+
+  defp eval_guard_clause({:pair, test, :null}, env) do
+    case eval(test, env) do
+      {:bool, false} -> :no_match
+      val -> {:matched, val}
+    end
+  end
+
+  defp eval_guard_clause({:pair, test, {:pair, {:sym, "=>"}, {:pair, proc_expr, :null}}}, env) do
+    case eval(test, env) do
+      {:bool, false} ->
+        :no_match
+
+      val ->
+        proc = eval(proc_expr, env)
+        {:matched, apply_proc(proc, [val])}
+    end
+  end
+
+  defp eval_guard_clause({:pair, test, body}, env) when body != :null do
+    case eval(test, env) do
+      {:bool, false} -> :no_match
+      _ -> {:matched, eval_body(body, env)}
+    end
+  end
+
+  defp eval_guard_clause(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 end
