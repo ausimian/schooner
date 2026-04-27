@@ -1,6 +1,7 @@
 defmodule Schooner.Primitives.CxrTest do
   use ExUnit.Case, async: true
 
+  alias Schooner.Library
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
@@ -62,10 +63,11 @@ defmodule Schooner.Primitives.CxrTest do
             d <- ["a", "d"],
             do: "c" <> a <> b <> c <> d <> "r"
 
-      env = Schooner.standard_env()
+      %{exports: cxr_exports} =
+        Library.fetch!(Library.standard(), ["scheme", "cxr"])
 
       for name <- depth2 ++ depth3 ++ depth4 do
-        assert {:ok, {:primitive, ^name, 1, _}} = Schooner.Env.lookup(env, name)
+        assert {:var, {:primitive, ^name, 1, _}} = Map.fetch!(cxr_exports, name)
       end
     end
   end

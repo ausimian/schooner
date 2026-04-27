@@ -14,7 +14,6 @@ defmodule Schooner.Primitives.Base do
   rather than silently widening, because Schooner has no rational tower.
   """
 
-  alias Schooner.Env
   alias Schooner.Eval
   alias Schooner.Primitive.Error
   alias Schooner.Value
@@ -23,21 +22,16 @@ defmodule Schooner.Primitives.Base do
             when is_tuple(v) and tuple_size(v) == 2 and elem(v, 0) == :float_special
 
   # ---------------------------------------------------------------------------
-  # Public registration
+  # Public spec
   # ---------------------------------------------------------------------------
 
   @doc """
-  Define every base primitive on `env`. Returns the same env (the global
-  table is mutated in place — consistent with `Env.define/3`).
+  Return every base-library primitive as a `{name, arity, fun}` tuple.
+  `Schooner.Library.Standard` consumes this to assemble the
+  `(scheme base)` library entry.
   """
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
-  defp specs do
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     arithmetic_specs() ++
       comparison_specs() ++
       predicate_specs() ++

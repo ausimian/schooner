@@ -3,9 +3,22 @@ defmodule Schooner.EvalTest do
 
   alias Schooner.Env
   alias Schooner.Eval.Error
+  alias Schooner.Expander.SyntaxEnv
+  alias Schooner.Library
+  alias Schooner.Library.Import, as: LibImport
   alias Schooner.Value
 
   defp run(source), do: Schooner.run(source)
+
+  # Build an env populated with every variable export from
+  # `(scheme base)`. Used by tests that synthesise malformed AST
+  # directly and need certain primitives (e.g. `+`) resolvable
+  # without going through the eval-time import path.
+  defp base_env do
+    base = Library.fetch!(Library.standard(), ["scheme", "base"]).exports
+    {env, _} = LibImport.apply_bindings(base, Env.new(), SyntaxEnv.new())
+    env
+  end
 
   describe "self-evaluating literals" do
     test "integers, floats, booleans, strings, chars, vectors, bytevectors" do
@@ -117,7 +130,7 @@ defmodule Schooner.EvalTest do
       # rejects this kind of shape, but Eval.parse_params/1 has its
       # own catch-all that we want to pin behaviour on.
       bad_head = {:pair, {:sym, "lambda"}, {:pair, 1, {:pair, 1, :null}}}
-      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_head, Schooner.standard_env()) end
+      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_head, Env.new()) end
       assert e.reason == :invalid_params
 
       # Non-symbol inside the parameter list reaches collect_params/3.
@@ -125,7 +138,7 @@ defmodule Schooner.EvalTest do
         {:pair, {:sym, "lambda"},
          {:pair, {:pair, {:sym, "x"}, {:pair, 1, :null}}, {:pair, {:sym, "x"}, :null}}}
 
-      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_param, Schooner.standard_env()) end
+      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_param, Env.new()) end
       assert e.reason == :invalid_params
     end
 
@@ -202,7 +215,7 @@ defmodule Schooner.EvalTest do
         assert_raise Error, fn ->
           Schooner.Eval.eval(
             {:pair, {:sym, "+"}, {:pair, 1, 2}},
-            Schooner.standard_env()
+            base_env()
           )
         end
 

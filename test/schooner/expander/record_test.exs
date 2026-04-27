@@ -7,6 +7,7 @@ defmodule Schooner.Expander.RecordTest do
   # produce distinct types), nested records, and `write` rendering.
   use ExUnit.Case, async: true
 
+  alias Schooner.Env
   alias Schooner.Eval.Error
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
@@ -147,11 +148,12 @@ defmodule Schooner.Expander.RecordTest do
 
   describe "write rendering" do
     test "records render as #<record name>" do
-      env = Schooner.standard_env()
+      env = Env.new()
 
       _ =
         Schooner.eval(
           """
+          (import (scheme base))
           (define-record-type pt (mk-pt x y) pt? (x pt-x) (y pt-y))
           (define p (mk-pt 1 2))
           """,

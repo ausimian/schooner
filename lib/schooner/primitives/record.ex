@@ -16,7 +16,6 @@ defmodule Schooner.Primitives.Record do
   other, even though the renderings look identical.
   """
 
-  alias Schooner.Env
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
@@ -40,18 +39,13 @@ defmodule Schooner.Primitives.Record do
   def ref_name, do: @ref_name
 
   @doc """
-  Define every record-machinery primitive on `env`. Returns the
-  same env (the global table is mutated in place — consistent with
-  `Env.define/3`).
+  Return every record-machinery primitive as a `{name, arity, fun}`
+  tuple. Consumed by `Schooner.Library.Standard` as part of the
+  `(scheme base)` assembly (record machinery is in r7rs §5.4 of
+  base).
   """
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
-  defp specs do
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     [
       {@instance_name, {:at_least, 1}, &record_instance/1},
       {@predicate_name, 2, &record_of?/1},

@@ -25,9 +25,13 @@ defmodule Schooner.Application do
 
   use Application
 
+  alias Schooner.Expander
+  alias Schooner.Library.Standard
+
   @impl Application
   def start(_type, _args) do
-    _ = Schooner.Expander.bootstrap_env()
+    _ = Expander.bootstrap_env()
+    :ok = Standard.boot()
     Supervisor.start_link([], strategy: :one_for_one, name: Schooner.Supervisor)
   end
 end
