@@ -94,14 +94,14 @@ defmodule Schooner.Primitives.CaseLambdaTest do
       """
 
       e = assert_raise Schooner.Error, fn -> run(source) end
-      assert {:error_obj, :user, {:string, msg}, [args]} = e.value
+      assert {:error_obj, :user, msg, [args]} = e.value
       assert msg == "case-lambda: no matching clause"
       assert args == Value.list([1, 2, 3])
     end
 
     test "(case-lambda) with zero clauses errors on every call" do
       e = assert_raise Schooner.Error, fn -> run("((case-lambda) 1)") end
-      assert {:error_obj, :user, {:string, "case-lambda: no matching clause"}, _} = e.value
+      assert {:error_obj, :user, "case-lambda: no matching clause", _} = e.value
     end
   end
 

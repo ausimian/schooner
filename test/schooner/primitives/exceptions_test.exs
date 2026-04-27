@@ -12,7 +12,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
           run(~S|(error "boom")|)
         end
 
-      assert {:error_obj, :user, {:string, "boom"}, []} = e.value
+      assert {:error_obj, :user, "boom", []} = e.value
     end
 
     test "(error msg irritant ...) carries irritants" do
@@ -21,7 +21,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
           run(~S|(error "boom" 1 'two)|)
         end
 
-      assert {:error_obj, :user, {:string, "boom"}, [1, {:sym, "two"}]} = e.value
+      assert {:error_obj, :user, "boom", [1, {:sym, "two"}]} = e.value
       assert Schooner.Error.irritants(e) == [1, {:sym, "two"}]
     end
 
@@ -118,7 +118,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
         end
 
       assert Schooner.Error.irritants(e) == [1, 2]
-      assert {:error_obj, :user, {:string, "message"}, _} = e.value
+      assert {:error_obj, :user, "message", _} = e.value
     end
   end
 

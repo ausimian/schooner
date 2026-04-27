@@ -37,7 +37,7 @@ defmodule Schooner.Error do
   defp format({:error_obj, _kind, message, irritants}) do
     msg_text =
       case message do
-        {:string, s} -> s
+        s when is_binary(s) -> s
         other -> Value.write(other)
       end
 

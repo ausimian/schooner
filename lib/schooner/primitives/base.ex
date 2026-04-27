@@ -1013,7 +1013,7 @@ defmodule Schooner.Primitives.Base do
     raise(Error, reason: {:type_error, "string->utf8", "1 to 3 arguments", :too_many})
   end
 
-  defp string_to_utf8_range({:string, s}, start, end_) do
+  defp string_to_utf8_range(s, start, end_) when is_binary(s) do
     {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string->utf8")
     Value.bytevector(:binary.part(s, sbyte, slen))
   end
@@ -1067,12 +1067,12 @@ defmodule Schooner.Primitives.Base do
     raise(Error, reason: {:type_error, "make-string", "1 or 2 arguments", :too_many})
   end
 
-  defp string_length([{:string, s}]), do: string_codepoint_length(s)
+  defp string_length([s]) when is_binary(s), do: string_codepoint_length(s)
 
   defp string_length([other]),
     do: raise(Error, reason: {:type_error, "string-length", "string", other})
 
-  defp string_ref([{:string, s}, k]) do
+  defp string_ref([s, k]) when is_binary(s) do
     require_integer!("string-ref", k)
     i = trunc_int(k)
     if i < 0, do: raise_index!("string-ref", i, s)
@@ -1088,11 +1088,10 @@ defmodule Schooner.Primitives.Base do
 
   defp string_append(args) do
     Enum.each(args, &require_string!("string-append", &1))
-    bins = Enum.map(args, fn {:string, s} -> s end)
-    Value.string(IO.iodata_to_binary(bins))
+    Value.string(IO.iodata_to_binary(args))
   end
 
-  defp substring_([{:string, s}, start, end_]) do
+  defp substring_([s, start, end_]) when is_binary(s) do
     {sbyte, slen} = string_byte_slice(s, start, end_, "substring")
     Value.string(:binary.part(s, sbyte, slen))
   end
@@ -1113,8 +1112,8 @@ defmodule Schooner.Primitives.Base do
 
   defp check_string_pairs([], _prev, _pair), do: true
 
-  defp check_string_pairs([{:string, s} = next | rest], {:string, prev}, pair) do
-    if pair.(prev, s), do: check_string_pairs(rest, next, pair), else: false
+  defp check_string_pairs([s | rest], prev, pair) when is_binary(s) and is_binary(prev) do
+    if pair.(prev, s), do: check_string_pairs(rest, s, pair), else: false
   end
 
   defp string_to_list([v]), do: string_to_list_range(v, nil, nil)
@@ -1125,7 +1124,7 @@ defmodule Schooner.Primitives.Base do
     raise(Error, reason: {:type_error, "string->list", "1 to 3 arguments", :too_many})
   end
 
-  defp string_to_list_range({:string, s}, start, end_) do
+  defp string_to_list_range(s, start, end_) when is_binary(s) do
     cps = slice_codepoints(s, start || 0, end_, "string->list")
     Value.list(Enum.map(cps, &Value.char/1))
   end
@@ -1143,12 +1142,12 @@ defmodule Schooner.Primitives.Base do
     Value.string(IO.iodata_to_binary(bytes))
   end
 
-  defp string_upcase([{:string, s}]), do: Value.string(String.upcase(s, :default))
+  defp string_upcase([s]) when is_binary(s), do: Value.string(String.upcase(s, :default))
 
   defp string_upcase([other]),
     do: raise(Error, reason: {:type_error, "string-upcase", "string", other})
 
-  defp string_downcase([{:string, s}]), do: Value.string(String.downcase(s, :default))
+  defp string_downcase([s]) when is_binary(s), do: Value.string(String.downcase(s, :default))
 
   defp string_downcase([other]),
     do: raise(Error, reason: {:type_error, "string-downcase", "string", other})
@@ -1161,9 +1160,9 @@ defmodule Schooner.Primitives.Base do
     raise(Error, reason: {:type_error, "string-copy", "1 to 3 arguments", :too_many})
   end
 
-  defp string_copy_range({:string, s}, nil, nil), do: Value.string(s)
+  defp string_copy_range(s, nil, nil) when is_binary(s), do: Value.string(s)
 
-  defp string_copy_range({:string, s}, start, end_) do
+  defp string_copy_range(s, start, end_) when is_binary(s) do
     {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string-copy")
     Value.string(:binary.part(s, sbyte, slen))
   end
@@ -1197,7 +1196,7 @@ defmodule Schooner.Primitives.Base do
   defp symbol_to_string([other]),
     do: raise(Error, reason: {:type_error, "symbol->string", "symbol", other})
 
-  defp string_to_symbol([{:string, s}]), do: Value.symbol(s)
+  defp string_to_symbol([s]) when is_binary(s), do: Value.symbol(s)
 
   defp string_to_symbol([other]),
     do: raise(Error, reason: {:type_error, "string->symbol", "string", other})
@@ -1269,7 +1268,7 @@ defmodule Schooner.Primitives.Base do
   defp require_bytevector!(op, other),
     do: raise(Error, reason: {:type_error, op, "bytevector", other})
 
-  defp require_string!(_op, {:string, _}), do: :ok
+  defp require_string!(_op, s) when is_binary(s), do: :ok
 
   defp require_string!(op, other),
     do: raise(Error, reason: {:type_error, op, "string", other})

@@ -31,7 +31,7 @@ defmodule Schooner.ValueTest do
       assert Value.list?(Value.list([1, 2, 3]))
       refute Value.list?(Value.improper_list([1, 2], 3))
       refute Value.list?(42)
-      refute Value.list?({:string, "abc"})
+      refute Value.list?("abc")
     end
 
     test "list builders" do
@@ -98,12 +98,12 @@ defmodule Schooner.ValueTest do
     end
 
     test "error_object? / error_kind?" do
-      err = {:error_obj, :user, {:string, "boom"}, []}
+      err = {:error_obj, :user, "boom", []}
       assert Value.error_object?(err)
-      refute Value.error_object?({:string, "boom"})
+      refute Value.error_object?("boom")
       assert Value.error_kind?(err, :user)
       refute Value.error_kind?(err, :read)
-      refute Value.error_kind?({:string, "x"}, :user)
+      refute Value.error_kind?("x", :user)
     end
 
     test "integer? on non-finite floats is false (ArgumentError fallback)" do
@@ -287,13 +287,13 @@ defmodule Schooner.ValueTest do
     end
 
     test "error objects render kind, message, and irritants" do
-      e = {:error_obj, :user, {:string, "boom"}, []}
+      e = {:error_obj, :user, "boom", []}
       assert Value.write(e) == "#<error \"boom\">"
 
-      with_irrs = {:error_obj, :read, {:string, "bad input"}, [1, Value.symbol("x")]}
+      with_irrs = {:error_obj, :read, "bad input", [1, Value.symbol("x")]}
       assert Value.write(with_irrs) == "#<read-error \"bad input\" 1 x>"
 
-      file_kind = {:error_obj, :file, {:string, "missing"}, []}
+      file_kind = {:error_obj, :file, "missing", []}
       assert Value.write(file_kind) == "#<file-error \"missing\">"
     end
 

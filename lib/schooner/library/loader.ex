@@ -252,7 +252,7 @@ defmodule Schooner.Library.Loader do
   # Include path resolution
   # ---------------------------------------------------------------------------
 
-  defp expect_string({:string, s}, _form, _pos, _ctx), do: s
+  defp expect_string(s, _form, _pos, _ctx) when is_binary(s), do: s
 
   defp expect_string(other, form, pos, ctx) do
     raise ArgumentError,

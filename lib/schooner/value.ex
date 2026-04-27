@@ -15,7 +15,8 @@ defmodule Schooner.Value do
     * Pair — `{:pair, car, cdr}`
     * Symbol — `{:sym, binary}` (binaries, not atoms; user-supplied
       identifiers must not exhaust the BEAM atom table)
-    * String — `{:string, binary}`
+    * String — bare Elixir binary. Disambiguated from symbol/bytevector
+      because those remain tagged.
     * Character — `{:char, codepoint}`
     * Exact integer — bare Elixir integer
     * Inexact real — bare Elixir float
@@ -46,7 +47,7 @@ defmodule Schooner.Value do
   @type bool_v :: boolean()
   @type pair_v :: {:pair, t(), t()}
   @type sym_v :: {:sym, binary()}
-  @type string_v :: {:string, binary()}
+  @type string_v :: binary()
   @type char_v :: {:char, non_neg_integer()}
   @type vector_v :: {:vector, tuple()}
   @type bytevector_v :: {:bytevector, binary()}
@@ -96,7 +97,7 @@ defmodule Schooner.Value do
   def symbol(name) when is_binary(name), do: {:sym, name}
 
   @spec string(binary()) :: string_v()
-  def string(s) when is_binary(s), do: {:string, s}
+  def string(s) when is_binary(s), do: s
 
   @spec char(non_neg_integer()) :: char_v()
   def char(cp) when is_integer(cp) and cp >= 0, do: {:char, cp}
@@ -189,7 +190,7 @@ defmodule Schooner.Value do
   def symbol?(_), do: false
 
   @spec string?(term()) :: boolean()
-  def string?({:string, _}), do: true
+  def string?(s) when is_binary(s), do: true
   def string?(_), do: false
 
   @spec char?(term()) :: boolean()
@@ -313,7 +314,6 @@ defmodule Schooner.Value do
   def equal?(a, a), do: true
   def equal?({:pair, a1, b1}, {:pair, a2, b2}), do: equal?(a1, a2) and equal?(b1, b2)
   def equal?({:vector, t1}, {:vector, t2}), do: equal_tuples?(t1, t2)
-  def equal?({:string, s1}, {:string, s2}), do: s1 == s2
   def equal?({:bytevector, b1}, {:bytevector, b2}), do: b1 == b2
 
   def equal?({:record, id1, f1}, {:record, id2, f2}) do
@@ -361,8 +361,8 @@ defmodule Schooner.Value do
   defp render(:eof, _), do: "#<eof>"
   defp render(:unspecified, _), do: "#<unspecified>"
   defp render({:sym, name}, _), do: render_symbol(name)
-  defp render({:string, s}, :write), do: [?", escape_string(s), ?"]
-  defp render({:string, s}, :display), do: s
+  defp render(s, :write) when is_binary(s), do: [?", escape_string(s), ?"]
+  defp render(s, :display) when is_binary(s), do: s
   defp render({:char, cp}, :write), do: render_char_write(cp)
   defp render({:char, cp}, :display), do: <<cp::utf8>>
   defp render({:bytevector, b}, _), do: render_bytevector(b)

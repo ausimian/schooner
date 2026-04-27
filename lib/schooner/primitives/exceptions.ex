@@ -44,7 +44,7 @@ defmodule Schooner.Primitives.Exceptions do
   # error — construct an error object and raise it (non-continuable)
   # ---------------------------------------------------------------------------
 
-  defp error([{:string, _} = msg | irritants]) do
+  defp error([msg | irritants]) when is_binary(msg) do
     obj = Value.error_object(:user, msg, irritants)
     ExceptionState.raise_value(obj)
   end

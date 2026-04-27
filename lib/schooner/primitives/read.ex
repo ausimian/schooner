@@ -27,7 +27,7 @@ defmodule Schooner.Primitives.Read do
     ]
   end
 
-  defp read_([{:string, source}]) do
+  defp read_([source]) when is_binary(source) do
     case Reader.read_string(source) do
       [] -> :eof
       [first | _rest] -> first

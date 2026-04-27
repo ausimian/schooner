@@ -22,7 +22,7 @@ defmodule Schooner.ReaderTest do
       assert Reader.read_string("#false") == [Value.bool(false)]
     end
 
-    test "string literal reads to {:string, _}" do
+    test "string literal reads to a bare binary" do
       assert Reader.read_string(~S("hello")) == [Value.string("hello")]
     end
 
