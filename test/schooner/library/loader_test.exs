@@ -168,6 +168,108 @@ defmodule Schooner.Library.LoaderTest do
       lib = Library.fetch!(reg, ["from-file"])
       assert {:var, 42} = Map.fetch!(lib.exports, "forty-two")
     end
+
+    @tag :tmp_dir
+    test "populates :source with {:file, path, span}", %{tmp_dir: dir} do
+      path = Path.join(dir, "lib.scm")
+
+      File.write!(path, """
+
+      (define-library (from-file)
+        (import (scheme base))
+        (export forty-two)
+        (begin (define forty-two 42)))
+      """)
+
+      reg = Loader.load_file(path, standard())
+      lib = Library.fetch!(reg, ["from-file"])
+      assert {:file, ^path, {2, 1}} = lib.source
+    end
+  end
+
+  describe "diagnostics quote source positions" do
+    @tag :tmp_dir
+    test "unsupported declaration head includes path:line:col", %{tmp_dir: dir} do
+      path = Path.join(dir, "bad.scm")
+
+      File.write!(path, """
+      (define-library (broken)
+        (import (scheme base))
+        (nope something))
+      """)
+
+      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:3/, fn ->
+        Loader.load_file(path, standard())
+      end
+    end
+
+    @tag :tmp_dir
+    test "exporting an undefined binding includes path and line", %{tmp_dir: dir} do
+      path = Path.join(dir, "bad-export.scm")
+
+      File.write!(path, """
+      (define-library (broken)
+        (import (scheme base))
+        (export not-defined)
+        (begin (define x 1)))
+      """)
+
+      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:11.*not-defined/s, fn ->
+        Loader.load_file(path, standard())
+      end
+    end
+
+    @tag :tmp_dir
+    test "invalid cond-expand requirement includes file:line", %{tmp_dir: dir} do
+      path = Path.join(dir, "bad-cx.scm")
+
+      File.write!(path, """
+      (define-library (cx-bad)
+        (cond-expand
+          (123 (export nope))))
+      """)
+
+      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:6.*invalid cond-expand/s, fn ->
+        Loader.load_file(path, standard())
+      end
+    end
+
+    @tag :tmp_dir
+    test "invalid export entry includes file:line", %{tmp_dir: dir} do
+      path = Path.join(dir, "bad-entry.scm")
+
+      File.write!(path, """
+      (define-library (e-bad)
+        (import (scheme base))
+        (export (rename only-one)))
+      """)
+
+      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:11.*invalid export entry/s, fn ->
+        Loader.load_file(path, standard())
+      end
+    end
+
+    @tag :tmp_dir
+    test "cycle error names every cycle participant with its position", %{tmp_dir: dir} do
+      path = Path.join(dir, "cycle.scm")
+
+      File.write!(path, """
+      (define-library (a) (import (b)) (export x) (begin (define x 1)))
+      (define-library (b) (import (a)) (export y) (begin (define y 2)))
+      """)
+
+      err =
+        assert_raise ArgumentError, fn ->
+          Loader.load_file(path, standard())
+        end
+
+      message = err.message
+      assert message =~ "cycle in define-library"
+      assert message =~ "(a)"
+      assert message =~ "(b)"
+      assert message =~ "#{path}:1:1"
+      assert message =~ "#{path}:2:1"
+    end
   end
 
   describe "(include ...)" do
