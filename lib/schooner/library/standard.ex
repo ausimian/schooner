@@ -5,18 +5,24 @@ defmodule Schooner.Library.Standard do
   from any process.
 
   `(scheme base)` is assembled from the union of `Primitives.Base`,
-  `Primitives.Record`, `Primitives.Exceptions`, and
-  `Primitives.Continuations` — every binding in those modules is in
-  r7rs §6 / §7's `(scheme base)` library. The other libraries map
-  one-to-one to a single primitive module:
-  `(scheme cxr)` → `Primitives.Cxr`, `(scheme char)` →
-  `Primitives.Char`, `(scheme inexact)` → `Primitives.Inexact`,
-  `(scheme write)` → `Primitives.Write`, `(scheme read)` →
-  `Primitives.Read`.
+  `Primitives.Record`, `Primitives.Exceptions`,
+  `Primitives.Continuations`, plus the syntax-rules macros defined in
+  `priv/scheme/base.scm` (`when`, `unless`, `and`, `or`, `let`, `let*`,
+  `letrec`, `cond`, `case`, `do`). The other libraries map one-to-one
+  to a single primitive module:
 
-  `(scheme case-lambda)` and `(scheme lazy)` are registered with
-  empty exports here; their macros land in 13.3 from
-  `priv/scheme/*.scm`.
+    * `(scheme cxr)` → `Primitives.Cxr`
+    * `(scheme char)` → `Primitives.Char`
+    * `(scheme inexact)` → `Primitives.Inexact`
+    * `(scheme write)` → `Primitives.Write`
+    * `(scheme read)` → `Primitives.Read`
+    * `(scheme lazy)` → `Primitives.Lazy` plus the `delay` and
+      `delay-force` macros from `priv/scheme/lazy.scm`.
+
+  `(scheme case-lambda)` is registered with empty exports — its macro
+  is deferred to a later sub-phase (the syntax-rules implementation
+  needs an arity-counting helper that the current matcher does not
+  yet support cleanly).
 
   Idempotent: calling `boot/0` repeatedly rebuilds and re-persists the
   same registry. The first call from `Schooner.Application.start/2` is
@@ -25,8 +31,12 @@ defmodule Schooner.Library.Standard do
   cost.
   """
 
+  alias Schooner.Expander
+  alias Schooner.Expander.SyntaxEnv
   alias Schooner.Library
+  alias Schooner.Library.Scheme
   alias Schooner.Primitives
+  alias Schooner.Reader
   alias Schooner.Value
 
   @doc """
@@ -58,12 +68,15 @@ defmodule Schooner.Library.Standard do
     Library.new(
       name: ["scheme", "base"],
       exports:
-        exports_from_specs([
-          Primitives.Base.specs(),
-          Primitives.Record.specs(),
-          Primitives.Exceptions.specs(),
-          Primitives.Continuations.specs()
-        ]),
+        Map.merge(
+          exports_from_specs([
+            Primitives.Base.specs(),
+            Primitives.Record.specs(),
+            Primitives.Exceptions.specs(),
+            Primitives.Continuations.specs()
+          ]),
+          macros_from_priv("base.scm")
+        ),
       features: [:r7rs]
     )
   end
@@ -109,13 +122,21 @@ defmodule Schooner.Library.Standard do
   end
 
   defp scheme_case_lambda do
-    # Exports populated in 13.3 from priv/scheme/case-lambda.scm.
+    # Macro deferred. The library entry exists so importers do not
+    # error out at registration; the macros land in a later sub-phase.
     Library.new(name: ["scheme", "case-lambda"], features: [:r7rs])
   end
 
   defp scheme_lazy do
-    # Exports populated in 13.3 from priv/scheme/lazy.scm.
-    Library.new(name: ["scheme", "lazy"], features: [:r7rs])
+    Library.new(
+      name: ["scheme", "lazy"],
+      exports:
+        Map.merge(
+          exports_from_specs([Primitives.Lazy.specs()]),
+          macros_from_priv("lazy.scm")
+        ),
+      features: [:r7rs]
+    )
   end
 
   defp exports_from_specs(spec_lists) do
@@ -124,5 +145,18 @@ defmodule Schooner.Library.Standard do
     |> Map.new(fn {name, arity, fun} ->
       {name, {:var, Value.primitive(name, arity, fun)}}
     end)
+  end
+
+  defp macros_from_priv(filename) do
+    forms =
+      filename
+      |> Scheme.read()
+      |> Reader.read_string()
+
+    {_expanded, env} = Expander.expand_program_with_env(forms, SyntaxEnv.new())
+
+    for {name, {:macro, _} = binding} <- env.globals, into: %{} do
+      {name, binding}
+    end
   end
 end

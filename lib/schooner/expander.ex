@@ -55,6 +55,20 @@ defmodule Schooner.Expander do
   end
 
   @doc """
+  Expand a list of top-level forms in `env` and return both the
+  expanded forms and the resulting syntax env. Unlike `expand_program/2`,
+  this preserves the env so callers can extract macros introduced by
+  top-level `define-syntax` forms — which is how
+  `Schooner.Library.Standard` lifts each `priv/scheme/*.scm` file's
+  macros into a library's exports.
+  """
+  @spec expand_program_with_env([Value.t()], SyntaxEnv.t()) ::
+          {[Value.t()], SyntaxEnv.t()}
+  def expand_program_with_env(forms, %SyntaxEnv{} = env) when is_list(forms) do
+    expand_top_seq(forms, env, [])
+  end
+
+  @doc """
   Return the cached bootstrap syntax env containing the derived-form
   macros.
 

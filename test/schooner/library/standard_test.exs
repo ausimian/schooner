@@ -80,16 +80,30 @@ defmodule Schooner.Library.StandardTest do
     assert Map.keys(exports) == ["read"]
   end
 
-  test "(scheme case-lambda) is a stub awaiting 13.3 macros" do
+  test "(scheme case-lambda) is a stub pending its macro implementation" do
     %{exports: exports} =
       Library.fetch!(Standard.build_registry(), ["scheme", "case-lambda"])
 
     assert exports == %{}
   end
 
-  test "(scheme lazy) is a stub awaiting 13.3 macros" do
+  test "(scheme lazy) exports primitives plus delay/delay-force macros" do
     %{exports: exports} = Library.fetch!(Standard.build_registry(), ["scheme", "lazy"])
-    assert exports == %{}
+
+    assert match?({:var, _}, Map.fetch!(exports, "make-promise"))
+    assert match?({:var, _}, Map.fetch!(exports, "force"))
+    assert match?({:var, _}, Map.fetch!(exports, "promise?"))
+    assert match?({:macro, _}, Map.fetch!(exports, "delay"))
+    assert match?({:macro, _}, Map.fetch!(exports, "delay-force"))
+  end
+
+  test "(scheme base) exports the derived-form macros from base.scm" do
+    %{exports: exports} = Library.fetch!(Standard.build_registry(), ["scheme", "base"])
+
+    for name <- ~w(when unless and or let let* letrec cond case do) do
+      assert match?({:macro, _}, Map.fetch!(exports, name)),
+             "expected (scheme base) to export macro #{name}"
+    end
   end
 
   test "boot/0 stores the registry under the canonical persistent term key" do

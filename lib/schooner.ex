@@ -38,6 +38,7 @@ defmodule Schooner do
     |> Primitives.Inexact.register_into()
     |> Primitives.Write.register_into()
     |> Primitives.Read.register_into()
+    |> Primitives.Lazy.register_into()
     |> Primitives.Record.register_into()
     |> Primitives.Exceptions.register_into()
     |> Primitives.Continuations.register_into()
