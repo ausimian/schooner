@@ -169,4 +169,51 @@ defmodule Schooner.Library.ImportTest do
       end
     end
   end
+
+  describe "resolve/2 — malformed specs" do
+    test "non-list spec is rejected with a clear ArgumentError" do
+      err =
+        assert_raise ArgumentError, fn ->
+          LibImport.resolve([42], test_registry())
+        end
+
+      assert err.message =~ "invalid import spec"
+    end
+
+    test "rename modifier silently ignores names that aren't in the inner exports" do
+      bindings =
+        LibImport.resolve(
+          [datum("(rename (only (scheme base) car) (cadr nope))")],
+          test_registry()
+        )
+
+      # `cadr` was never present (we only kept `car`), so the rename is
+      # ignored — `car` survives unchanged.
+      assert Map.keys(bindings) == ["car"]
+    end
+
+    test "rename clause that isn't (old new) is rejected" do
+      err =
+        assert_raise ArgumentError, fn ->
+          LibImport.resolve(
+            [datum("(rename (only (scheme base) car) (car))")],
+            test_registry()
+          )
+        end
+
+      assert err.message =~ "invalid rename clause"
+    end
+
+    test "non-symbol name in `only` modifier is rejected" do
+      err =
+        assert_raise ArgumentError, fn ->
+          LibImport.resolve(
+            [datum(~s|(only (scheme base) "not-a-sym")|)],
+            test_registry()
+          )
+        end
+
+      assert err.message =~ "must be a symbol"
+    end
+  end
 end

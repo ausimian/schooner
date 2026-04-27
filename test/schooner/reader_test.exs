@@ -325,4 +325,156 @@ defmodule Schooner.ReaderTest do
       assert err.reason == {:invalid_in_bytevector, :ident}
     end
   end
+
+  describe "read_string_positioned/1" do
+    test "atom carries {:atom, position}" do
+      assert [{42, {:atom, {1, 1}}}] = Reader.read_string_positioned("42")
+      assert [{1.5, {:atom, {1, 4}}}] = Reader.read_string_positioned("   1.5")
+    end
+
+    test "every primitive token kind threads through position_of" do
+      datums = Reader.read_string_positioned(~s|#t "hi" #\\a foo|)
+
+      assert Enum.map(datums, fn {_d, p} -> Reader.position_of(p) end) ==
+               [{1, 1}, {1, 4}, {1, 9}, {1, 13}]
+    end
+
+    test "list pos tree is a chain of :pair nodes pointing at the opener" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("  (a b c)")
+
+      assert datum == Value.list([Value.symbol("a"), Value.symbol("b"), Value.symbol("c")])
+      assert Reader.position_of(pos_tree) == {1, 3}
+
+      [a_pos, b_pos, c_pos] = Reader.list_positions(pos_tree)
+      assert Reader.position_of(a_pos) == {1, 4}
+      assert Reader.position_of(b_pos) == {1, 6}
+      assert Reader.position_of(c_pos) == {1, 8}
+    end
+
+    test "empty list reads as :null with an :atom-shaped position tree" do
+      [{datum, pos_tree}] = Reader.read_string_positioned(" ()")
+      assert datum == []
+      assert pos_tree == {:atom, {1, 2}}
+    end
+
+    test "dotted-pair position tree records the tail's position in place of [] sentinel" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("(1 . 2)")
+      assert datum == Value.pair(1, 2)
+
+      assert {:pair, {1, 1}, {:atom, {1, 2}}, {:atom, {1, 6}}} = pos_tree
+    end
+
+    test "vector pos tree carries the start and an item-tree per element" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("#(1 2)")
+      assert datum == Value.vector([1, 2])
+
+      assert {:vector, {1, 1}, [item1, item2]} = pos_tree
+      assert item1 == {:atom, {1, 3}}
+      assert item2 == {:atom, {1, 5}}
+    end
+
+    test "bytevector pos tree carries only the start position" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("#u8(1 2)")
+      assert datum == Value.bytevector([1, 2])
+      assert pos_tree == {:bytevector, {1, 1}}
+    end
+
+    test "quote forms desugar with position trees pointing at the prefix" do
+      [{datum, pos_tree}] = Reader.read_string_positioned(" 'foo")
+
+      assert datum == Value.list([Value.symbol("quote"), Value.symbol("foo")])
+
+      [quote_sym_pos, foo_pos] = Reader.list_positions(pos_tree)
+      assert Reader.position_of(quote_sym_pos) == {1, 2}
+      assert Reader.position_of(foo_pos) == {1, 3}
+    end
+
+    test "quasiquote, unquote, unquote-splicing all tracked" do
+      [{_, p1}] = Reader.read_string_positioned("`x")
+      [{_, p2}] = Reader.read_string_positioned(",x")
+      [{_, p3}] = Reader.read_string_positioned(",@x")
+
+      assert Reader.position_of(p1) == {1, 1}
+      assert Reader.position_of(p2) == {1, 1}
+      assert Reader.position_of(p3) == {1, 1}
+    end
+
+    test "datum comments are skipped while preserving positions of survivors" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("#; foo bar")
+      assert datum == Value.symbol("bar")
+      assert Reader.position_of(pos_tree) == {1, 8}
+    end
+
+    test "improper list — vector item carries its sub-tree" do
+      [{datum, pos_tree}] = Reader.read_string_positioned("(#(1 2) . 3)")
+      assert datum == Value.pair(Value.vector([1, 2]), 3)
+
+      assert {:pair, _, vec_pos, tail_pos} = pos_tree
+      assert {:vector, _, [_, _]} = vec_pos
+      assert tail_pos == {:atom, {1, 11}}
+    end
+
+    test "errors during positioned read still raise with reader.error" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(") end
+      assert err.reason == :unterminated_list
+      assert err.position == {1, 1}
+    end
+
+    test "positioned reader rejects unmatched close-paren" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned(" )") end
+      assert err.reason == :unexpected_close_paren
+      assert err.position == {1, 2}
+    end
+
+    test "positioned reader rejects bare dot" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned(" . ") end
+      assert err.reason == :unexpected_dot
+    end
+
+    test "positioned reader rejects dot at list start" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(. 1)") end
+      assert err.reason == :dot_at_list_start
+    end
+
+    test "positioned reader rejects extra after dot" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(1 . 2 3)") end
+      assert err.reason == :extra_after_dot
+    end
+
+    test "positioned reader rejects missing tail after dot" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(1 . )") end
+      assert err.reason == :missing_tail_after_dot
+
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(1 . ") end
+      assert err.reason == :missing_tail_after_dot
+    end
+
+    test "positioned reader rejects unterminated dotted-list (eof after tail)" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("(1 . 2") end
+      assert err.reason == :unterminated_list
+    end
+
+    test "positioned reader rejects unterminated vector" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("#(1 2") end
+      assert err.reason == :unterminated_vector
+    end
+
+    test "positioned reader rejects dot in vector" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("#(1 . 2)") end
+      assert err.reason == :dot_in_vector
+    end
+
+    test "positioned reader rejects quote with no following datum" do
+      err = assert_raise Error, fn -> Reader.read_string_positioned("'") end
+      assert err.reason == {:unexpected_eof_after, "quote"}
+    end
+  end
+
+  describe "list_positions/1" do
+    test "raises ArgumentError for a non-list-shaped tree (vector)" do
+      [{_, pos_tree}] = Reader.read_string_positioned("#(1 2)")
+
+      assert_raise ArgumentError, fn -> Reader.list_positions(pos_tree) end
+    end
+  end
 end

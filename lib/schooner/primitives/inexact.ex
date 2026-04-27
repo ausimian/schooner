@@ -109,7 +109,7 @@ defmodule Schooner.Primitives.Inexact do
 
   defp atan_([x]), do: atan_one(x, "atan")
   defp atan_([y, x]), do: atan_two(y, x, "atan")
-  defp atan_(_), do: raise(Error, reason: {:arity_error, "atan", 1, 2})
+  defp atan_(_), do: raise(Error, reason: {:type_error, "atan", "1 or 2 arguments", :too_many})
 
   defp atan_one({:float_special, :pos_inf}, _), do: :math.pi() / 2.0
   defp atan_one({:float_special, :neg_inf}, _), do: -:math.pi() / 2.0

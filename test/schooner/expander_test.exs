@@ -359,4 +359,80 @@ defmodule Schooner.ExpanderTest do
              """) == 314
     end
   end
+
+  describe "Expander.Error message formatting" do
+    alias Schooner.Expander.Error, as: EE
+
+    test ":no_matching_rule names the keyword" do
+      err = EE.exception(reason: {:no_matching_rule, "bin"})
+      assert err.message =~ "no matching"
+      assert err.message =~ "bin"
+    end
+
+    test ":ellipsis_count_mismatch names the offending variable" do
+      err = EE.exception(reason: {:ellipsis_count_mismatch, "x"})
+      assert err.message =~ "ellipsis"
+      assert err.message =~ "x"
+    end
+
+    test ":ellipsis_no_pattern_var names the location" do
+      err = EE.exception(reason: {:ellipsis_no_pattern_var, "template"})
+      assert err.message =~ "no pattern variable"
+      assert err.message =~ "template"
+    end
+
+    test ":syntax_rules_arity reports the form count" do
+      err = EE.exception(reason: {:syntax_rules_arity, 0})
+      assert err.message =~ "literals list and at least one rule"
+      assert err.message =~ "0"
+    end
+
+    test ":nested_define_syntax_unsupported is rendered as a fixed message" do
+      err = EE.exception(reason: :nested_define_syntax_unsupported)
+      assert err.message == "`define-syntax` is currently only supported at top level"
+    end
+  end
+
+  describe "top-level (begin (define-syntax ...) ...) splices through expand_top_begin" do
+    test "macro defined inside top-level begin is usable afterwards" do
+      assert run("""
+             (begin
+               (define-syntax twice
+                 (syntax-rules () ((_ x) (* x 2)))))
+             (twice 7)
+             """) == 14
+    end
+  end
+
+  describe "let-syntax body wrapping" do
+    test "multi-form body wraps in (begin ...) via wrap_body_as_form" do
+      # When the body is a single form, wrap_body_as_form returns it bare;
+      # with two-or-more forms it must wrap them in (begin ...).
+      assert run("""
+             (let-syntax ((m (syntax-rules () ((_ x) x))))
+               (m 1)
+               (m 2)
+               (m 3))
+             """) == 3
+    end
+  end
+
+  describe "nested quasiquote / unquote-splicing" do
+    test "unquote-splicing at level > 1 keeps the form symbolic and recurses" do
+      # ``(a ,@,b) — outer ` lifts level to 1, inner ` to 2; ,@,b sees
+      # level 2 so unquote-splicing's level > 1 branch fires, then the
+      # inner unquote-splicing goes deeper.
+      assert run("(define x 1) ``(a ,@,x)") ==
+               Value.list([
+                 Value.symbol("quasiquote"),
+                 Value.list([
+                   Value.symbol("a"),
+                   Value.list([
+                     Value.symbol("unquote-splicing"),
+                     Value.list([Value.symbol("unquote"), Value.symbol("x")])
+                   ])
+                 ])
+               ])
+    end
+  end
 end

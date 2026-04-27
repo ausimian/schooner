@@ -369,5 +369,23 @@ defmodule Schooner.LexerTest do
       err = assert_raise Error, fn -> Lexer.tokenise(".+@") end
       assert match?({:invalid_token, _}, err.reason)
     end
+
+    test "Lexer.Error message describes :rationals_unsupported" do
+      err = Error.exception(reason: :rationals_unsupported, position: {7, 3})
+      assert err.message == "rationals are not supported at line 7, column 3"
+    end
+
+    test "Lexer.Error message describes :empty_atom" do
+      err = Error.exception(reason: :empty_atom, position: {1, 1})
+      assert err.message == "empty token at line 1, column 1"
+    end
+
+    test "Lexer.Error message describes {:invalid_identifier, raw}" do
+      err =
+        Error.exception(reason: {:invalid_identifier, "x@y"}, position: {1, 1})
+
+      assert err.message =~ "invalid identifier"
+      assert err.message =~ "x@y"
+    end
   end
 end

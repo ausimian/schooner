@@ -4,6 +4,7 @@ defmodule Schooner.Library.LoaderTest do
   alias Schooner.Library
   alias Schooner.Library.Loader
   alias Schooner.Library.Standard
+  alias Schooner.Reader
 
   defp standard, do: Standard.build_registry()
 
@@ -438,6 +439,215 @@ defmodule Schooner.Library.LoaderTest do
       reg = Loader.load_file(Path.join(dir, "libs.scm"), standard())
       lib = Library.fetch!(reg, ["uses"])
       assert {:var, 99} = Map.fetch!(lib.exports, "use-help")
+    end
+  end
+
+  describe "compile/2,3 directly (no positioned tree)" do
+    test "compile/2 builds a library against a registry" do
+      [datum] =
+        Reader.read_string("""
+        (define-library (direct)
+          (import (scheme base))
+          (export double)
+          (begin (define (double x) (* x 2))))
+        """)
+
+      lib = Loader.compile(datum, standard())
+      assert lib.name == ["direct"]
+      assert {:var, {:closure, _, _, _, _}} = Map.fetch!(lib.exports, "double")
+      assert lib.source == :native
+    end
+
+    test "compile/2 on a non-define-library datum raises ArgumentError" do
+      [datum] = Reader.read_string("(begin 1 2)")
+
+      assert_raise ArgumentError, ~r/expected a \(define-library/, fn ->
+        Loader.compile(datum, standard())
+      end
+    end
+
+    test "compile/2 still walks vector and atom subtrees in synthetic_pos_tree" do
+      # exercises synthetic_pos_tree's :vector and :atom branches via a
+      # body that contains a vector literal and a bare integer literal.
+      [datum] =
+        Reader.read_string("""
+        (define-library (vec-direct)
+          (import (scheme base))
+          (export v)
+          (begin (define v (vector 1 2 3))))
+        """)
+
+      lib = Loader.compile(datum, standard())
+      assert {:var, {:vector, _}} = Map.fetch!(lib.exports, "v")
+    end
+
+    test "diagnostic without a positioned tree omits line/column" do
+      [datum] =
+        Reader.read_string("""
+        (define-library (no-pos)
+          (import (scheme base))
+          (export missing)
+          (begin (define x 1)))
+        """)
+
+      err = assert_raise ArgumentError, fn -> Loader.compile(datum, standard()) end
+      assert err.message =~ "missing"
+      refute err.message =~ ~r/line \d+/
+      refute err.message =~ ~r/:\d+:\d+/
+    end
+  end
+
+  describe "default registry" do
+    test "load_string/1 uses Library.standard() when no registry is given" do
+      source = """
+      (define-library (default-reg)
+        (import (scheme base))
+        (export who)
+        (begin (define who 'default)))
+      """
+
+      reg = Loader.load_string(source)
+      assert match?({:ok, _}, Library.lookup(reg, ["default-reg"]))
+      # Confirm scheme base is still there (i.e. we got the standard registry).
+      assert match?({:ok, _}, Library.lookup(reg, ["scheme", "base"]))
+    end
+
+    @tag :tmp_dir
+    test "load_file/1 uses Library.standard() when no registry is given", %{tmp_dir: dir} do
+      path = Path.join(dir, "lib.scm")
+
+      File.write!(path, """
+      (define-library (default-reg-file)
+        (import (scheme base))
+        (export n)
+        (begin (define n 7)))
+      """)
+
+      reg = Loader.load_file(path)
+      assert match?({:ok, _}, Library.lookup(reg, ["default-reg-file"]))
+    end
+  end
+
+  describe "cond-expand `or` and `not` requirement combinators" do
+    test "or selects the first satisfied requirement" do
+      source = """
+      (define-library (cx-or)
+        (cond-expand
+          ((or (library (scheme nope)) r7rs)
+            (import (scheme base))
+            (export ok)
+            (begin (define ok 'yes)))
+          (else
+            (import (scheme base))
+            (export ok)
+            (begin (define ok 'no)))))
+      """
+
+      reg = Loader.load_string(source, standard())
+      lib = Library.fetch!(reg, ["cx-or"])
+      assert {:var, {:sym, "yes"}} = Map.fetch!(lib.exports, "ok")
+    end
+
+    test "later cond-expand requirement is evaluated when earlier ones fail" do
+      source = """
+      (define-library (cx-rest)
+        (cond-expand
+          ((library (scheme nope))
+            (import (scheme base))
+            (export ok)
+            (begin (define ok 'never)))
+          (r7rs
+            (import (scheme base))
+            (export ok)
+            (begin (define ok 'second)))))
+      """
+
+      reg = Loader.load_string(source, standard())
+      lib = Library.fetch!(reg, ["cx-rest"])
+      assert {:var, {:sym, "second"}} = Map.fetch!(lib.exports, "ok")
+    end
+  end
+
+  describe "exporting a macro" do
+    test "macro bindings flow through library exports" do
+      source = """
+      (define-library (macro-export)
+        (import (scheme base))
+        (export my-when)
+        (begin
+          (define-syntax my-when
+            (syntax-rules ()
+              ((_ test body ...) (if test (begin body ...) #f))))))
+      """
+
+      reg = Loader.load_string(source, standard())
+      lib = Library.fetch!(reg, ["macro-export"])
+      assert {:macro, _} = Map.fetch!(lib.exports, "my-when")
+    end
+  end
+
+  describe "include path types" do
+    @tag :tmp_dir
+    test "absolute include path inside the entry-point directory is allowed", %{tmp_dir: dir} do
+      body_path = Path.join(dir, "abs_body.scm")
+      File.write!(body_path, "(define eight 8)")
+
+      lib_path = Path.join(dir, "lib.scm")
+
+      File.write!(lib_path, """
+      (define-library (abs-include)
+        (import (scheme base))
+        (export eight)
+        (include "#{body_path}"))
+      """)
+
+      reg = Loader.load_file(lib_path, standard())
+      lib = Library.fetch!(reg, ["abs-include"])
+      assert {:var, 8} = Map.fetch!(lib.exports, "eight")
+    end
+
+    @tag :tmp_dir
+    test "absolute include path outside the entry-point directory is rejected", %{tmp_dir: dir} do
+      sub = Path.join(dir, "sub")
+      File.mkdir_p!(sub)
+
+      outside_path = Path.join(dir, "outside.scm")
+      File.write!(outside_path, "(define x 1)")
+
+      lib_path = Path.join(sub, "lib.scm")
+
+      File.write!(lib_path, """
+      (define-library (abs-escape)
+        (import (scheme base))
+        (export x)
+        (include "#{outside_path}"))
+      """)
+
+      assert_raise ArgumentError, ~r/resolves outside/, fn ->
+        Loader.load_file(lib_path, standard())
+      end
+    end
+
+    test "non-string include path raises a clear error" do
+      source = """
+      (define-library (bad-path)
+        (import (scheme base))
+        (include 42))
+      """
+
+      err = assert_raise ArgumentError, fn -> Loader.load_string(source, standard()) end
+      assert err.message =~ "expected string path"
+    end
+  end
+
+  describe "load_string error messages with no path/no position" do
+    test "non-define-library top-level form names the offender (no path)" do
+      source = "(begin 1)"
+
+      err = assert_raise ArgumentError, fn -> Loader.load_string(source, standard()) end
+      assert err.message =~ "expected (define-library"
+      # No path was given, so we get a position-only prefix.
+      assert err.message =~ ~r/line \d+, column \d+/
     end
   end
 end

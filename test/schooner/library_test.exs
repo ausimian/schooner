@@ -212,4 +212,34 @@ defmodule Schooner.LibraryTest do
       assert idx.(["r"]) < idx.(["top"])
     end
   end
+
+  describe "canonicalise_name/1" do
+    alias Schooner.Reader
+
+    test "symbol segments become binaries" do
+      [datum] = Reader.read_string("(scheme base)")
+      assert Library.canonicalise_name(datum) == ["scheme", "base"]
+    end
+
+    test "non-negative integer segments pass through" do
+      [datum] = Reader.read_string("(srfi 1)")
+      assert Library.canonicalise_name(datum) == ["srfi", 1]
+    end
+
+    test "negative integer segment is rejected" do
+      [datum] = Reader.read_string("(srfi -1)")
+
+      assert_raise ArgumentError, ~r/symbols or non-negative integers/, fn ->
+        Library.canonicalise_name(datum)
+      end
+    end
+
+    test "non-symbol non-integer segment is rejected" do
+      [datum] = Reader.read_string(~s|(scheme "base")|)
+
+      assert_raise ArgumentError, ~r/symbols or non-negative integers/, fn ->
+        Library.canonicalise_name(datum)
+      end
+    end
+  end
 end

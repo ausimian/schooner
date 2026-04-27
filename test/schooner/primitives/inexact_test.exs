@@ -43,9 +43,38 @@ defmodule Schooner.Primitives.InexactTest do
       assert run("(log 0)") == {:float_special, :neg_inf}
     end
 
+    test "log of positive zero floats = -inf.0" do
+      assert run("(log 0.0)") == {:float_special, :neg_inf}
+      assert run("(log -0.0)") == {:float_special, :neg_inf}
+    end
+
+    test "log on positive float = :math.log" do
+      assert_in_delta run("(log 2.5)"), :math.log(2.5), 1.0e-12
+    end
+
+    test "log of NaN = NaN; log of +inf = +inf" do
+      assert run("(log +nan.0)") == {:float_special, :nan}
+      assert run("(log +inf.0)") == {:float_special, :pos_inf}
+    end
+
+    test "log of -inf raises (would be complex)" do
+      e = assert_raise PError, fn -> run("(log -inf.0)") end
+      assert match?({:irrational, "log", _}, e.reason)
+    end
+
     test "log of negative integer raises" do
       e = assert_raise PError, fn -> run("(log -1)") end
       assert match?({:irrational, "log", _}, e.reason)
+    end
+
+    test "log of negative float raises" do
+      e = assert_raise PError, fn -> run("(log -1.5)") end
+      assert match?({:irrational, "log", _}, e.reason)
+    end
+
+    test "log on non-number raises type error" do
+      e = assert_raise PError, fn -> run(~s{(log "hi")}) end
+      assert match?({:type_error, "log", "number", _}, e.reason)
     end
 
     test "log with base — log base 10 of 1000 ≈ 3.0" do
@@ -67,12 +96,33 @@ defmodule Schooner.Primitives.InexactTest do
     test "cos +nan.0 = +nan.0" do
       assert run("(cos +nan.0)") == {:float_special, :nan}
     end
+
+    test "trig functions raise on non-number arg" do
+      e = assert_raise PError, fn -> run(~s{(sin "x")}) end
+      assert match?({:type_error, "sin", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(cos "x")}) end
+      assert match?({:type_error, "cos", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(tan "x")}) end
+      assert match?({:type_error, "tan", "number", _}, e.reason)
+    end
   end
 
   describe "asin / acos" do
     test "asin 0 = 0; acos 1 = 0" do
       assert run("(asin 0)") == 0.0
       assert run("(acos 1)") == 0.0
+    end
+
+    test "asin/acos on float in range" do
+      assert_in_delta run("(asin 0.5)"), :math.asin(0.5), 1.0e-12
+      assert_in_delta run("(acos 0.5)"), :math.acos(0.5), 1.0e-12
+    end
+
+    test "asin/acos on +nan.0 = +nan.0" do
+      assert run("(asin +nan.0)") == {:float_special, :nan}
+      assert run("(acos +inf.0)") == {:float_special, :nan}
     end
 
     test "asin out of [-1,1] raises" do
@@ -84,6 +134,14 @@ defmodule Schooner.Primitives.InexactTest do
       e = assert_raise PError, fn -> run("(acos -2.5)") end
       assert match?({:irrational, "acos", _}, e.reason)
     end
+
+    test "asin/acos on non-number raises type error" do
+      e = assert_raise PError, fn -> run(~s{(asin "hi")}) end
+      assert match?({:type_error, "asin", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(acos "hi")}) end
+      assert match?({:type_error, "acos", "number", _}, e.reason)
+    end
   end
 
   describe "atan" do
@@ -91,14 +149,45 @@ defmodule Schooner.Primitives.InexactTest do
       assert_in_delta run("(atan 1)"), :math.pi() / 4.0, 1.0e-12
     end
 
+    test "atan on float = :math.atan" do
+      assert_in_delta run("(atan 0.5)"), :math.atan(0.5), 1.0e-12
+    end
+
     test "atan +inf.0 = pi/2; atan -inf.0 = -pi/2" do
       assert_in_delta run("(atan +inf.0)"), :math.pi() / 2.0, 1.0e-12
       assert_in_delta run("(atan -inf.0)"), -:math.pi() / 2.0, 1.0e-12
     end
 
+    test "atan +nan.0 = +nan.0" do
+      assert run("(atan +nan.0)") == {:float_special, :nan}
+    end
+
+    test "atan on non-number raises type error" do
+      e = assert_raise PError, fn -> run(~s{(atan "hi")}) end
+      assert match?({:type_error, "atan", "number", _}, e.reason)
+    end
+
     test "two-arg atan = atan2(y, x)" do
       assert_in_delta run("(atan 1 1)"), :math.pi() / 4.0, 1.0e-12
       assert_in_delta run("(atan 0 -1)"), :math.pi(), 1.0e-12
+    end
+
+    test "two-arg atan with +nan.0 in either slot = +nan.0" do
+      assert run("(atan +nan.0 1)") == {:float_special, :nan}
+      assert run("(atan 1 +nan.0)") == {:float_special, :nan}
+    end
+
+    test "two-arg atan with non-number raises pointing at the offender" do
+      e = assert_raise PError, fn -> run(~s{(atan 1 "x")}) end
+      assert match?({:type_error, "atan", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(atan "x" 1)}) end
+      assert match?({:type_error, "atan", "number", _}, e.reason)
+    end
+
+    test "atan with too many arguments raises an arity-shaped type error" do
+      e = assert_raise PError, fn -> run("(atan 1 2 3)") end
+      assert e.reason == {:type_error, "atan", "1 or 2 arguments", :too_many}
     end
   end
 
@@ -127,6 +216,18 @@ defmodule Schooner.Primitives.InexactTest do
     test "predicates raise on non-number arg" do
       e = assert_raise PError, fn -> run("(finite? \"hi\")") end
       assert match?({:type_error, "finite?", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(infinite? "hi")}) end
+      assert match?({:type_error, "infinite?", "number", _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~s{(nan? "hi")}) end
+      assert match?({:type_error, "nan?", "number", _}, e.reason)
+    end
+  end
+
+  describe "exp on floats" do
+    test "exp on float input = :math.exp" do
+      assert_in_delta run("(exp 1.5)"), :math.exp(1.5), 1.0e-12
     end
   end
 end
