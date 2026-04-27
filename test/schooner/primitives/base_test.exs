@@ -917,4 +917,93 @@ defmodule Schooner.Primitives.BaseTest do
       assert match?({:index_out_of_range, "string->list", _, _}, e.reason)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Variadic copy/conversion primitives reject 4+ args distinctly so the
+  # error names "1 to 3 arguments" rather than landing in the underlying
+  # range function with garbage extras.
+  # ---------------------------------------------------------------------------
+
+  describe "1-to-3-argument primitives reject too many args" do
+    test "vector-copy with 4 args" do
+      e = assert_raise PError, fn -> run("(vector-copy #(1 2 3) 0 3 99)") end
+      assert e.reason == {:type_error, "vector-copy", "1 to 3 arguments", :too_many}
+    end
+
+    test "bytevector-copy with 4 args" do
+      e = assert_raise PError, fn -> run("(bytevector-copy #u8(1 2 3) 0 3 99)") end
+      assert e.reason == {:type_error, "bytevector-copy", "1 to 3 arguments", :too_many}
+    end
+
+    test "utf8->string with 4 args" do
+      e = assert_raise PError, fn -> run("(utf8->string #u8(97 98 99) 0 3 99)") end
+      assert e.reason == {:type_error, "utf8->string", "1 to 3 arguments", :too_many}
+    end
+
+    test "string->utf8 with 4 args" do
+      e = assert_raise PError, fn -> run(~S|(string->utf8 "abc" 0 3 99)|) end
+      assert e.reason == {:type_error, "string->utf8", "1 to 3 arguments", :too_many}
+    end
+  end
+
+  describe "utf8->string / string->utf8 with start-only and start+end" do
+    test "utf8->string with explicit start and end" do
+      assert run("(utf8->string #u8(97 98 99 100) 1 3)") == Value.string("bc")
+    end
+
+    test "string->utf8 with explicit start and end" do
+      assert run(~S|(string->utf8 "abcd" 1 3)|) == Value.bytevector(<<?b, ?c>>)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # signed-zero, expt -1^even, and -0/-0 = NaN exercise the remaining
+  # arithmetic edge cases.
+  # ---------------------------------------------------------------------------
+
+  describe "signed-zero arithmetic edges" do
+    test "(-1) raised to an even integer is exactly 1" do
+      assert run("(expt -1 4)") === 1
+    end
+
+    test "(-1) raised to an odd integer is exactly -1" do
+      assert run("(expt -1 3)") === -1
+    end
+
+    test "+inf.0 multiplied by -0.0 is NaN (sign_finite hits its -0.0 clause)" do
+      assert run("(* +inf.0 -0.0)") == {:float_special, :nan}
+    end
+
+    test "(-0.0) divided by (-0.0) is NaN" do
+      assert run("(/ -0.0 -0.0)") == {:float_special, :nan}
+    end
+
+    test "+inf.0 + +inf.0 stays +inf.0 (special_add same-key clause)" do
+      assert run("(+ +inf.0 +inf.0)") == {:float_special, :pos_inf}
+      assert run("(+ -inf.0 -inf.0)") == {:float_special, :neg_inf}
+    end
+  end
+
+  describe "char codepoint validation" do
+    alias Schooner.Value, as: V
+
+    defp string_primitive do
+      {_, _, fun} = Enum.find(Schooner.Primitives.Base.specs(), fn {n, _, _} -> n == "string" end)
+      fun
+    end
+
+    test "(string c) raises when the char carries a codepoint past 0x10FFFF" do
+      bad = V.char(0x110000)
+
+      e = assert_raise PError, fn -> string_primitive().([bad]) end
+      assert match?({:codepoint_out_of_range, "char", _}, e.reason)
+    end
+
+    test "(string c) raises when the char carries a surrogate codepoint" do
+      surrogate = V.char(0xD800)
+
+      e = assert_raise PError, fn -> string_primitive().([surrogate]) end
+      assert match?({:codepoint_out_of_range, "char", _}, e.reason)
+    end
+  end
 end

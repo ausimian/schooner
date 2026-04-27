@@ -286,4 +286,21 @@ defmodule Schooner.EvalTest do
 
     Schooner.eval(source, env)
   end
+
+  describe "primitive arity_mismatch surfaces on under-supply to {:at_least, n}" do
+    test "string=? requires at least 2 args" do
+      e = assert_raise Error, fn -> run(~S|(string=? "x")|) end
+      assert match?({:arity_mismatch, "string=?", {:at_least, 2}, 1}, e.reason)
+    end
+  end
+
+  describe "guard clause whose test evaluates to literal #f" do
+    test "false-test clause is skipped, next clause matches" do
+      assert run("""
+             (guard (e ((eq? e 'never) 1)
+                       ((eq? e 'matched) 2))
+               (raise 'matched))
+             """) == 2
+    end
+  end
 end

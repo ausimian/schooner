@@ -141,6 +141,22 @@ defmodule Schooner.Primitives.ExceptionsTest do
                    (+ (raise-continuable 3)
                       (raise-continuable 4))))|) == 14
     end
+
+    test "raise-continuable with no handler installed escapes to the host" do
+      e = assert_raise Schooner.Error, fn -> run("(raise-continuable 'oops)") end
+      assert e.value == Value.symbol("oops")
+    end
+  end
+
+  describe "error-object-irritants type-check" do
+    test "raises a type error when called with a non-error-object" do
+      e = assert_raise Schooner.Primitive.Error, fn -> run("(error-object-irritants 1)") end
+
+      assert match?(
+               {:type_error, "error-object-irritants", "error object", _},
+               e.reason
+             )
+    end
   end
 
   describe "guard" do

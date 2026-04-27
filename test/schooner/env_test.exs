@@ -57,4 +57,21 @@ defmodule Schooner.EnvTest do
     assert Env.lookup(a, "k") == {:ok, 1}
     assert Env.lookup(b, "k") == :error
   end
+
+  test "pop/1 removes the topmost lexical frame" do
+    env =
+      Env.new()
+      |> Env.define("g", :global)
+      |> Env.extend([{"x", :outer}])
+      |> Env.extend([{"x", :inner}])
+
+    assert Env.lookup(env, "x") == {:ok, :inner}
+
+    after_one_pop = Env.pop(env)
+    assert Env.lookup(after_one_pop, "x") == {:ok, :outer}
+
+    after_two_pops = Env.pop(after_one_pop)
+    assert Env.lookup(after_two_pops, "x") == :error
+    assert Env.lookup(after_two_pops, "g") == {:ok, :global}
+  end
 end
