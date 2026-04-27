@@ -80,11 +80,12 @@ defmodule Schooner.Library.StandardTest do
     assert Map.keys(exports) == ["read"]
   end
 
-  test "(scheme case-lambda) is a stub pending its macro implementation" do
+  test "(scheme case-lambda) exports the case-lambda macro" do
     %{exports: exports} =
       Library.fetch!(Standard.build_registry(), ["scheme", "case-lambda"])
 
-    assert exports == %{}
+    assert Map.keys(exports) == ["case-lambda"]
+    assert match?({:macro, _}, Map.fetch!(exports, "case-lambda"))
   end
 
   test "(scheme lazy) exports primitives plus delay/delay-force macros" do

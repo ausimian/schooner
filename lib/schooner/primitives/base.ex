@@ -627,7 +627,8 @@ defmodule Schooner.Primitives.Base do
       {"assv", 2, &assv_/1},
       {"assq", 2, &assq_/1},
       {"map", {:at_least, 2}, &map_/1},
-      {"for-each", {:at_least, 2}, &for_each_/1}
+      {"for-each", {:at_least, 2}, &for_each_/1},
+      {"apply", {:at_least, 2}, &apply_/1}
     ]
   end
 
@@ -767,6 +768,25 @@ defmodule Schooner.Primitives.Base do
 
   defp split_heads_tails([{:pair, h, t} | r], hs, ts),
     do: split_heads_tails(r, [h | hs], [t | ts])
+
+  # r7rs §6.10: `(apply proc arg1 ... argn list)`. The leading args are
+  # passed positionally, the trailing list is spliced. The tail call to
+  # `Eval.apply_proc/2` keeps the proper-tail-call invariant intact —
+  # an `apply` use in tail position behaves like a direct call.
+  defp apply_([proc | rest]) do
+    require_procedure!("apply", proc)
+    Eval.apply_proc(proc, build_apply_args(rest))
+  end
+
+  defp build_apply_args([list]) do
+    require_proper_list!("apply", list)
+    flatten_scheme_list(list, [])
+  end
+
+  defp build_apply_args([head | rest]), do: [head | build_apply_args(rest)]
+
+  defp flatten_scheme_list(:null, acc), do: Enum.reverse(acc)
+  defp flatten_scheme_list({:pair, h, t}, acc), do: flatten_scheme_list(t, [h | acc])
 
   # ---------------------------------------------------------------------------
   # Vectors

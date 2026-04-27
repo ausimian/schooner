@@ -193,4 +193,37 @@ defmodule Schooner.Primitives.BasePairsTest do
       assert match?({:type_error, "for-each", "procedure", _}, e.reason)
     end
   end
+
+  describe "apply" do
+    test "applies a procedure to a list of args" do
+      assert run("(apply + '(1 2 3 4))") == 10
+      assert run("(apply list '())") == :null
+    end
+
+    test "splices a trailing list after positional leading args" do
+      assert run("(apply + 1 2 '(3 4 5))") == 15
+
+      assert run("(apply list 'a 'b '(c d))") ==
+               Value.list([
+                 Value.symbol("a"),
+                 Value.symbol("b"),
+                 Value.symbol("c"),
+                 Value.symbol("d")
+               ])
+    end
+
+    test "works with closures" do
+      assert run("(apply (lambda (x y z) (* x y z)) '(2 3 4))") == 24
+    end
+
+    test "rejects a non-procedure first argument" do
+      e = assert_raise PError, fn -> run("(apply 1 '())") end
+      assert match?({:type_error, "apply", "procedure", _}, e.reason)
+    end
+
+    test "rejects an improper list as the trailing argument" do
+      e = assert_raise PError, fn -> run("(apply + '(1 2 . 3))") end
+      assert match?({:improper_list, "apply", _}, e.reason)
+    end
+  end
 end
