@@ -70,10 +70,24 @@ defmodule Schooner.Env do
   defp lex_lookup([], _name), do: :error
 
   defp lex_lookup([{:rec, ref} | rest], name) do
-    case Map.fetch(Process.get(ref), name) do
-      {:ok, @rec_uninitialised} -> {:uninitialised, name}
-      {:ok, _} = ok -> ok
-      :error -> lex_lookup(rest, name)
+    # `Process.get(ref)` returns `nil` once `with_rec_frame` has
+    # released the slot, but closures created during the binding
+    # form's body may still hold this dead frame in their captured
+    # env. Fall through to the surrounding scope so a name that
+    # resolves elsewhere (a global, an outer frame) still resolves
+    # cleanly; an `unbound` raise from the outer `eval` is the only
+    # observable difference for a name whose only binding *was* the
+    # dead frame.
+    case Process.get(ref) do
+      nil ->
+        lex_lookup(rest, name)
+
+      frame ->
+        case Map.fetch(frame, name) do
+          {:ok, @rec_uninitialised} -> {:uninitialised, name}
+          {:ok, _} = ok -> ok
+          :error -> lex_lookup(rest, name)
+        end
     end
   end
 

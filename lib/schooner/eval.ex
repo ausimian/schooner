@@ -359,6 +359,16 @@ defmodule Schooner.Eval do
 
   defp scan_defines(:null, acc), do: {Enum.reverse(acc), :null}
 
+  # r7rs §5.3.3: a `(begin <form> ...)` at the head of a body is
+  # spliced into the body in place. This is what lets
+  # `define-record-type` work in an internal-definition position —
+  # the expander emits a `(begin (define ...) (define ...) ...)`
+  # for each record type and the splicing here makes those defines
+  # behave as if they were written at the body level directly.
+  defp scan_defines({:pair, {:pair, {:sym, "begin"}, inner}, rest}, acc) do
+    scan_defines(splice_append(inner, rest, "begin"), acc)
+  end
+
   defp scan_defines({:pair, form, rest}, acc) do
     case parse_internal_define(form) do
       nil ->
@@ -386,6 +396,10 @@ defmodule Schooner.Eval do
   defp parse_internal_define(_), do: nil
 
   defp check_no_more_defines(:null), do: :ok
+
+  defp check_no_more_defines({:pair, {:pair, {:sym, "begin"}, inner}, rest}) do
+    check_no_more_defines(splice_append(inner, rest, "begin"))
+  end
 
   defp check_no_more_defines({:pair, form, rest}) do
     if parse_internal_define(form) != nil do

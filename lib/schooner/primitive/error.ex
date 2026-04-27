@@ -68,4 +68,8 @@ defmodule Schooner.Primitive.Error do
   defp format({:invalid_size, op, k}) do
     "`#{op}`: #{inspect(k)} is not a valid size"
   end
+
+  defp format({:wrong_record_type, op, type_name}) do
+    "`#{op}`: value is not a record of type `#{type_name}`"
+  end
 end

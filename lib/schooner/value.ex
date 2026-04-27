@@ -28,6 +28,11 @@ defmodule Schooner.Value do
     * Closure — `{:closure, params, body, env, name_or_nil}`
     * Primitive — `{:primitive, name, arity, fun}`
     * Record — `{:record, type_id, fields_tuple}`
+    * Record type identity — `{:record_type, name, unique_int}` —
+      embedded as a literal in the bindings produced by
+      `define-record-type`. Self-evaluating; compared with `===` so
+      two definitions with the same record name in different
+      lexical scopes produce distinct identities.
     * EOF — `:eof`
     * Unspecified — `:unspecified`
   """
@@ -42,6 +47,7 @@ defmodule Schooner.Value do
   @type closure_v :: {:closure, term(), term(), term(), binary() | nil}
   @type primitive_v :: {:primitive, binary(), arity_spec(), (list() -> t())}
   @type record_v :: {:record, term(), tuple()}
+  @type record_type_id_v :: {:record_type, binary(), pos_integer()}
   @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
   @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
 
@@ -60,6 +66,7 @@ defmodule Schooner.Value do
           | closure_v()
           | primitive_v()
           | record_v()
+          | record_type_id_v()
           | :eof
           | :unspecified
 
@@ -304,6 +311,7 @@ defmodule Schooner.Value do
   defp render({:pair, _, _} = p, mode), do: render_pair(p, mode)
   defp render({:closure, _, _, _, name}, _), do: render_closure(name)
   defp render({:primitive, name, _, _}, _), do: ["#<primitive ", name, ">"]
+  defp render({:record, {:record_type, name, _}, _}, _), do: ["#<record ", name, ">"]
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
   defp render({:float_special, :pos_inf}, _), do: "+inf.0"
   defp render({:float_special, :neg_inf}, _), do: "-inf.0"
