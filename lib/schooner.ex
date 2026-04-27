@@ -3,9 +3,12 @@ defmodule Schooner do
   An embeddable, sandboxed Scheme interpreter for the BEAM, targeting the
   r7rs-small language minus its mutable operations.
 
-  The pipeline is `Schooner.Lexer` → `Schooner.Reader` → `Schooner.Eval`,
-  with `Schooner.Value` providing the tagged-term value model and
-  `Schooner.Env` the immutable-with-mutable-globals environment.
+  The pipeline is `Schooner.Lexer` → `Schooner.Reader` →
+  `Schooner.Expander` → `Schooner.Eval`, with `Schooner.Value` providing
+  the tagged-term value model and `Schooner.Env` the
+  immutable-with-mutable-globals runtime environment. Macro bindings
+  live in a separate `Schooner.Expander.SyntaxEnv` threaded through
+  expansion only.
 
   This module exposes the convenience entry points used by tests and by
   early embeddings. The full embedding API arrives in a later phase.
@@ -13,6 +16,7 @@ defmodule Schooner do
 
   alias Schooner.Env
   alias Schooner.Eval
+  alias Schooner.Expander
   alias Schooner.Primitives
   alias Schooner.Reader
   alias Schooner.Value
@@ -46,6 +50,7 @@ defmodule Schooner do
   def eval(source, %Env{} = env) when is_binary(source) do
     source
     |> Reader.read_string()
+    |> Expander.expand_program(Expander.bootstrap_env())
     |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
   end
 end

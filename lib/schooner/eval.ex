@@ -12,13 +12,24 @@ defmodule Schooner.Eval do
   last-call optimisation. **Adding a wrapper around any of these
   calls breaks the invariant — see `eval_tco_test.exs`.**
 
-  Phase 4 recognises only the core forms: `quote`, `if`, `lambda`,
-  top-level `define`, `begin`, application, and variable reference.
-  Everything else is either self-evaluating or an error.
+  After phase 9 the evaluator only consumes the core forms produced
+  by `Schooner.Expander`: `quote`, `if`, `lambda`, top-level
+  `define`, `begin`, `letrec*`, `quasiquote`, application, and
+  variable reference. Everything else (`cond`, `case`, the `let`
+  family, `do`, `and`/`or`, `when`/`unless`) is a `syntax-rules`
+  macro defined by the bootstrap; the throwaway evaluator branches
+  for those forms have been removed.
+
+  `letrec*` is retained as a core form rather than reduced to a
+  macro because it backs both user-facing recursive bindings and
+  internal-`define` splicing, and a fully-macroised replacement
+  would need either mutation (which the value model does not
+  permit) or a hand-built fix-point combinator.
   """
 
   alias Schooner.Env
   alias Schooner.Eval.Error
+  alias Schooner.Expander.SyntaxRules
   alias Schooner.Value
 
   @spec eval(Value.t(), Env.t()) :: Value.t()
@@ -27,7 +38,7 @@ defmodule Schooner.Eval do
     case Env.lookup(env, name) do
       {:ok, value} -> value
       {:uninitialised, n} -> raise Error, reason: {:rec_uninitialised, n}
-      :error -> raise Error, reason: {:unbound, name}
+      :error -> resolve_marked_var(env, name)
     end
   end
 
@@ -38,21 +49,24 @@ defmodule Schooner.Eval do
   def eval({:pair, {:sym, "lambda"}, tail}, env), do: eval_lambda(tail, env)
   def eval({:pair, {:sym, "define"}, tail}, env), do: eval_define(tail, env)
   def eval({:pair, {:sym, "begin"}, tail}, env), do: eval_sequence(tail, env)
-  def eval({:pair, {:sym, "and"}, tail}, env), do: eval_and(tail, env)
-  def eval({:pair, {:sym, "or"}, tail}, env), do: eval_or(tail, env)
-  def eval({:pair, {:sym, "when"}, tail}, env), do: eval_when(tail, env)
-  def eval({:pair, {:sym, "unless"}, tail}, env), do: eval_unless(tail, env)
-  def eval({:pair, {:sym, "cond"}, tail}, env), do: eval_cond(tail, env)
-  def eval({:pair, {:sym, "case"}, tail}, env), do: eval_case(tail, env)
-  def eval({:pair, {:sym, "let"}, tail}, env), do: eval_let(tail, env)
-  def eval({:pair, {:sym, "let*"}, tail}, env), do: eval_let_star(tail, env)
-  def eval({:pair, {:sym, "letrec"}, tail}, env), do: eval_letrec_star(tail, env)
   def eval({:pair, {:sym, "letrec*"}, tail}, env), do: eval_letrec_star(tail, env)
-  def eval({:pair, {:sym, "do"}, tail}, env), do: eval_do(tail, env)
   def eval({:pair, {:sym, "quasiquote"}, tail}, env), do: eval_quasiquote_top(tail, env)
   def eval({:pair, head, tail}, env), do: eval_apply(head, tail, env)
 
   def eval(value, _env), do: value
+
+  # A name that carries a hygiene mark from a macro template but was
+  # never bound by an introduced binder is a free reference to the
+  # unmarked base name — usually a runtime primitive like `+`. Fall
+  # back to the base name before declaring it unbound.
+  defp resolve_marked_var(env, name) do
+    with {:ok, base} <- SyntaxRules.strip_mark(name),
+         {:ok, value} <- Env.lookup(env, base) do
+      value
+    else
+      _ -> raise Error, reason: {:unbound, name}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # quote
@@ -211,178 +225,14 @@ defmodule Schooner.Eval do
     end
   end
 
-  # `(and)` returns #t and `(or)` returns #f per r7rs §4.2.1; the last
-  # sub-form is in tail position so a chain of `and`s preserves TCO.
-  defp eval_and(:null, _env), do: Value.bool(true)
-  defp eval_and({:pair, last, :null}, env), do: eval(last, env)
-
-  defp eval_and({:pair, head, rest}, env) do
-    case eval(head, env) do
-      {:bool, false} = v -> v
-      _ -> eval_and(rest, env)
-    end
-  end
-
-  defp eval_and(_, _env), do: raise(Error, reason: {:bad_special_form, "and"})
-
-  defp eval_or(:null, _env), do: Value.bool(false)
-  defp eval_or({:pair, last, :null}, env), do: eval(last, env)
-
-  defp eval_or({:pair, head, rest}, env) do
-    case eval(head, env) do
-      {:bool, false} -> eval_or(rest, env)
-      v -> v
-    end
-  end
-
-  defp eval_or(_, _env), do: raise(Error, reason: {:bad_special_form, "or"})
-
-  defp eval_when({:pair, test, body}, env) when body != :null do
-    if Value.truthy?(eval(test, env)) do
-      eval_body(body, env)
-    else
-      :unspecified
-    end
-  end
-
-  defp eval_when(_, _env), do: raise(Error, reason: {:bad_special_form, "when"})
-
-  defp eval_unless({:pair, test, body}, env) when body != :null do
-    if Value.truthy?(eval(test, env)) do
-      :unspecified
-    else
-      eval_body(body, env)
-    end
-  end
-
-  defp eval_unless(_, _env), do: raise(Error, reason: {:bad_special_form, "unless"})
-
-  # `cond` clause shapes per r7rs §4.2.1: `(test)` returns the test value,
-  # `(test expr ...)` evaluates the body, `(test => proc)` applies proc
-  # to the test value, and `(else expr ...)` is the unconditional fallback.
-  defp eval_cond(:null, _env), do: :unspecified
-
-  defp eval_cond({:pair, {:pair, {:sym, "else"}, body}, _rest}, env) when body != :null do
-    eval_body(body, env)
-  end
-
-  defp eval_cond({:pair, {:pair, {:sym, "else"}, _}, _}, _env) do
-    raise(Error, reason: {:bad_special_form, "cond"})
-  end
-
-  defp eval_cond({:pair, {:pair, test, {:pair, {:sym, "=>"}, {:pair, recv, :null}}}, rest}, env) do
-    value = eval(test, env)
-
-    if Value.truthy?(value) do
-      proc = eval(recv, env)
-      apply_proc(proc, [value])
-    else
-      eval_cond(rest, env)
-    end
-  end
-
-  defp eval_cond({:pair, {:pair, test, :null}, rest}, env) do
-    case eval(test, env) do
-      {:bool, false} -> eval_cond(rest, env)
-      v -> v
-    end
-  end
-
-  defp eval_cond({:pair, {:pair, test, body}, rest}, env) do
-    if Value.truthy?(eval(test, env)) do
-      eval_body(body, env)
-    else
-      eval_cond(rest, env)
-    end
-  end
-
-  defp eval_cond(_, _env), do: raise(Error, reason: {:bad_special_form, "cond"})
-
-  # `case` keys are matched with `eqv?` per r7rs §4.2.1. Empty key list
-  # never matches and falls through to the next clause.
-  defp eval_case({:pair, key_expr, clauses}, env) do
-    eval_case_clauses(eval(key_expr, env), clauses, env)
-  end
-
-  defp eval_case(_, _env), do: raise(Error, reason: {:bad_special_form, "case"})
-
-  defp eval_case_clauses(_key, :null, _env), do: :unspecified
-
-  defp eval_case_clauses(key, {:pair, {:pair, {:sym, "else"}, body}, _rest}, env)
-       when body != :null do
-    eval_case_body(key, body, env)
-  end
-
-  defp eval_case_clauses(key, {:pair, {:pair, keys, body}, rest}, env) do
-    if case_match?(key, keys) do
-      eval_case_body(key, body, env)
-    else
-      eval_case_clauses(key, rest, env)
-    end
-  end
-
-  defp eval_case_clauses(_key, _, _env), do: raise(Error, reason: {:bad_special_form, "case"})
-
-  defp eval_case_body(key, {:pair, {:sym, "=>"}, {:pair, recv, :null}}, env) do
-    apply_proc(eval(recv, env), [key])
-  end
-
-  defp eval_case_body(_key, :null, _env), do: raise(Error, reason: {:bad_special_form, "case"})
-  defp eval_case_body(_key, body, env), do: eval_body(body, env)
-
-  defp case_match?(_key, :null), do: false
-
-  defp case_match?(key, {:pair, datum, rest}) do
-    Value.eqv?(key, datum) or case_match?(key, rest)
-  end
-
-  defp case_match?(_key, _), do: raise(Error, reason: {:bad_special_form, "case"})
-
-  defp eval_let({:pair, {:sym, name}, {:pair, bindings_form, body}}, env)
-       when body != :null do
-    eval_named_let(name, bindings_form, body, env)
-  end
-
-  defp eval_let({:pair, bindings_form, body}, env) when body != :null do
-    {names, inits} = parse_bindings(bindings_form, "let")
-    values = Enum.map(inits, &eval(&1, env))
-    eval_body(body, Env.extend(env, Enum.zip(names, values)))
-  end
-
-  defp eval_let(_, _env), do: raise(Error, reason: {:bad_special_form, "let"})
-
-  defp eval_named_let(name, bindings_form, body, env) do
-    {param_names, inits} = parse_bindings(bindings_form, "let")
-    values = Enum.map(inits, &eval(&1, env))
-
-    rec_env = Env.extend_rec(env, [name])
-
-    closure =
-      Value.closure({:fixed, length(param_names), param_names}, desugar_body(body), rec_env, name)
-
-    Env.rec_set(rec_env, name, closure)
-
-    with_rec_frame(rec_env, fn -> apply_proc(closure, values) end)
-  end
-
-  defp eval_let_star({:pair, bindings_form, body}, env) when body != :null do
-    {names, inits} = parse_bindings(bindings_form, "let*")
-
-    new_env =
-      names
-      |> Enum.zip(inits)
-      |> Enum.reduce(env, fn {name, init}, e ->
-        Env.extend(e, [{name, eval(init, e)}])
-      end)
-
-    eval_body(body, new_env)
-  end
-
-  defp eval_let_star(_, _env), do: raise(Error, reason: {:bad_special_form, "let*"})
-
-  # `letrec` and `letrec*` share an implementation. r7rs allows
-  # `letrec` to be implemented as `letrec*`; the only difference is the
-  # spec leaves init evaluation order unspecified for `letrec`.
+  # `letrec*` is the workhorse for both user-facing recursive bindings
+  # (the `let`, `let*`, `letrec`, `letrec*`, named-`let` bootstrap
+  # macros all expand to it eventually) and for internal-define
+  # splicing (see `desugar_body/1`). Init expressions are evaluated
+  # left-to-right in a frame whose closure values reference the
+  # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
+  # knot without any after-the-fact mutation of the closures
+  # themselves.
   defp eval_letrec_star({:pair, bindings_form, body}, env) when body != :null do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
@@ -411,45 +261,6 @@ defmodule Schooner.Eval do
   end
 
   defp parse_bindings(_, ctx, _, _), do: raise(Error, reason: {:bad_special_form, ctx})
-
-  defp eval_do({:pair, bindings_form, {:pair, test_form, body}}, env) do
-    {names, inits, steps} = parse_do_bindings(bindings_form)
-    {test, results} = parse_do_test(test_form)
-
-    init_values = Enum.map(inits, &eval(&1, env))
-    loop_env = Env.extend(env, Enum.zip(names, init_values))
-    do_loop(names, steps, test, results, body, loop_env)
-  end
-
-  defp eval_do(_, _env), do: raise(Error, reason: {:bad_special_form, "do"})
-
-  defp do_loop(names, steps, test, results, body, env) do
-    if Value.truthy?(eval(test, env)) do
-      eval_sequence(results, env)
-    else
-      _ = eval_sequence(body, env)
-      step_values = Enum.map(steps, &eval(&1, env))
-      next_env = Env.extend(Env.pop(env), Enum.zip(names, step_values))
-      do_loop(names, steps, test, results, body, next_env)
-    end
-  end
-
-  defp parse_do_bindings(:null), do: {[], [], []}
-
-  defp parse_do_bindings({:pair, {:pair, {:sym, name}, {:pair, init, rest_step}}, rest}) do
-    {ns, is, ss} = parse_do_bindings(rest)
-    step = parse_do_step(name, rest_step)
-    {[name | ns], [init | is], [step | ss]}
-  end
-
-  defp parse_do_bindings(_), do: raise(Error, reason: {:bad_special_form, "do"})
-
-  defp parse_do_step(name, :null), do: Value.symbol(name)
-  defp parse_do_step(_name, {:pair, step, :null}), do: step
-  defp parse_do_step(_name, _), do: raise(Error, reason: {:bad_special_form, "do"})
-
-  defp parse_do_test({:pair, test, results}), do: {test, results}
-  defp parse_do_test(_), do: raise(Error, reason: {:bad_special_form, "do"})
 
   # `unquote` and `unquote-splicing` only fire at quasi level 1; nested
   # `quasiquote` raises the level, nested `unquote` lowers it.
