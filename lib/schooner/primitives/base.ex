@@ -1000,10 +1000,8 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp string_to_utf8_range({:string, s}, start, end_) do
-    n = string_codepoint_length(s)
-    si = if start == nil, do: 0, else: require_bound!("string->utf8", start, 0, n)
-    ei = if end_ == nil, do: n, else: require_bound!("string->utf8", end_, si, n)
-    Value.bytevector(string_codepoint_slice(s, si, ei))
+    {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string->utf8")
+    Value.bytevector(:binary.part(s, sbyte, slen))
   end
 
   defp string_to_utf8_range(other, _, _),
@@ -1061,9 +1059,14 @@ defmodule Schooner.Primitives.Base do
     do: raise(Error, reason: {:type_error, "string-length", "string", other})
 
   defp string_ref([{:string, s}, k]) do
-    n = string_codepoint_length(s)
-    i = require_index!("string-ref", k, n)
-    Value.char(codepoint_at!(s, i, "string-ref"))
+    require_integer!("string-ref", k)
+    i = trunc_int(k)
+    if i < 0, do: raise_index!("string-ref", i, s)
+
+    case nth_codepoint(s, i) do
+      {:ok, cp} -> Value.char(cp)
+      :end -> raise_index!("string-ref", i, s)
+    end
   end
 
   defp string_ref([other, _]),
@@ -1076,10 +1079,8 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp substring_([{:string, s}, start, end_]) do
-    n = string_codepoint_length(s)
-    si = require_bound!("substring", start, 0, n)
-    ei = require_bound!("substring", end_, si, n)
-    Value.string(string_codepoint_slice(s, si, ei))
+    {sbyte, slen} = string_byte_slice(s, start, end_, "substring")
+    Value.string(:binary.part(s, sbyte, slen))
   end
 
   defp substring_([other, _, _]),
@@ -1111,11 +1112,8 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp string_to_list_range({:string, s}, start, end_) do
-    n = string_codepoint_length(s)
-    si = if start == nil, do: 0, else: require_bound!("string->list", start, 0, n)
-    ei = if end_ == nil, do: n, else: require_bound!("string->list", end_, si, n)
-    sliced = string_codepoint_codepoints(s, si, ei)
-    Value.list(Enum.map(sliced, &Value.char/1))
+    cps = slice_codepoints(s, start || 0, end_, "string->list")
+    Value.list(Enum.map(cps, &Value.char/1))
   end
 
   defp string_to_list_range(other, _, _),
@@ -1149,11 +1147,11 @@ defmodule Schooner.Primitives.Base do
     raise(Error, reason: {:type_error, "string-copy", "1 to 3 arguments", :too_many})
   end
 
+  defp string_copy_range({:string, s}, nil, nil), do: Value.string(s)
+
   defp string_copy_range({:string, s}, start, end_) do
-    n = string_codepoint_length(s)
-    si = if start == nil, do: 0, else: require_bound!("string-copy", start, 0, n)
-    ei = if end_ == nil, do: n, else: require_bound!("string-copy", end_, si, n)
-    Value.string(string_codepoint_slice(s, si, ei))
+    {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string-copy")
+    Value.string(:binary.part(s, sbyte, slen))
   end
 
   defp string_copy_range(other, _, _),
@@ -1327,36 +1325,88 @@ defmodule Schooner.Primitives.Base do
   defp count_codepoints(<<>>, n), do: n
   defp count_codepoints(<<_::utf8, rest::binary>>, n), do: count_codepoints(rest, n + 1)
 
-  defp codepoint_at!(s, i, op) do
-    case codepoint_at(s, i) do
-      {:ok, cp} -> cp
-      :error -> raise(Error, reason: {:index_out_of_range, op, i, string_codepoint_length(s)})
+  defp nth_codepoint(<<cp::utf8, _::binary>>, 0), do: {:ok, cp}
+  defp nth_codepoint(<<_::utf8, rest::binary>>, n) when n > 0, do: nth_codepoint(rest, n - 1)
+  defp nth_codepoint(_, _), do: :end
+
+  defp skip_codepoints(s, 0), do: s
+  defp skip_codepoints(<<_::utf8, rest::binary>>, n) when n > 0, do: skip_codepoints(rest, n - 1)
+  defp skip_codepoints(<<>>, _n), do: :end
+
+  # Single-pass slice: walks `s` once, returns `{byte_offset, byte_length}`
+  # suitable for `:binary.part/3`. `stop` may be `nil` to mean "to end". The
+  # codepoint length of `s` is computed only on the error path — the fast
+  # path never traverses `s` more than once.
+  defp string_byte_slice(s, start, stop, op) do
+    start_i = require_start!(op, start, s)
+
+    case skip_codepoints(s, start_i) do
+      :end ->
+        raise_index!(op, start_i, s)
+
+      after_start ->
+        slice_after_start(s, after_start, start_i, stop, op)
     end
   end
 
-  defp codepoint_at(<<cp::utf8, _::binary>>, 0), do: {:ok, cp}
-  defp codepoint_at(<<_::utf8, rest::binary>>, n) when n > 0, do: codepoint_at(rest, n - 1)
-  defp codepoint_at(_, _), do: :error
-
-  defp string_codepoint_slice(s, start, stop) do
-    s
-    |> string_codepoint_codepoints(start, stop)
-    |> Enum.map(&<<&1::utf8>>)
-    |> IO.iodata_to_binary()
+  defp slice_after_start(s, after_start, _start_i, nil, _op) do
+    {byte_size(s) - byte_size(after_start), byte_size(after_start)}
   end
 
-  defp string_codepoint_codepoints(s, start, stop) do
-    do_codepoints_slice(s, 0, start, stop, [])
-  end
+  defp slice_after_start(s, after_start, start_i, stop, op) do
+    require_integer!(op, stop)
+    stop_i = trunc_int(stop)
+    if stop_i < start_i, do: raise_index!(op, stop_i, s)
 
-  defp do_codepoints_slice(_s, i, _start, stop, acc) when i >= stop, do: Enum.reverse(acc)
-  defp do_codepoints_slice(<<>>, _i, _start, _stop, acc), do: Enum.reverse(acc)
+    case skip_codepoints(after_start, stop_i - start_i) do
+      :end ->
+        raise_index!(op, stop_i, s)
 
-  defp do_codepoints_slice(<<cp::utf8, rest::binary>>, i, start, stop, acc) do
-    if i >= start do
-      do_codepoints_slice(rest, i + 1, start, stop, [cp | acc])
-    else
-      do_codepoints_slice(rest, i + 1, start, stop, acc)
+      after_stop ->
+        {byte_size(s) - byte_size(after_start), byte_size(after_start) - byte_size(after_stop)}
     end
+  end
+
+  # Single-pass codepoint slice: walks `s` once, returning the codepoints
+  # in `[start, stop)`. Used by `string->list`. Same error-path policy as
+  # `string_byte_slice/4`.
+  defp slice_codepoints(s, start, stop, op) do
+    start_i = require_start!(op, start, s)
+
+    case skip_codepoints(s, start_i) do
+      :end -> raise_index!(op, start_i, s)
+      after_start -> collect_codepoints(s, after_start, start_i, stop, op)
+    end
+  end
+
+  defp collect_codepoints(_s, after_start, _start_i, nil, _op),
+    do: collect_to_end(after_start, [])
+
+  defp collect_codepoints(s, after_start, start_i, stop, op) do
+    require_integer!(op, stop)
+    stop_i = trunc_int(stop)
+    if stop_i < start_i, do: raise_index!(op, stop_i, s)
+    collect_n(after_start, stop_i - start_i, [], op, stop_i, s)
+  end
+
+  defp collect_to_end(<<>>, acc), do: Enum.reverse(acc)
+  defp collect_to_end(<<cp::utf8, rest::binary>>, acc), do: collect_to_end(rest, [cp | acc])
+
+  defp collect_n(_s, 0, acc, _op, _stop, _orig), do: Enum.reverse(acc)
+
+  defp collect_n(<<cp::utf8, rest::binary>>, n, acc, op, stop, orig) when n > 0,
+    do: collect_n(rest, n - 1, [cp | acc], op, stop, orig)
+
+  defp collect_n(<<>>, _n, _acc, op, stop, orig), do: raise_index!(op, stop, orig)
+
+  defp require_start!(op, start, s) do
+    require_integer!(op, start)
+    i = trunc_int(start)
+    if i < 0, do: raise_index!(op, i, s)
+    i
+  end
+
+  defp raise_index!(op, i, s) do
+    raise(Error, reason: {:index_out_of_range, op, i, string_codepoint_length(s)})
   end
 end
