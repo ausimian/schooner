@@ -239,7 +239,7 @@ defmodule Schooner.Eval do
 
   defp eval_when({:pair, test, body}, env) when body != :null do
     if Value.truthy?(eval(test, env)) do
-      eval_sequence(desugar_body(body), env)
+      eval_body(body, env)
     else
       :unspecified
     end
@@ -251,7 +251,7 @@ defmodule Schooner.Eval do
     if Value.truthy?(eval(test, env)) do
       :unspecified
     else
-      eval_sequence(desugar_body(body), env)
+      eval_body(body, env)
     end
   end
 
@@ -263,7 +263,7 @@ defmodule Schooner.Eval do
   defp eval_cond(:null, _env), do: :unspecified
 
   defp eval_cond({:pair, {:pair, {:sym, "else"}, body}, _rest}, env) when body != :null do
-    eval_sequence(desugar_body(body), env)
+    eval_body(body, env)
   end
 
   defp eval_cond({:pair, {:pair, {:sym, "else"}, _}, _}, _env) do
@@ -290,7 +290,7 @@ defmodule Schooner.Eval do
 
   defp eval_cond({:pair, {:pair, test, body}, rest}, env) do
     if Value.truthy?(eval(test, env)) do
-      eval_sequence(desugar_body(body), env)
+      eval_body(body, env)
     else
       eval_cond(rest, env)
     end
@@ -328,7 +328,7 @@ defmodule Schooner.Eval do
   end
 
   defp eval_case_body(_key, :null, _env), do: raise(Error, reason: {:bad_special_form, "case"})
-  defp eval_case_body(_key, body, env), do: eval_sequence(desugar_body(body), env)
+  defp eval_case_body(_key, body, env), do: eval_body(body, env)
 
   defp case_match?(_key, :null), do: false
 
@@ -346,7 +346,7 @@ defmodule Schooner.Eval do
   defp eval_let({:pair, bindings_form, body}, env) when body != :null do
     {names, inits} = parse_bindings(bindings_form, "let")
     values = Enum.map(inits, &eval(&1, env))
-    eval_sequence(desugar_body(body), Env.extend(env, Enum.zip(names, values)))
+    eval_body(body, Env.extend(env, Enum.zip(names, values)))
   end
 
   defp eval_let(_, _env), do: raise(Error, reason: {:bad_special_form, "let"})
@@ -362,11 +362,7 @@ defmodule Schooner.Eval do
 
     Env.rec_set(rec_env, name, closure)
 
-    try do
-      apply_proc(closure, values)
-    after
-      Env.release_rec(rec_env)
-    end
+    with_rec_frame(rec_env, fn -> apply_proc(closure, values) end)
   end
 
   defp eval_let_star({:pair, bindings_form, body}, env) when body != :null do
@@ -379,7 +375,7 @@ defmodule Schooner.Eval do
         Env.extend(e, [{name, eval(init, e)}])
       end)
 
-    eval_sequence(desugar_body(body), new_env)
+    eval_body(body, new_env)
   end
 
   defp eval_let_star(_, _env), do: raise(Error, reason: {:bad_special_form, "let*"})
@@ -387,27 +383,19 @@ defmodule Schooner.Eval do
   # `letrec` and `letrec*` share an implementation. r7rs allows
   # `letrec` to be implemented as `letrec*`; the only difference is the
   # spec leaves init evaluation order unspecified for `letrec`.
-  #
-  # The `try ... after` wraps the body so the recursive frame's
-  # process-dictionary slot is released on every exit path. The body's
-  # tail-recursive calls bounce through `eval`/`eval_sequence`/
-  # `apply_proc` and do not return through this frame, so TCO across
-  # the body is preserved — see `eval_tco_test.exs`.
   defp eval_letrec_star({:pair, bindings_form, body}, env) when body != :null do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
 
-    try do
+    with_rec_frame(rec_env, fn ->
       names
       |> Enum.zip(inits)
       |> Enum.each(fn {name, init} ->
         Env.rec_set(rec_env, name, eval(init, rec_env))
       end)
 
-      eval_sequence(desugar_body(body), rec_env)
-    after
-      Env.release_rec(rec_env)
-    end
+      eval_body(body, rec_env)
+    end)
   end
 
   defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
@@ -514,6 +502,23 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
   # Internal definitions / body splicing
   # ---------------------------------------------------------------------------
+
+  # `eval_body/2` is the entry point for evaluating any r7rs body
+  # (lambda, let-family, when/unless, cond/case clauses): it splices
+  # leading internal defines into a `letrec*` and then evaluates the
+  # resulting sequence. Lambda bodies are pre-desugared at closure
+  # creation time so per-application cost stays at zero.
+  defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
+
+  # Run `body_fun` and release `rec_env`'s recursive frame on every
+  # exit path. The body's tail-recursive calls bounce through
+  # `eval`/`eval_sequence`/`apply_proc` and never return through this
+  # frame, so TCO across the body is preserved — see `eval_tco_test`.
+  defp with_rec_frame(rec_env, body_fun) do
+    body_fun.()
+  after
+    Env.release_rec(rec_env)
+  end
 
   # r7rs §5.3.3 lets a body begin with a sequence of `define` forms
   # followed by a sequence of expressions; the defines splice into a

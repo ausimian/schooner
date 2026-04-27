@@ -15,6 +15,16 @@ defmodule Schooner.EvalInternalDefinesTest do
 
   defp run(source), do: Schooner.run(source)
 
+  defp assert_no_slot_leak(fun) do
+    before = count_rec_slots()
+    fun.()
+    assert count_rec_slots() == before
+  end
+
+  defp count_rec_slots do
+    Process.get_keys() |> Enum.count(&is_reference/1)
+  end
+
   describe "internal defines in lambda body" do
     test "single internal define is visible in the body" do
       assert run("""
@@ -185,7 +195,7 @@ defmodule Schooner.EvalInternalDefinesTest do
           """)
         end
 
-      assert e.reason in [:empty_body, {:bad_special_form, "lambda"}]
+      assert e.reason == :empty_body
     end
 
     test "malformed internal define raises" do
@@ -242,46 +252,34 @@ defmodule Schooner.EvalInternalDefinesTest do
 
   describe "rec-frame slot lifecycle" do
     test "letrec* releases its process-dictionary slot when the body returns" do
-      before_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-
-      assert Schooner.run("(letrec* ((x 1) (y 2)) (+ x y))") == 3
-
-      after_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-      assert after_keys == before_keys
+      assert_no_slot_leak(fn ->
+        assert Schooner.run("(letrec* ((x 1) (y 2)) (+ x y))") == 3
+      end)
     end
 
     test "letrec* releases its slot even when the body raises" do
-      before_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-
-      assert_raise Error, fn -> Schooner.run("(letrec* ((x 1)) (undefined-name))") end
-
-      after_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-      assert after_keys == before_keys
+      assert_no_slot_leak(fn ->
+        assert_raise Error, fn -> Schooner.run("(letrec* ((x 1)) (undefined-name))") end
+      end)
     end
 
     test "named let releases its slot when the body returns" do
-      before_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-
-      assert Schooner.run("""
-             (let loop ((n 5) (acc 1))
-               (if (= n 0) acc (loop (- n 1) (* acc n))))
-             """) == 120
-
-      after_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-      assert after_keys == before_keys
+      assert_no_slot_leak(fn ->
+        assert Schooner.run("""
+               (let loop ((n 5) (acc 1))
+                 (if (= n 0) acc (loop (- n 1) (* acc n))))
+               """) == 120
+      end)
     end
 
     test "many sequential letrec*s do not leak slots" do
-      before_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-
       env = Schooner.standard_env()
 
-      for _ <- 1..50 do
-        Schooner.eval("(letrec* ((x 1) (y 2)) (+ x y))", env)
-      end
-
-      after_keys = Process.get_keys() |> Enum.filter(&is_reference/1) |> length()
-      assert after_keys == before_keys
+      assert_no_slot_leak(fn ->
+        for _ <- 1..50 do
+          Schooner.eval("(letrec* ((x 1) (y 2)) (+ x y))", env)
+        end
+      end)
     end
   end
 
