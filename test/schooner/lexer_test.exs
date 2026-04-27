@@ -77,6 +77,16 @@ defmodule Schooner.LexerTest do
     test "unknown char name raises" do
       assert_raise Error, fn -> Lexer.tokenise(~S(#\notachar)) end
     end
+
+    test "trailing #\\ with no character is an unterminated literal" do
+      err = assert_raise Error, fn -> Lexer.tokenise("#\\") end
+      assert err.reason == :unterminated_char_literal
+    end
+
+    test "#\\xZZ is a named-char lookup, not a hex escape" do
+      err = assert_raise Error, fn -> Lexer.tokenise(~S(#\xZZ)) end
+      assert match?({:unknown_char_name, "xZZ"}, err.reason)
+    end
   end
 
   describe "strings" do
@@ -123,6 +133,21 @@ defmodule Schooner.LexerTest do
 
       assert err.reason == :empty_hex_escape
     end
+
+    test "alarm and bar escapes" do
+      assert [{:string, <<7>>, _}] = Lexer.tokenise(~S("\a"))
+      assert [{:string, "|", _}] = Lexer.tokenise(~S("\|"))
+    end
+
+    test "raw CR and CRLF inside string become \\n" do
+      assert [{:string, "a\nb", _}] = Lexer.tokenise("\"a\rb\"")
+      assert [{:string, "a\nb", _}] = Lexer.tokenise("\"a\r\nb\"")
+    end
+
+    test "unterminated hex escape (no terminator) raises" do
+      err = assert_raise Error, fn -> Lexer.tokenise(~S("\x41")) end
+      assert err.reason in [:unterminated_hex_escape, :unterminated_string]
+    end
   end
 
   describe "identifiers" do
@@ -155,6 +180,14 @@ defmodule Schooner.LexerTest do
         assert_raise Error, fn -> Lexer.tokenise("|hello") end
 
       assert err.reason == :unterminated_bar_identifier
+    end
+
+    test "bar identifier supports \\n \\t \\xHH; \\\\ escapes and embedded newlines" do
+      assert [{:ident, "a\nb", _}] = Lexer.tokenise(~S(|a\nb|))
+      assert [{:ident, "a\tb", _}] = Lexer.tokenise(~S(|a\tb|))
+      assert [{:ident, "A", _}] = Lexer.tokenise(~S(|\x41;|))
+      assert [{:ident, "a\nb", _}] = Lexer.tokenise("|a\nb|")
+      assert [{:ident, "a\nb", _}] = Lexer.tokenise("|a\r\nb|")
     end
 
     test "unicode identifiers" do
@@ -216,6 +249,18 @@ defmodule Schooner.LexerTest do
       assert_raise Error, fn -> Lexer.tokenise("#x1.5") end
     end
 
+    test "empty body after #-prefix is invalid_numeric_literal" do
+      err = assert_raise Error, fn -> Lexer.tokenise("#x") end
+      assert err.reason == :invalid_numeric_literal
+    end
+
+    test "non-finite float specials are recognised as float tokens" do
+      assert [{:float, {:float_special, :pos_inf}, _}] = Lexer.tokenise("+inf.0")
+      assert [{:float, {:float_special, :neg_inf}, _}] = Lexer.tokenise("-inf.0")
+      assert [{:float, {:float_special, :nan}, _}] = Lexer.tokenise("+nan.0")
+      assert [{:float, {:float_special, :nan}, _}] = Lexer.tokenise("-nan.0")
+    end
+
     test "arbitrary-precision integers" do
       big = String.duplicate("9", 80)
       assert [{:integer, n, _}] = Lexer.tokenise(big)
@@ -247,6 +292,15 @@ defmodule Schooner.LexerTest do
 
     test "block comment can span lines" do
       assert [{:integer, 1, {3, 3}}] = Lexer.tokenise("#| a\nb\n|#1")
+    end
+
+    test "line comment ends at lone CR or CRLF as well as LF" do
+      assert [{:integer, 1, {2, 1}}] = Lexer.tokenise("; oops\r\n1")
+      assert [{:integer, 1, {2, 1}}] = Lexer.tokenise("; oops\r1")
+    end
+
+    test "block comment handles CR/CRLF/LF newlines without losing track of depth" do
+      assert [{:integer, 1, _}] = Lexer.tokenise("#|\r\n a \n b \r |# 1")
     end
 
     test "unterminated block comment raises with opening position" do
@@ -304,6 +358,16 @@ defmodule Schooner.LexerTest do
 
     test "lone hash is an error" do
       assert_raise Error, fn -> Lexer.tokenise("#") end
+    end
+
+    test "unknown #-form raises invalid_hash_form" do
+      err = assert_raise Error, fn -> Lexer.tokenise("#?") end
+      assert match?({:invalid_hash_form, ?\?}, err.reason)
+    end
+
+    test "leading dot followed by garbage is an invalid token" do
+      err = assert_raise Error, fn -> Lexer.tokenise(".+@") end
+      assert match?({:invalid_token, _}, err.reason)
     end
   end
 end

@@ -225,6 +225,28 @@ defmodule Schooner.Expander.SyntaxRulesTest do
         transformer("(syntax-rules () ((_ x) ...))")
       end
     end
+
+    test "syntax-rules with a non-list literals form is rejected" do
+      assert_raise Schooner.Expander.Error, fn -> transformer("(syntax-rules 1 ((_) 'x))") end
+    end
+
+    test "syntax-rules with non-symbol literal entries is rejected" do
+      assert_raise Schooner.Expander.Error, fn -> transformer("(syntax-rules (1) ((_) 'x))") end
+    end
+
+    test "syntax-rules with a malformed rule shape is rejected" do
+      assert_raise Schooner.Expander.Error, fn -> transformer("(syntax-rules () (foo))") end
+    end
+
+    test "syntax-rules called on a non-pair spec is rejected" do
+      assert_raise Schooner.Expander.Error, fn -> SyntaxRules.compile(:null) end
+    end
+
+    test "no matching rule reports the form's keyword" do
+      t = transformer("(syntax-rules () ((_ x y) (list x y)))")
+      e = assert_raise Schooner.Eval.Error, fn -> expand(t, "(use 1)") end
+      assert e.reason == {:bad_special_form, "use"}
+    end
   end
 
   describe "strip_mark/1" do

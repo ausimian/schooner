@@ -296,6 +296,57 @@ defmodule Schooner.ExpanderTest do
     end
   end
 
+  describe "malformed special forms raise during expansion" do
+    test "set! is rejected at expansion time" do
+      e = assert_raise Error, fn -> run("(set! x 1)") end
+      assert e.reason == {:bad_special_form, "set!"}
+    end
+
+    test "malformed lambda parameter list (non-symbol element)" do
+      e = assert_raise Error, fn -> run("(lambda (x . 1) x)") end
+      assert e.reason == {:bad_special_form, "lambda"}
+    end
+
+    test "malformed letrec*" do
+      e = assert_raise Error, fn -> run("(letrec* ((x)) x)") end
+      assert e.reason == {:bad_special_form, "letrec*"}
+
+      e = assert_raise Error, fn -> run("(letrec* (x) x)") end
+      assert e.reason == {:bad_special_form, "letrec*"}
+    end
+
+    test "malformed guard" do
+      # No clause list at all.
+      e = assert_raise Error, fn -> run("(guard 1 2)") end
+      assert e.reason == {:bad_special_form, "guard"}
+
+      # Bad clause shape (clauses not a proper list).
+      e = assert_raise Error, fn -> run("(guard (e . 1) 2)") end
+      assert e.reason == {:bad_special_form, "guard"}
+    end
+
+    test "malformed let-syntax / letrec-syntax bindings" do
+      e = assert_raise Error, fn -> run("(let-syntax 1 'x)") end
+      assert e.reason == {:bad_special_form, "let-syntax"}
+
+      e = assert_raise Error, fn -> run("(letrec-syntax 1 'x)") end
+      assert e.reason == {:bad_special_form, "letrec-syntax"}
+    end
+
+    test "malformed define-record-type forms" do
+      e = assert_raise Error, fn -> run("(define-record-type 1 (mk x) p? (x g))") end
+      assert e.reason == {:bad_special_form, "define-record-type"}
+
+      # Bad constructor spec.
+      e = assert_raise Error, fn -> run("(define-record-type pt 1 pt? (x x-of))") end
+      assert e.reason == {:bad_special_form, "define-record-type"}
+
+      # Bad field-spec list.
+      e = assert_raise Error, fn -> run("(define-record-type pt (mk x) pt? 1)") end
+      assert e.reason == {:bad_special_form, "define-record-type"}
+    end
+  end
+
   describe "internal definition interaction" do
     test "macro that expands to internal define inside a lambda body" do
       assert run("""

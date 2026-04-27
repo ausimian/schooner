@@ -112,6 +112,28 @@ defmodule Schooner.EvalTest do
       assert match?({:arity_mismatch, _, {:at_least, 2}, 1}, e.reason)
     end
 
+    test "evaluator rejects malformed lambda parameter lists with :invalid_params" do
+      # Synthesise a `(lambda 1 1)` form directly — the expander
+      # rejects this kind of shape, but Eval.parse_params/1 has its
+      # own catch-all that we want to pin behaviour on.
+      bad_head = {:pair, {:sym, "lambda"}, {:pair, 1, {:pair, 1, :null}}}
+      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_head, Schooner.standard_env()) end
+      assert e.reason == :invalid_params
+
+      # Non-symbol inside the parameter list reaches collect_params/3.
+      bad_param =
+        {:pair, {:sym, "lambda"},
+         {:pair, {:pair, {:sym, "x"}, {:pair, 1, :null}}, {:pair, {:sym, "x"}, :null}}}
+
+      e = assert_raise Error, fn -> Schooner.Eval.eval(bad_param, Schooner.standard_env()) end
+      assert e.reason == :invalid_params
+    end
+
+    test "at-least arity mismatch on dotted-rest lambda raises with {:at_least, _}" do
+      e = assert_raise Error, fn -> run("((lambda (a b . r) r) 1)") end
+      assert match?({:arity_mismatch, _, {:at_least, 2}, 1}, e.reason)
+    end
+
     test "lambda with empty body raises" do
       e = assert_raise Error, fn -> run("(lambda (x))") end
       assert e.reason == {:bad_special_form, "lambda"}
@@ -170,6 +192,21 @@ defmodule Schooner.EvalTest do
       env = Env.new() |> Env.define("inc", primitive_inc())
       e = assert_raise Error, fn -> Schooner.eval("(inc 1 2)", env) end
       assert match?({:arity_mismatch, "inc", {:exact, 1}, 2}, e.reason)
+    end
+
+    test "improper application form raises :improper_application" do
+      # Reader-level dotted application is rejected by the reader, so
+      # synthesise the malformed form directly. `(+ 1 . 2)` reaches
+      # eval_args/3 with a non-list tail and trips its catch-all.
+      err =
+        assert_raise Error, fn ->
+          Schooner.Eval.eval(
+            {:pair, {:sym, "+"}, {:pair, 1, 2}},
+            Schooner.standard_env()
+          )
+        end
+
+      assert err.reason == :improper_application
     end
   end
 

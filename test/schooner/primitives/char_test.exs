@@ -55,6 +55,12 @@ defmodule Schooner.Primitives.CharTest do
     test "char-ci<?" do
       assert run(~S|(char-ci<? #\A #\b #\C)|) == Value.bool(true)
     end
+
+    test "char-ci<=? / char-ci>? / char-ci>=?" do
+      assert run(~S|(char-ci<=? #\A #\a #\b)|) == Value.bool(true)
+      assert run(~S|(char-ci>? #\C #\b #\A)|) == Value.bool(true)
+      assert run(~S|(char-ci>=? #\B #\b #\A)|) == Value.bool(true)
+    end
   end
 
   describe "case mappings" do
@@ -70,6 +76,11 @@ defmodule Schooner.Primitives.CharTest do
 
     test "ß has no single-codepoint upcase — char-upcase leaves it unchanged" do
       assert run(~s|(char-upcase #\\ß)|) == Value.char(0x00DF)
+    end
+
+    test "char-foldcase on a multi-codepoint fold leaves the original char unchanged" do
+      # ß folds to "ss" — two codepoints — so char-foldcase keeps ß.
+      assert run(~s|(char-foldcase #\\ß)|) == Value.char(0x00DF)
     end
   end
 
@@ -100,6 +111,29 @@ defmodule Schooner.Primitives.CharTest do
       assert run(~S|(char-lower-case? #\a)|) == Value.bool(true)
       assert run(~S|(char-lower-case? #\A)|) == Value.bool(false)
     end
+
+    test "non-ASCII categories use the Unicode regexes" do
+      # Latin letter with diacritic — alphabetic and lower-case.
+      assert run(~s|(char-alphabetic? #\\é)|) == Value.bool(true)
+      assert run(~s|(char-lower-case? #\\é)|) == Value.bool(true)
+      assert run(~s|(char-upper-case? #\\é)|) == Value.bool(false)
+
+      # Latin capital N-tilde — upper-case.
+      assert run(~s|(char-upper-case? #\\Ñ)|) == Value.bool(true)
+
+      # Arabic-Indic digit five — numeric outside ?0..?9.
+      assert run("(char-numeric? (integer->char #x0665))") == Value.bool(true)
+
+      # No-break space — whitespace outside the ASCII set.
+      assert run("(char-whitespace? (integer->char #x00A0))") == Value.bool(true)
+
+      # Emoji — neither alphabetic nor numeric nor whitespace nor cased.
+      assert run("(char-alphabetic? (integer->char #x1F600))") == Value.bool(false)
+      assert run("(char-numeric? (integer->char #x1F600))") == Value.bool(false)
+      assert run("(char-whitespace? (integer->char #x1F600))") == Value.bool(false)
+      assert run("(char-upper-case? (integer->char #x1F600))") == Value.bool(false)
+      assert run("(char-lower-case? (integer->char #x1F600))") == Value.bool(false)
+    end
   end
 
   describe "type errors" do
@@ -111,6 +145,37 @@ defmodule Schooner.Primitives.CharTest do
     test "case mapping rejects non-char arg" do
       e = assert_raise PError, fn -> run("(char-upcase 1)") end
       assert match?({:type_error, "char-upcase", "char", _}, e.reason)
+    end
+
+    test "char->integer rejects non-char arg" do
+      e = assert_raise PError, fn -> run("(char->integer 1)") end
+      assert match?({:type_error, "char->integer", "char", _}, e.reason)
+    end
+
+    test "integer->char rejects non-integer arg" do
+      e = assert_raise PError, fn -> run(~S|(integer->char "x")|) end
+      assert match?({:type_error, "integer->char", "integer", _}, e.reason)
+    end
+
+    test "char-downcase / char-foldcase reject non-char arg" do
+      e = assert_raise PError, fn -> run("(char-downcase 1)") end
+      assert match?({:type_error, "char-downcase", "char", _}, e.reason)
+
+      e = assert_raise PError, fn -> run("(char-foldcase 1)") end
+      assert match?({:type_error, "char-foldcase", "char", _}, e.reason)
+    end
+
+    test "category predicates reject non-char arg" do
+      for op <- [
+            "char-alphabetic?",
+            "char-numeric?",
+            "char-whitespace?",
+            "char-upper-case?",
+            "char-lower-case?"
+          ] do
+        e = assert_raise PError, fn -> run("(#{op} 1)") end
+        assert match?({:type_error, ^op, "char", _}, e.reason)
+      end
     end
   end
 end
