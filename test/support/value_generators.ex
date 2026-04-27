@@ -120,6 +120,6 @@ defmodule Schooner.Test.ValueGenerators do
 
   def pair_value(leaf, depth) do
     inner = compound_value(leaf, depth)
-    map({inner, inner}, fn {a, b} -> Value.pair(a, b) end)
+    map(tuple({inner, inner}), fn {a, b} -> Value.pair(a, b) end)
   end
 end
