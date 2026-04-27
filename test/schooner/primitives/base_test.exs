@@ -642,4 +642,279 @@ defmodule Schooner.Primitives.BaseTest do
       end
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # min / max — the *first*-argument special branches
+  # ---------------------------------------------------------------------------
+
+  describe "non-finite min/max — first-argument specials" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+
+    test "(min +inf.0 1) — first-arg pos_inf path" do
+      assert run("(min +inf.0 1)") === 1.0
+    end
+
+    test "(max +inf.0 1) — first-arg pos_inf path" do
+      assert run("(max +inf.0 1)") == @pos_inf
+    end
+
+    test "(max 1 -inf.0) — second-arg neg_inf path" do
+      assert run("(max 1 -inf.0)") === 1.0
+    end
+
+    test "(min 1 +inf.0) and (min -inf.0 1) reach both swapped clauses" do
+      assert run("(min -inf.0 1)") == @neg_inf
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # expt — exponent-as-zero / unit-base / non-integer-exponent paths
+  # ---------------------------------------------------------------------------
+
+  describe "expt edge cases" do
+    @pos_inf {:float_special, :pos_inf}
+    @neg_inf {:float_special, :neg_inf}
+    @nan {:float_special, :nan}
+
+    test "anything to +0.0 / -0.0 is 1.0 (matches both signed-zero clauses)" do
+      assert run("(expt +inf.0 0.0)") === 1.0
+      assert run("(expt +nan.0 (- 0.0))") === 1.0
+    end
+
+    test "1.0 base short-circuits to 1.0 even when exp is special" do
+      assert run("(expt 1.0 +inf.0)") === 1.0
+    end
+
+    test "(expt +inf.0 +inf.0) and (expt -inf.0 +inf.0) — exp has zero finite-sign" do
+      # finite_exp_sign(+inf.0) is 0, so both fall through to the NaN clause.
+      assert run("(expt +inf.0 +inf.0)") == @nan
+      assert run("(expt -inf.0 +inf.0)") == @nan
+    end
+
+    test "(expt -1.0 +inf.0) and (expt -1.0 -inf.0) — |base|==1 hits the NaN tail" do
+      assert run("(expt -1.0 +inf.0)") == @nan
+      assert run("(expt -1.0 -inf.0)") == @nan
+    end
+
+    test "(expt -inf.0 odd-float) preserves the negative sign" do
+      assert run("(expt -inf.0 3.0)") == @neg_inf
+    end
+
+    test "(expt +inf.0 0.5) — positive float exponent" do
+      assert run("(expt +inf.0 0.5)") == @pos_inf
+      assert run("(expt +inf.0 -0.5)") === 0.0
+    end
+
+    test "(expt 5 0) — int_pow base case" do
+      assert run("(expt 5 0)") === 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # inexact->exact / exact division / sqrt edge cases
+  # ---------------------------------------------------------------------------
+
+  describe "exactness conversion edge cases" do
+    test "inexact->exact is identity on integers" do
+      assert run("(inexact->exact 5)") === 5
+    end
+
+    test "inexact->exact rejects non-numbers" do
+      e = assert_raise PError, fn -> run(~S|(inexact->exact "abc")|) end
+      assert match?({:type_error, "inexact->exact", "number", _}, e.reason)
+    end
+
+    test "(sqrt 0) is the exact zero" do
+      assert run("(sqrt 0)") === 0
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Mixed-exactness comparisons exercise the `is_float(a) or is_float(b)`
+  # branch of every numeric comparator.
+  # ---------------------------------------------------------------------------
+
+  describe "mixed-exactness comparison branches" do
+    test "<, >, <=, >= all promote one int operand to float" do
+      assert run("(< 1 1.5)") == Value.bool(true)
+      assert run("(> 2.0 1)") == Value.bool(true)
+      assert run("(<= 1 1.0)") == Value.bool(true)
+      assert run("(>= 2 1.5)") == Value.bool(true)
+      assert run("(<= -inf.0 -inf.0)") == Value.bool(true)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # signum — both negative and zero branches via `modulo`
+  # ---------------------------------------------------------------------------
+
+  describe "modulo — exercises every branch of signum/1" do
+    test "(modulo 0 5) hits the zero branch" do
+      assert run("(modulo 0 5)") === 0
+    end
+
+    test "(modulo 5 -3) — negative divisor adjusts the result" do
+      assert run("(modulo 5 -3)") === -1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # do_member / do_assoc — improper list and bad alist entry
+  # ---------------------------------------------------------------------------
+
+  describe "member / assoc on malformed lists" do
+    test "member raises :improper_list when the search runs off a dotted tail" do
+      e = assert_raise PError, fn -> run("(member 9 '(1 2 . 3))") end
+      assert match?({:improper_list, "member", _}, e.reason)
+    end
+
+    test "assoc raises type_error for a non-pair entry" do
+      e = assert_raise PError, fn -> run("(assoc 9 '((1 . a) 2 (3 . c)))") end
+      assert match?({:type_error, "assoc", "pair as alist entry", _}, e.reason)
+    end
+
+    test "assoc raises :improper_list when the alist itself is dotted" do
+      e = assert_raise PError, fn -> run("(assoc 9 '((1 . a) . 3))") end
+      assert match?({:improper_list, "assoc", _}, e.reason)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Type errors on primitives that take a single non-aggregate first arg
+  # ---------------------------------------------------------------------------
+
+  describe "type errors on aggregates" do
+    test "vector ops reject non-vector arg" do
+      for {op, src} <- [
+            {"vector-length", "(vector-length 1)"},
+            {"vector-ref", "(vector-ref 1 0)"},
+            {"vector->list", "(vector->list 1)"},
+            {"vector-copy", "(vector-copy 1)"}
+          ] do
+        e = assert_raise PError, fn -> run(src) end
+        assert match?({:type_error, ^op, "vector", _}, e.reason)
+      end
+    end
+
+    test "make-vector with too many args" do
+      e = assert_raise PError, fn -> run("(make-vector 3 0 0)") end
+      assert match?({:type_error, "make-vector", "1 or 2 arguments", :too_many}, e.reason)
+    end
+
+    test "bytevector ops reject non-bytevector arg" do
+      for {op, src} <- [
+            {"bytevector-length", "(bytevector-length 1)"},
+            {"bytevector-u8-ref", "(bytevector-u8-ref 1 0)"},
+            {"bytevector-copy", "(bytevector-copy 1)"},
+            {"utf8->string", "(utf8->string 1)"},
+            {"bytevector-append", "(bytevector-append 1)"}
+          ] do
+        e = assert_raise PError, fn -> run(src) end
+        assert match?({:type_error, ^op, "bytevector", _}, e.reason)
+      end
+    end
+
+    test "make-bytevector / bytevector-copy / utf8->string with too many args" do
+      for {op, src} <- [
+            {"make-bytevector", "(make-bytevector 3 0 0)"},
+            {"bytevector-copy", "(bytevector-copy #u8(1 2 3) 0 1 2)"},
+            {"utf8->string", "(utf8->string #u8(1) 0 1 2)"},
+            {"string->utf8", ~S|(string->utf8 "x" 0 1 2)|}
+          ] do
+        e = assert_raise PError, fn -> run(src) end
+        assert match?({:type_error, ^op, _, :too_many}, e.reason)
+      end
+    end
+
+    test "string->utf8 rejects non-string arg" do
+      e = assert_raise PError, fn -> run("(string->utf8 1)") end
+      assert match?({:type_error, "string->utf8", "string", _}, e.reason)
+    end
+
+    test "string ops reject non-string arg" do
+      for {op, src} <- [
+            {"string-length", "(string-length 1)"},
+            {"string-ref", "(string-ref 1 0)"},
+            {"substring", "(substring 1 0 0)"},
+            {"string->list", "(string->list 1)"},
+            {"string-upcase", "(string-upcase 1)"},
+            {"string-downcase", "(string-downcase 1)"},
+            {"string-copy", "(string-copy 1)"}
+          ] do
+        e = assert_raise PError, fn -> run(src) end
+        assert match?({:type_error, ^op, "string", _}, e.reason)
+      end
+    end
+
+    test "make-string / string-copy / string->list with too many args" do
+      for {op, src} <- [
+            {"make-string", ~S|(make-string 3 #\a #\b)|},
+            {"string-copy", ~S|(string-copy "abc" 0 1 2)|},
+            {"string->list", ~S|(string->list "abc" 0 1 2)|}
+          ] do
+        e = assert_raise PError, fn -> run(src) end
+        assert match?({:type_error, ^op, _, :too_many}, e.reason)
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The 2-arg forms of bytevector-copy / utf8->string / string->utf8 /
+  # string->list / string-copy reach the `[v, start]` clause specifically.
+  # ---------------------------------------------------------------------------
+
+  describe "two-argument start-only slice forms" do
+    test "bytevector-copy with start only" do
+      assert run("(bytevector-copy #u8(1 2 3 4) 1)") == Value.bytevector(<<2, 3, 4>>)
+    end
+
+    test "utf8->string / string->utf8 with start only" do
+      assert run("(utf8->string #u8(97 98 99) 1)") == Value.string("bc")
+      assert run(~S|(string->utf8 "abc" 1)|) == Value.bytevector(<<?b, ?c>>)
+    end
+
+    test "string->list with start only" do
+      assert run(~S|(string->list "abcd" 2)|) == Value.list([Value.char(?c), Value.char(?d)])
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Improper-list inputs to list->vector / list->string — exercises
+  # do_scheme_list_to_elixir's improper_list clause.
+  # ---------------------------------------------------------------------------
+
+  describe "list->vector / list->string on improper lists" do
+    test "list->vector raises :improper_list" do
+      e = assert_raise PError, fn -> run("(list->vector '(1 2 . 3))") end
+      assert match?({:improper_list, "list->vector", _}, e.reason)
+    end
+
+    test "list->string raises :improper_list" do
+      e = assert_raise PError, fn -> run(~S|(list->string '(#\a . #\b))|) end
+      assert match?({:improper_list, "list->string", _}, e.reason)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Off-the-end range failures for substring / string->list / string-copy
+  # exercise the `:end` raise paths in slice_codepoints and collect_n.
+  # ---------------------------------------------------------------------------
+
+  describe "string slice off-the-end failures" do
+    test "substring with start past the end" do
+      e = assert_raise PError, fn -> run(~S|(substring "abc" 5 5)|) end
+      assert match?({:index_out_of_range, "substring", _, _}, e.reason)
+    end
+
+    test "string->list with start past the end" do
+      e = assert_raise PError, fn -> run(~S|(string->list "abc" 5)|) end
+      assert match?({:index_out_of_range, "string->list", _, _}, e.reason)
+    end
+
+    test "string->list with stop past the end (collect_n exhausts source)" do
+      e = assert_raise PError, fn -> run(~S|(string->list "abc" 0 10)|) end
+      assert match?({:index_out_of_range, "string->list", _, _}, e.reason)
+    end
+  end
 end

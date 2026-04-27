@@ -93,6 +93,24 @@ defmodule Schooner.ValueTest do
       refute Value.record?({:vector, {1, 2}})
       assert Value.eof?(:eof)
       assert Value.unspecified?(:unspecified)
+      refute Value.unspecified?(:null)
+      refute Value.unspecified?({:bool, false})
+    end
+
+    test "error_object? / error_kind?" do
+      err = {:error_obj, :user, {:string, "boom"}, []}
+      assert Value.error_object?(err)
+      refute Value.error_object?({:string, "boom"})
+      assert Value.error_kind?(err, :user)
+      refute Value.error_kind?(err, :read)
+      refute Value.error_kind?({:string, "x"}, :user)
+    end
+
+    test "integer? on non-finite floats is false (ArgumentError fallback)" do
+      # `trunc/1` raises ArgumentError on non-finite floats; the
+      # `integer?` rescue clause turns that into `false`.
+      refute Value.integer?({:float_special, :nan})
+      refute Value.integer?({:float_special, :pos_inf})
     end
 
     test "truthiness — only #f is false" do
@@ -166,6 +184,18 @@ defmodule Schooner.ValueTest do
       refute Value.equal?(1, 1.0)
       assert Value.equal?(Value.symbol("x"), Value.symbol("x"))
     end
+
+    test "equal? — NaN on the right side is also never equal" do
+      refute Value.equal?(1, {:float_special, :nan})
+      refute Value.equal?({:float_special, :pos_inf}, {:float_special, :nan})
+    end
+
+    test "equal? on differently-sized vectors and records is false" do
+      refute Value.equal?(Value.vector([1, 2]), Value.vector([1, 2, 3]))
+      a = Value.record({:type, "p"}, {1, 2})
+      b = Value.record({:type, "p"}, {1, 2, 3})
+      refute Value.equal?(a, b)
+    end
   end
 
   describe "write / display" do
@@ -193,6 +223,11 @@ defmodule Schooner.ValueTest do
       assert Value.write(Value.symbol("123abc")) == "|123abc|"
     end
 
+    test "symbols — backslash and DEL force bar quoting and escape inside" do
+      assert Value.write(Value.symbol("a\\b")) == "|a\\\\b|"
+      assert Value.write(Value.symbol(<<?a, 0x7F, ?b>>)) == <<?|, ?a, 0x7F, ?b, ?|>>
+    end
+
     test "strings" do
       assert Value.write(Value.string("hi")) == "\"hi\""
       assert Value.write(Value.string("a\"b")) == "\"a\\\"b\""
@@ -200,6 +235,13 @@ defmodule Schooner.ValueTest do
       assert Value.write(Value.string("a\nb")) == "\"a\\nb\""
       assert Value.display(Value.string("hi")) == "hi"
       assert Value.display(Value.string("a\nb")) == "a\nb"
+    end
+
+    test "strings — every named-escape char and the unicode escape" do
+      assert Value.write(Value.string("a\rb")) == "\"a\\rb\""
+      assert Value.write(Value.string("a\tb")) == "\"a\\tb\""
+      assert Value.write(Value.string("a\bb")) == "\"a\\bb\""
+      assert Value.write(Value.string(<<?a, 0x01, ?b>>)) == "\"a\\x1;b\""
     end
 
     test "characters" do
@@ -237,6 +279,22 @@ defmodule Schooner.ValueTest do
 
       p = Value.primitive("+", {:at_least, 0}, fn _ -> 0 end)
       assert Value.write(p) == "#<primitive +>"
+    end
+
+    test "record without a {:record_type, name, _} type-id falls back to inspect" do
+      r = Value.record({:type, "p"}, {1, 2})
+      assert Value.write(r) == "#<record #{inspect({:type, "p"})}>"
+    end
+
+    test "error objects render kind, message, and irritants" do
+      e = {:error_obj, :user, {:string, "boom"}, []}
+      assert Value.write(e) == "#<error \"boom\">"
+
+      with_irrs = {:error_obj, :read, {:string, "bad input"}, [1, Value.symbol("x")]}
+      assert Value.write(with_irrs) == "#<read-error \"bad input\" 1 x>"
+
+      file_kind = {:error_obj, :file, {:string, "missing"}, []}
+      assert Value.write(file_kind) == "#<file-error \"missing\">"
     end
 
     test "display falls through to write for non-string/char aggregates" do
