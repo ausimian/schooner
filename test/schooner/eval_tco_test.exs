@@ -99,4 +99,23 @@ defmodule Schooner.EvalTcoTest do
              """) == Value.bool(true)
     end)
   end
+
+  test "named let recurses tail-call style at depth" do
+    assert_bounded_heap(fn ->
+      assert run!("""
+             (let loop ((n #{depth()}))
+               (if (zero-int? n) 'done (loop (sub1 n))))
+             """) == Value.symbol("done")
+    end)
+  end
+
+  test "letrec-bound mutually recursive lambdas tail-call at depth" do
+    assert_bounded_heap(fn ->
+      assert run!("""
+             (letrec ((even? (lambda (n) (if (zero-int? n) #t (odd? (sub1 n)))))
+                      (odd?  (lambda (n) (if (zero-int? n) #f (even? (sub1 n))))))
+               (even? #{depth()}))
+             """) == Value.bool(true)
+    end)
+  end
 end
