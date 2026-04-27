@@ -24,7 +24,12 @@ defmodule Schooner do
   Scheme out of the box.
   """
   @spec standard_env() :: Env.t()
-  def standard_env, do: Env.new() |> Primitives.Base.register_into()
+  def standard_env do
+    Env.new()
+    |> Primitives.Base.register_into()
+    |> Primitives.Cxr.register_into()
+    |> Primitives.Char.register_into()
+  end
 
   @doc """
   Read and evaluate `source` in a fresh standard environment. Returns

@@ -163,6 +163,15 @@ defmodule Schooner.Value do
   def eof?(:eof), do: true
   def eof?(_), do: false
 
+  @doc """
+  Scheme `list?` — true for `:null` and proper (null-terminated) pair chains;
+  false for improper lists, atoms, and anything that ends in a non-pair non-null.
+  """
+  @spec list?(term()) :: boolean()
+  def list?(:null), do: true
+  def list?({:pair, _, cdr}), do: list?(cdr)
+  def list?(_), do: false
+
   @spec unspecified?(term()) :: boolean()
   def unspecified?(:unspecified), do: true
   def unspecified?(_), do: false
