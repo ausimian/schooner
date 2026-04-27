@@ -15,6 +15,7 @@ defmodule Schooner.Primitives.Base do
   """
 
   alias Schooner.Env
+  alias Schooner.Eval
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
@@ -37,7 +38,15 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp specs do
-    arithmetic_specs() ++ comparison_specs() ++ predicate_specs() ++ boolean_specs()
+    arithmetic_specs() ++
+      comparison_specs() ++
+      predicate_specs() ++
+      boolean_specs() ++
+      pair_specs() ++
+      vector_specs() ++
+      bytevector_specs() ++
+      string_specs() ++
+      symbol_specs()
   end
 
   # ---------------------------------------------------------------------------
@@ -514,13 +523,17 @@ defmodule Schooner.Primitives.Base do
       {"boolean?", 1, &boolean_p/1},
       {"pair?", 1, &pair_p/1},
       {"null?", 1, &null_p/1},
+      {"list?", 1, &list_p/1},
       {"symbol?", 1, &symbol_p/1},
       {"string?", 1, &string_p/1},
       {"char?", 1, &char_p/1},
       {"vector?", 1, &vector_p/1},
       {"bytevector?", 1, &bytevector_p/1},
       {"procedure?", 1, &procedure_p/1},
-      {"eof-object?", 1, &eof_p/1}
+      {"eof-object?", 1, &eof_p/1},
+      {"eq?", 2, &eq_p/1},
+      {"eqv?", 2, &eqv_p/1},
+      {"equal?", 2, &equal_p/1}
     ]
   end
 
@@ -531,6 +544,7 @@ defmodule Schooner.Primitives.Base do
   defp boolean_p([v]), do: Value.bool(Value.boolean?(v))
   defp pair_p([v]), do: Value.bool(Value.pair?(v))
   defp null_p([v]), do: Value.bool(Value.null?(v))
+  defp list_p([v]), do: Value.bool(Value.list?(v))
   defp symbol_p([v]), do: Value.bool(Value.symbol?(v))
   defp string_p([v]), do: Value.bool(Value.string?(v))
   defp char_p([v]), do: Value.bool(Value.char?(v))
@@ -538,6 +552,10 @@ defmodule Schooner.Primitives.Base do
   defp bytevector_p([v]), do: Value.bool(Value.bytevector?(v))
   defp procedure_p([v]), do: Value.bool(Value.procedure?(v))
   defp eof_p([v]), do: Value.bool(Value.eof?(v))
+
+  defp eq_p([a, b]), do: Value.bool(Value.eq?(a, b))
+  defp eqv_p([a, b]), do: Value.bool(Value.eqv?(a, b))
+  defp equal_p([a, b]), do: Value.bool(Value.equal?(a, b))
 
   defp zero_p([n]) do
     require_number!("zero?", n)
@@ -593,6 +611,586 @@ defmodule Schooner.Primitives.Base do
   end
 
   # ---------------------------------------------------------------------------
+  # Pairs and lists
+  # ---------------------------------------------------------------------------
+
+  defp pair_specs do
+    [
+      {"cons", 2, &cons_/1},
+      {"car", 1, &car_/1},
+      {"cdr", 1, &cdr_/1},
+      {"list", {:at_least, 0}, &list_ctor/1},
+      {"list-copy", 1, &list_copy/1},
+      {"length", 1, &length_/1},
+      {"reverse", 1, &reverse_/1},
+      {"append", {:at_least, 0}, &append_/1},
+      {"list-tail", 2, &list_tail/1},
+      {"list-ref", 2, &list_ref/1},
+      {"member", 2, &member_/1},
+      {"memv", 2, &memv_/1},
+      {"memq", 2, &memq_/1},
+      {"assoc", 2, &assoc_/1},
+      {"assv", 2, &assv_/1},
+      {"assq", 2, &assq_/1},
+      {"map", {:at_least, 2}, &map_/1},
+      {"for-each", {:at_least, 2}, &for_each_/1}
+    ]
+  end
+
+  defp cons_([a, b]), do: Value.pair(a, b)
+
+  defp car_([{:pair, a, _}]), do: a
+  defp car_([other]), do: raise(Error, reason: {:type_error, "car", "pair", other})
+
+  defp cdr_([{:pair, _, b}]), do: b
+  defp cdr_([other]), do: raise(Error, reason: {:type_error, "cdr", "pair", other})
+
+  defp list_ctor(args), do: Value.list(args)
+
+  defp list_copy([list]) do
+    require_proper_list!("list-copy", list)
+    list
+  end
+
+  defp length_([list]) do
+    case proper_length(list, 0) do
+      {:ok, n} -> n
+      :error -> raise(Error, reason: {:improper_list, "length", list})
+    end
+  end
+
+  defp proper_length(:null, n), do: {:ok, n}
+  defp proper_length({:pair, _, t}, n), do: proper_length(t, n + 1)
+  defp proper_length(_, _), do: :error
+
+  defp reverse_([list]), do: do_reverse(list, :null)
+
+  defp do_reverse(:null, acc), do: acc
+  defp do_reverse({:pair, h, t}, acc), do: do_reverse(t, {:pair, h, acc})
+  defp do_reverse(other, _acc), do: raise(Error, reason: {:improper_list, "reverse", other})
+
+  # `(append a b c)` ⇒ all but the last must be proper lists; the last is
+  # spliced in as-is, so it can be any value (including an improper tail).
+  defp append_([]), do: :null
+  defp append_([only]), do: only
+
+  defp append_(args) do
+    {fronts, [last]} = Enum.split(args, length(args) - 1)
+    Enum.each(fronts, &require_proper_list!("append", &1))
+    do_append(fronts, last)
+  end
+
+  defp do_append([], tail), do: tail
+  defp do_append([list | rest], tail), do: append_pair(list, do_append(rest, tail))
+
+  defp append_pair(:null, tail), do: tail
+  defp append_pair({:pair, h, t}, tail), do: {:pair, h, append_pair(t, tail)}
+
+  defp list_tail([list, k]) do
+    require_integer!("list-tail", k)
+    if k < 0, do: raise(Error, reason: {:index_out_of_range, "list-tail", k, "n/a"})
+    do_list_tail(list, trunc_int(k), 0)
+  end
+
+  defp do_list_tail(rest, 0, _consumed), do: rest
+
+  defp do_list_tail({:pair, _, t}, k, consumed),
+    do: do_list_tail(t, k - 1, consumed + 1)
+
+  defp do_list_tail(_other, k, consumed) do
+    raise(Error, reason: {:index_out_of_range, "list-tail", consumed + k, consumed})
+  end
+
+  defp list_ref([list, k]) do
+    require_integer!("list-ref", k)
+    if k < 0, do: raise(Error, reason: {:index_out_of_range, "list-ref", k, "n/a"})
+    do_list_ref(list, trunc_int(k), 0)
+  end
+
+  defp do_list_ref({:pair, h, _}, 0, _consumed), do: h
+
+  defp do_list_ref({:pair, _, t}, k, consumed),
+    do: do_list_ref(t, k - 1, consumed + 1)
+
+  defp do_list_ref(_other, k, consumed) do
+    raise(Error, reason: {:index_out_of_range, "list-ref", consumed + k, consumed})
+  end
+
+  defp member_([obj, list]), do: do_member("member", obj, list, &Value.equal?/2)
+  defp memv_([obj, list]), do: do_member("memv", obj, list, &Value.eqv?/2)
+  defp memq_([obj, list]), do: do_member("memq", obj, list, &Value.eq?/2)
+
+  defp do_member(_op, _obj, :null, _eq), do: Value.bool(false)
+
+  defp do_member(op, obj, {:pair, h, t} = pair, eq) do
+    if eq.(obj, h), do: pair, else: do_member(op, obj, t, eq)
+  end
+
+  defp do_member(op, _obj, other, _eq) do
+    raise(Error, reason: {:improper_list, op, other})
+  end
+
+  defp assoc_([obj, list]), do: do_assoc("assoc", obj, list, &Value.equal?/2)
+  defp assv_([obj, list]), do: do_assoc("assv", obj, list, &Value.eqv?/2)
+  defp assq_([obj, list]), do: do_assoc("assq", obj, list, &Value.eq?/2)
+
+  defp do_assoc(_op, _obj, :null, _eq), do: Value.bool(false)
+
+  defp do_assoc(op, obj, {:pair, {:pair, k, _} = entry, rest}, eq) do
+    if eq.(obj, k), do: entry, else: do_assoc(op, obj, rest, eq)
+  end
+
+  defp do_assoc(op, _obj, {:pair, other, _}, _eq) do
+    raise(Error, reason: {:type_error, op, "pair as alist entry", other})
+  end
+
+  defp do_assoc(op, _obj, other, _eq) do
+    raise(Error, reason: {:improper_list, op, other})
+  end
+
+  defp map_([proc | lists]) do
+    require_procedure!("map", proc)
+    Enum.each(lists, &require_proper_list!("map", &1))
+    Value.list(do_zip_apply(proc, lists, []))
+  end
+
+  defp for_each_([proc | lists]) do
+    require_procedure!("for-each", proc)
+    Enum.each(lists, &require_proper_list!("for-each", &1))
+    _ = do_zip_apply(proc, lists, [])
+    :unspecified
+  end
+
+  defp do_zip_apply(proc, lists, acc) do
+    case split_heads_tails(lists, [], []) do
+      :exhausted -> Enum.reverse(acc)
+      {heads, tails} -> do_zip_apply(proc, tails, [Eval.apply_proc(proc, heads) | acc])
+    end
+  end
+
+  defp split_heads_tails([], hs, ts), do: {Enum.reverse(hs), Enum.reverse(ts)}
+  defp split_heads_tails([:null | _], _hs, _ts), do: :exhausted
+
+  defp split_heads_tails([{:pair, h, t} | r], hs, ts),
+    do: split_heads_tails(r, [h | hs], [t | ts])
+
+  # ---------------------------------------------------------------------------
+  # Vectors
+  # ---------------------------------------------------------------------------
+
+  defp vector_specs do
+    [
+      {"vector", {:at_least, 0}, &vector_ctor/1},
+      {"make-vector", {:at_least, 1}, &make_vector/1},
+      {"vector-length", 1, &vector_length/1},
+      {"vector-ref", 2, &vector_ref/1},
+      {"vector->list", {:at_least, 1}, &vector_to_list/1},
+      {"list->vector", 1, &list_to_vector/1},
+      {"vector-map", {:at_least, 2}, &vector_map/1},
+      {"vector-for-each", {:at_least, 2}, &vector_for_each/1},
+      {"vector-copy", {:at_least, 1}, &vector_copy/1},
+      {"vector-append", {:at_least, 0}, &vector_append/1}
+    ]
+  end
+
+  defp vector_ctor(args), do: Value.vector(args)
+
+  defp make_vector([k]), do: make_vector([k, :unspecified])
+
+  defp make_vector([k, fill]) do
+    n = require_size!("make-vector", k)
+    Value.vector(List.duplicate(fill, n))
+  end
+
+  defp make_vector([_, _ | _]) do
+    raise(Error, reason: {:type_error, "make-vector", "1 or 2 arguments", :too_many})
+  end
+
+  defp vector_length([{:vector, t}]), do: tuple_size(t)
+
+  defp vector_length([other]),
+    do: raise(Error, reason: {:type_error, "vector-length", "vector", other})
+
+  defp vector_ref([{:vector, t}, k]) do
+    i = require_index!("vector-ref", k, tuple_size(t))
+    elem(t, i)
+  end
+
+  defp vector_ref([other, _]),
+    do: raise(Error, reason: {:type_error, "vector-ref", "vector", other})
+
+  defp vector_to_list([{:vector, t}]) do
+    Value.list(Tuple.to_list(t))
+  end
+
+  defp vector_to_list([{:vector, t}, start]) do
+    n = tuple_size(t)
+    s = require_bound!("vector->list", start, 0, n)
+    Value.list(Enum.map(s..(n - 1)//1, &elem(t, &1)))
+  end
+
+  defp vector_to_list([{:vector, t}, start, end_]) do
+    n = tuple_size(t)
+    s = require_bound!("vector->list", start, 0, n)
+    e = require_bound!("vector->list", end_, s, n)
+    Value.list(Enum.map(s..(e - 1)//1, &elem(t, &1)))
+  end
+
+  defp vector_to_list([other | _]),
+    do: raise(Error, reason: {:type_error, "vector->list", "vector", other})
+
+  defp list_to_vector([list]) do
+    Value.vector(scheme_list_to_elixir!("list->vector", list))
+  end
+
+  defp vector_map([proc | vectors]) do
+    require_procedure!("vector-map", proc)
+    Enum.each(vectors, &require_vector!("vector-map", &1))
+    tuples = Enum.map(vectors, fn {:vector, t} -> t end)
+    n = tuples |> Enum.map(&tuple_size/1) |> Enum.min()
+
+    results =
+      Enum.map(0..(n - 1)//1, fn i ->
+        Eval.apply_proc(proc, Enum.map(tuples, &elem(&1, i)))
+      end)
+
+    Value.vector(results)
+  end
+
+  defp vector_for_each([proc | vectors]) do
+    require_procedure!("vector-for-each", proc)
+    Enum.each(vectors, &require_vector!("vector-for-each", &1))
+    tuples = Enum.map(vectors, fn {:vector, t} -> t end)
+    n = tuples |> Enum.map(&tuple_size/1) |> Enum.min()
+
+    Enum.each(0..(n - 1)//1, fn i ->
+      Eval.apply_proc(proc, Enum.map(tuples, &elem(&1, i)))
+    end)
+
+    :unspecified
+  end
+
+  defp vector_copy([v]), do: vector_copy_range(v, nil, nil)
+  defp vector_copy([v, start]), do: vector_copy_range(v, start, nil)
+  defp vector_copy([v, start, end_]), do: vector_copy_range(v, start, end_)
+
+  defp vector_copy([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "vector-copy", "1 to 3 arguments", :too_many})
+  end
+
+  defp vector_copy_range({:vector, t}, start, end_) do
+    n = tuple_size(t)
+    s = if start == nil, do: 0, else: require_bound!("vector-copy", start, 0, n)
+    e = if end_ == nil, do: n, else: require_bound!("vector-copy", end_, s, n)
+    Value.vector(Enum.map(s..(e - 1)//1, &elem(t, &1)))
+  end
+
+  defp vector_copy_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "vector-copy", "vector", other})
+
+  defp vector_append(args) do
+    Enum.each(args, &require_vector!("vector-append", &1))
+
+    items =
+      args
+      |> Enum.flat_map(fn {:vector, t} -> Tuple.to_list(t) end)
+
+    Value.vector(items)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Bytevectors
+  # ---------------------------------------------------------------------------
+
+  defp bytevector_specs do
+    [
+      {"bytevector", {:at_least, 0}, &bytevector_ctor/1},
+      {"make-bytevector", {:at_least, 1}, &make_bytevector/1},
+      {"bytevector-length", 1, &bytevector_length/1},
+      {"bytevector-u8-ref", 2, &bytevector_u8_ref/1},
+      {"bytevector-copy", {:at_least, 1}, &bytevector_copy/1},
+      {"bytevector-append", {:at_least, 0}, &bytevector_append/1},
+      {"utf8->string", {:at_least, 1}, &utf8_to_string/1},
+      {"string->utf8", {:at_least, 1}, &string_to_utf8/1}
+    ]
+  end
+
+  defp bytevector_ctor(args) do
+    bytes = Enum.map(args, &require_byte!("bytevector", &1))
+    Value.bytevector(bytes)
+  end
+
+  defp make_bytevector([k]), do: make_bytevector([k, 0])
+
+  defp make_bytevector([k, fill]) do
+    n = require_size!("make-bytevector", k)
+    b = require_byte!("make-bytevector", fill)
+    Value.bytevector(:binary.copy(<<b>>, n))
+  end
+
+  defp make_bytevector([_, _ | _]) do
+    raise(Error, reason: {:type_error, "make-bytevector", "1 or 2 arguments", :too_many})
+  end
+
+  defp bytevector_length([{:bytevector, b}]), do: byte_size(b)
+
+  defp bytevector_length([other]),
+    do: raise(Error, reason: {:type_error, "bytevector-length", "bytevector", other})
+
+  defp bytevector_u8_ref([{:bytevector, b}, k]) do
+    i = require_index!("bytevector-u8-ref", k, byte_size(b))
+    :binary.at(b, i)
+  end
+
+  defp bytevector_u8_ref([other, _]),
+    do: raise(Error, reason: {:type_error, "bytevector-u8-ref", "bytevector", other})
+
+  defp bytevector_copy([v]), do: bytevector_copy_range(v, nil, nil)
+  defp bytevector_copy([v, start]), do: bytevector_copy_range(v, start, nil)
+  defp bytevector_copy([v, start, end_]), do: bytevector_copy_range(v, start, end_)
+
+  defp bytevector_copy([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "bytevector-copy", "1 to 3 arguments", :too_many})
+  end
+
+  defp bytevector_copy_range({:bytevector, b}, start, end_) do
+    n = byte_size(b)
+    s = if start == nil, do: 0, else: require_bound!("bytevector-copy", start, 0, n)
+    e = if end_ == nil, do: n, else: require_bound!("bytevector-copy", end_, s, n)
+    Value.bytevector(:binary.part(b, s, e - s))
+  end
+
+  defp bytevector_copy_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "bytevector-copy", "bytevector", other})
+
+  defp bytevector_append(args) do
+    Enum.each(args, &require_bytevector!("bytevector-append", &1))
+    bins = Enum.map(args, fn {:bytevector, b} -> b end)
+    Value.bytevector(IO.iodata_to_binary(bins))
+  end
+
+  defp utf8_to_string([v]), do: utf8_to_string_range(v, nil, nil)
+  defp utf8_to_string([v, start]), do: utf8_to_string_range(v, start, nil)
+  defp utf8_to_string([v, start, end_]), do: utf8_to_string_range(v, start, end_)
+
+  defp utf8_to_string([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "utf8->string", "1 to 3 arguments", :too_many})
+  end
+
+  defp utf8_to_string_range({:bytevector, b}, start, end_) do
+    n = byte_size(b)
+    s = if start == nil, do: 0, else: require_bound!("utf8->string", start, 0, n)
+    e = if end_ == nil, do: n, else: require_bound!("utf8->string", end_, s, n)
+    slice = :binary.part(b, s, e - s)
+
+    if String.valid?(slice),
+      do: Value.string(slice),
+      else: raise(Error, reason: {:invalid_utf8, "utf8->string"})
+  end
+
+  defp utf8_to_string_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "utf8->string", "bytevector", other})
+
+  defp string_to_utf8([v]), do: string_to_utf8_range(v, nil, nil)
+  defp string_to_utf8([v, start]), do: string_to_utf8_range(v, start, nil)
+  defp string_to_utf8([v, start, end_]), do: string_to_utf8_range(v, start, end_)
+
+  defp string_to_utf8([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "string->utf8", "1 to 3 arguments", :too_many})
+  end
+
+  defp string_to_utf8_range({:string, s}, start, end_) do
+    n = string_codepoint_length(s)
+    si = if start == nil, do: 0, else: require_bound!("string->utf8", start, 0, n)
+    ei = if end_ == nil, do: n, else: require_bound!("string->utf8", end_, si, n)
+    Value.bytevector(string_codepoint_slice(s, si, ei))
+  end
+
+  defp string_to_utf8_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "string->utf8", "string", other})
+
+  # ---------------------------------------------------------------------------
+  # Strings
+  # ---------------------------------------------------------------------------
+
+  defp string_specs do
+    [
+      {"string", {:at_least, 0}, &string_ctor/1},
+      {"make-string", {:at_least, 1}, &make_string/1},
+      {"string-length", 1, &string_length/1},
+      {"string-ref", 2, &string_ref/1},
+      {"string-append", {:at_least, 0}, &string_append/1},
+      {"substring", 3, &substring_/1},
+      {"string=?", {:at_least, 2}, &string_eq/1},
+      {"string<?", {:at_least, 2}, &string_lt/1},
+      {"string<=?", {:at_least, 2}, &string_le/1},
+      {"string>?", {:at_least, 2}, &string_gt/1},
+      {"string>=?", {:at_least, 2}, &string_ge/1},
+      {"string->list", {:at_least, 1}, &string_to_list/1},
+      {"list->string", 1, &list_to_string/1},
+      {"string-upcase", 1, &string_upcase/1},
+      {"string-downcase", 1, &string_downcase/1},
+      {"string-copy", {:at_least, 1}, &string_copy/1}
+    ]
+  end
+
+  defp string_ctor(args) do
+    bytes =
+      args
+      |> Enum.map(&require_char!("string", &1))
+      |> Enum.map(&codepoint_to_utf8/1)
+
+    Value.string(IO.iodata_to_binary(bytes))
+  end
+
+  defp make_string([k]), do: make_string([k, Value.char(?\s)])
+
+  defp make_string([k, char]) do
+    n = require_size!("make-string", k)
+    cp = require_char!("make-string", char)
+    Value.string(:binary.copy(codepoint_to_utf8(cp), n))
+  end
+
+  defp make_string([_, _ | _]) do
+    raise(Error, reason: {:type_error, "make-string", "1 or 2 arguments", :too_many})
+  end
+
+  defp string_length([{:string, s}]), do: string_codepoint_length(s)
+
+  defp string_length([other]),
+    do: raise(Error, reason: {:type_error, "string-length", "string", other})
+
+  defp string_ref([{:string, s}, k]) do
+    n = string_codepoint_length(s)
+    i = require_index!("string-ref", k, n)
+    Value.char(codepoint_at!(s, i, "string-ref"))
+  end
+
+  defp string_ref([other, _]),
+    do: raise(Error, reason: {:type_error, "string-ref", "string", other})
+
+  defp string_append(args) do
+    Enum.each(args, &require_string!("string-append", &1))
+    bins = Enum.map(args, fn {:string, s} -> s end)
+    Value.string(IO.iodata_to_binary(bins))
+  end
+
+  defp substring_([{:string, s}, start, end_]) do
+    n = string_codepoint_length(s)
+    si = require_bound!("substring", start, 0, n)
+    ei = require_bound!("substring", end_, si, n)
+    Value.string(string_codepoint_slice(s, si, ei))
+  end
+
+  defp substring_([other, _, _]),
+    do: raise(Error, reason: {:type_error, "substring", "string", other})
+
+  defp string_eq(args), do: variadic_string_cmp("string=?", args, &(&1 == &2))
+  defp string_lt(args), do: variadic_string_cmp("string<?", args, &(&1 < &2))
+  defp string_le(args), do: variadic_string_cmp("string<=?", args, &(&1 <= &2))
+  defp string_gt(args), do: variadic_string_cmp("string>?", args, &(&1 > &2))
+  defp string_ge(args), do: variadic_string_cmp("string>=?", args, &(&1 >= &2))
+
+  defp variadic_string_cmp(op, [first | rest] = args, pair) do
+    Enum.each(args, &require_string!(op, &1))
+    Value.bool(check_string_pairs(rest, first, pair))
+  end
+
+  defp check_string_pairs([], _prev, _pair), do: true
+
+  defp check_string_pairs([{:string, s} = next | rest], {:string, prev}, pair) do
+    if pair.(prev, s), do: check_string_pairs(rest, next, pair), else: false
+  end
+
+  defp string_to_list([v]), do: string_to_list_range(v, nil, nil)
+  defp string_to_list([v, start]), do: string_to_list_range(v, start, nil)
+  defp string_to_list([v, start, end_]), do: string_to_list_range(v, start, end_)
+
+  defp string_to_list([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "string->list", "1 to 3 arguments", :too_many})
+  end
+
+  defp string_to_list_range({:string, s}, start, end_) do
+    n = string_codepoint_length(s)
+    si = if start == nil, do: 0, else: require_bound!("string->list", start, 0, n)
+    ei = if end_ == nil, do: n, else: require_bound!("string->list", end_, si, n)
+    sliced = string_codepoint_codepoints(s, si, ei)
+    Value.list(Enum.map(sliced, &Value.char/1))
+  end
+
+  defp string_to_list_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "string->list", "string", other})
+
+  defp list_to_string([list]) do
+    bytes =
+      "list->string"
+      |> scheme_list_to_elixir!(list)
+      |> Enum.map(&require_char!("list->string", &1))
+      |> Enum.map(&codepoint_to_utf8/1)
+
+    Value.string(IO.iodata_to_binary(bytes))
+  end
+
+  defp string_upcase([{:string, s}]), do: Value.string(String.upcase(s, :default))
+
+  defp string_upcase([other]),
+    do: raise(Error, reason: {:type_error, "string-upcase", "string", other})
+
+  defp string_downcase([{:string, s}]), do: Value.string(String.downcase(s, :default))
+
+  defp string_downcase([other]),
+    do: raise(Error, reason: {:type_error, "string-downcase", "string", other})
+
+  defp string_copy([v]), do: string_copy_range(v, nil, nil)
+  defp string_copy([v, start]), do: string_copy_range(v, start, nil)
+  defp string_copy([v, start, end_]), do: string_copy_range(v, start, end_)
+
+  defp string_copy([_, _, _, _ | _]) do
+    raise(Error, reason: {:type_error, "string-copy", "1 to 3 arguments", :too_many})
+  end
+
+  defp string_copy_range({:string, s}, start, end_) do
+    n = string_codepoint_length(s)
+    si = if start == nil, do: 0, else: require_bound!("string-copy", start, 0, n)
+    ei = if end_ == nil, do: n, else: require_bound!("string-copy", end_, si, n)
+    Value.string(string_codepoint_slice(s, si, ei))
+  end
+
+  defp string_copy_range(other, _, _),
+    do: raise(Error, reason: {:type_error, "string-copy", "string", other})
+
+  # ---------------------------------------------------------------------------
+  # Symbols
+  # ---------------------------------------------------------------------------
+
+  defp symbol_specs do
+    [
+      {"symbol=?", {:at_least, 2}, &symbol_eq/1},
+      {"symbol->string", 1, &symbol_to_string/1},
+      {"string->symbol", 1, &string_to_symbol/1}
+    ]
+  end
+
+  defp symbol_eq([first | _] = args) do
+    Enum.each(args, fn
+      {:sym, _} -> :ok
+      other -> raise(Error, reason: {:type_error, "symbol=?", "symbol", other})
+    end)
+
+    Value.bool(Enum.all?(args, &(&1 === first)))
+  end
+
+  defp symbol_to_string([{:sym, name}]), do: Value.string(name)
+
+  defp symbol_to_string([other]),
+    do: raise(Error, reason: {:type_error, "symbol->string", "symbol", other})
+
+  defp string_to_symbol([{:string, s}]), do: Value.symbol(s)
+
+  defp string_to_symbol([other]),
+    do: raise(Error, reason: {:type_error, "string->symbol", "string", other})
+
+  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
@@ -637,5 +1235,128 @@ defmodule Schooner.Primitives.Base do
     any_float? = Enum.any?(args, &is_float/1)
     ints = Enum.map(args, &trunc_int/1)
     {ints, any_float?}
+  end
+
+  # ---- Type-checks shared by phase 6 primitives ------------------------------
+
+  defp require_proper_list!(op, value) do
+    if Value.list?(value), do: :ok, else: raise(Error, reason: {:improper_list, op, value})
+  end
+
+  defp require_procedure!(op, v) do
+    if Value.procedure?(v), do: :ok, else: raise(Error, reason: {:type_error, op, "procedure", v})
+  end
+
+  defp require_vector!(_op, {:vector, _}), do: :ok
+
+  defp require_vector!(op, other),
+    do: raise(Error, reason: {:type_error, op, "vector", other})
+
+  defp require_bytevector!(_op, {:bytevector, _}), do: :ok
+
+  defp require_bytevector!(op, other),
+    do: raise(Error, reason: {:type_error, op, "bytevector", other})
+
+  defp require_string!(_op, {:string, _}), do: :ok
+
+  defp require_string!(op, other),
+    do: raise(Error, reason: {:type_error, op, "string", other})
+
+  defp require_char!(_op, {:char, cp}), do: cp
+
+  defp require_char!(op, other),
+    do: raise(Error, reason: {:type_error, op, "char", other})
+
+  defp require_byte!(_op, n) when is_integer(n) and n >= 0 and n <= 255, do: n
+
+  defp require_byte!(op, other),
+    do: raise(Error, reason: {:byte_out_of_range, op, other})
+
+  defp require_size!(op, k) do
+    require_integer!(op, k)
+    n = trunc_int(k)
+    if n < 0, do: raise(Error, reason: {:invalid_size, op, k})
+    n
+  end
+
+  defp require_index!(op, k, length) do
+    require_integer!(op, k)
+    i = trunc_int(k)
+
+    if i < 0 or i >= length do
+      raise(Error, reason: {:index_out_of_range, op, i, length})
+    end
+
+    i
+  end
+
+  defp require_bound!(op, k, lower, upper) do
+    require_integer!(op, k)
+    i = trunc_int(k)
+
+    if i < lower or i > upper do
+      raise(Error, reason: {:index_out_of_range, op, i, upper})
+    end
+
+    i
+  end
+
+  defp scheme_list_to_elixir!(op, list), do: do_scheme_list_to_elixir(op, list, [])
+  defp do_scheme_list_to_elixir(_op, :null, acc), do: Enum.reverse(acc)
+
+  defp do_scheme_list_to_elixir(op, {:pair, h, t}, acc),
+    do: do_scheme_list_to_elixir(op, t, [h | acc])
+
+  defp do_scheme_list_to_elixir(op, other, _acc),
+    do: raise(Error, reason: {:improper_list, op, other})
+
+  defp codepoint_to_utf8(cp) when is_integer(cp) and cp >= 0 and cp <= 0x10FFFF do
+    <<cp::utf8>>
+  rescue
+    ArgumentError ->
+      reraise Error, [reason: {:codepoint_out_of_range, "char", cp}], __STACKTRACE__
+  end
+
+  defp codepoint_to_utf8(cp),
+    do: raise(Error, reason: {:codepoint_out_of_range, "char", cp})
+
+  # Codepoint count of a UTF-8 binary. We do not use `String.length/1` since
+  # that returns *grapheme* count, whereas r7rs strings are sequences of
+  # Unicode scalars (codepoints).
+  defp string_codepoint_length(s), do: count_codepoints(s, 0)
+  defp count_codepoints(<<>>, n), do: n
+  defp count_codepoints(<<_::utf8, rest::binary>>, n), do: count_codepoints(rest, n + 1)
+
+  defp codepoint_at!(s, i, op) do
+    case codepoint_at(s, i) do
+      {:ok, cp} -> cp
+      :error -> raise(Error, reason: {:index_out_of_range, op, i, string_codepoint_length(s)})
+    end
+  end
+
+  defp codepoint_at(<<cp::utf8, _::binary>>, 0), do: {:ok, cp}
+  defp codepoint_at(<<_::utf8, rest::binary>>, n) when n > 0, do: codepoint_at(rest, n - 1)
+  defp codepoint_at(_, _), do: :error
+
+  defp string_codepoint_slice(s, start, stop) do
+    s
+    |> string_codepoint_codepoints(start, stop)
+    |> Enum.map(&<<&1::utf8>>)
+    |> IO.iodata_to_binary()
+  end
+
+  defp string_codepoint_codepoints(s, start, stop) do
+    do_codepoints_slice(s, 0, start, stop, [])
+  end
+
+  defp do_codepoints_slice(_s, i, _start, stop, acc) when i >= stop, do: Enum.reverse(acc)
+  defp do_codepoints_slice(<<>>, _i, _start, _stop, acc), do: Enum.reverse(acc)
+
+  defp do_codepoints_slice(<<cp::utf8, rest::binary>>, i, start, stop, acc) do
+    if i >= start do
+      do_codepoints_slice(rest, i + 1, start, stop, [cp | acc])
+    else
+      do_codepoints_slice(rest, i + 1, start, stop, acc)
+    end
   end
 end

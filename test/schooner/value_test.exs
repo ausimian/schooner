@@ -26,6 +26,14 @@ defmodule Schooner.ValueTest do
       refute Value.pair?(:null)
     end
 
+    test "list? recognises proper lists only" do
+      assert Value.list?(:null)
+      assert Value.list?(Value.list([1, 2, 3]))
+      refute Value.list?(Value.improper_list([1, 2], 3))
+      refute Value.list?(42)
+      refute Value.list?({:string, "abc"})
+    end
+
     test "list builders" do
       assert Value.list([]) == :null
       assert Value.list([1, 2, 3]) == {:pair, 1, {:pair, 2, {:pair, 3, :null}}}

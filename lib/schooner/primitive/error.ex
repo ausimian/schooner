@@ -40,4 +40,32 @@ defmodule Schooner.Primitive.Error do
   defp format({:not_representable_exact, value}) do
     "`#{inspect(value)}` is not representable as an exact integer"
   end
+
+  defp format({:index_out_of_range, op, index, length}) do
+    "index #{index} out of range in `#{op}` (length #{length})"
+  end
+
+  defp format({:improper_list, op, value}) do
+    "`#{op}` requires a proper list, got #{inspect(value)}"
+  end
+
+  defp format({:length_mismatch, op}) do
+    "`#{op}` requires arguments of equal length"
+  end
+
+  defp format({:invalid_utf8, op}) do
+    "`#{op}` received bytes that are not valid UTF-8"
+  end
+
+  defp format({:codepoint_out_of_range, op, cp}) do
+    "`#{op}`: #{inspect(cp)} is not a Unicode scalar value"
+  end
+
+  defp format({:byte_out_of_range, op, b}) do
+    "`#{op}`: #{inspect(b)} is not a byte (0..255)"
+  end
+
+  defp format({:invalid_size, op, k}) do
+    "`#{op}`: #{inspect(k)} is not a valid size"
+  end
 end
