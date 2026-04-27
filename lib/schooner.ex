@@ -16,6 +16,7 @@ defmodule Schooner do
 
   alias Schooner.Env
   alias Schooner.Eval
+  alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.ExceptionState
   alias Schooner.Expander
   alias Schooner.Primitives
@@ -36,6 +37,7 @@ defmodule Schooner do
     |> Primitives.Char.register_into()
     |> Primitives.Record.register_into()
     |> Primitives.Exceptions.register_into()
+    |> Primitives.Continuations.register_into()
   end
 
   @doc """
@@ -51,13 +53,15 @@ defmodule Schooner do
   """
   @spec eval(binary(), Env.t()) :: Value.t()
   def eval(source, %Env{} = env) when is_binary(source) do
-    # Snapshot/restore the per-process handler stack so each top-level
+    # Snapshot/restore the per-process control state so each top-level
     # call starts clean. Without this, a script that pushes a handler
-    # then escapes via a host-side throw (e.g. a test that catches
-    # `Schooner.Error`) would leak handlers into the next call in the
-    # same process.
-    prev = ExceptionState.snapshot()
+    # or registers a `call/cc` tag then escapes via a host-side throw
+    # (e.g. a test that catches `Schooner.Error`) would leak state into
+    # the next call in the same process.
+    prev_handlers = ExceptionState.snapshot()
+    prev_conts = ContinuationState.snapshot()
     ExceptionState.reset()
+    ContinuationState.reset()
 
     try do
       source
@@ -65,7 +69,8 @@ defmodule Schooner do
       |> Expander.expand_program(Expander.bootstrap_env())
       |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
     after
-      ExceptionState.restore(prev)
+      ExceptionState.restore(prev_handlers)
+      ContinuationState.restore(prev_conts)
     end
   end
 end

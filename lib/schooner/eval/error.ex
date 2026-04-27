@@ -24,6 +24,11 @@ defmodule Schooner.Eval.Error do
   defp format(:define_after_expression), do: "internal `define` after a non-definition expression"
   defp format(:empty_body), do: "body must contain at least one expression"
 
+  defp format(:continuation_expired) do
+    "continuation invoked after its dynamic extent has ended " <>
+      "(Schooner continuations are escape-only — see PLAN.md phase 12)"
+  end
+
   defp format({:rec_uninitialised, name}) do
     "letrec binding `#{name}` referenced before its init has been evaluated"
   end
