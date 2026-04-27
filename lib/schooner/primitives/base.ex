@@ -37,7 +37,13 @@ defmodule Schooner.Primitives.Base do
     end)
   end
 
-  defp specs do
+  @doc """
+  Return every base-library primitive as a `{name, arity, fun}` tuple.
+  Used by both `register_into/1` (flat-env path) and
+  `Schooner.Library.Standard` (registry path).
+  """
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     arithmetic_specs() ++
       comparison_specs() ++
       predicate_specs() ++

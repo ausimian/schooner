@@ -51,7 +51,12 @@ defmodule Schooner.Primitives.Record do
     end)
   end
 
-  defp specs do
+  @doc """
+  Return every record-machinery primitive as a `{name, arity, fun}`
+  tuple. Used by both `register_into/1` and `Schooner.Library.Standard`.
+  """
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     [
       {@instance_name, {:at_least, 1}, &record_instance/1},
       {@predicate_name, 2, &record_of?/1},

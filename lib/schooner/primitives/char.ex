@@ -30,7 +30,12 @@ defmodule Schooner.Primitives.Char do
     end)
   end
 
-  defp specs do
+  @doc """
+  Return every `(scheme char)` primitive as a `{name, arity, fun}`
+  tuple. Used by both `register_into/1` and `Schooner.Library.Standard`.
+  """
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     [
       {"char->integer", 1, &char_to_integer/1},
       {"integer->char", 1, &integer_to_char/1},

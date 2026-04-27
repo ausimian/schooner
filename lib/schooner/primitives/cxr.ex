@@ -43,9 +43,18 @@ defmodule Schooner.Primitives.Cxr do
   @doc "Register every `c..r` accessor on `env`."
   @spec register_into(Env.t()) :: Env.t()
   def register_into(%Env{} = env) do
-    Enum.reduce(@names, env, fn name, acc ->
-      Env.define(acc, name, Value.primitive(name, 1, build_fun(name)))
+    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
+      Env.define(acc, name, Value.primitive(name, arity, fun))
     end)
+  end
+
+  @doc """
+  Return every `c..r` accessor as a `{name, arity, fun}` tuple. Used by
+  both `register_into/1` and `Schooner.Library.Standard`.
+  """
+  @spec specs() :: [{binary(), 1, fun()}]
+  def specs do
+    Enum.map(@names, fn name -> {name, 1, build_fun(name)} end)
   end
 
   # Letters between `c` and `r` apply right-to-left: `(caddr x)` ⇒ d, d, a.

@@ -62,7 +62,12 @@ defmodule Schooner.Primitives.Continuations do
     end)
   end
 
-  defp specs do
+  @doc """
+  Return every continuation primitive as a `{name, arity, fun}` tuple.
+  Used by both `register_into/1` and `Schooner.Library.Standard`.
+  """
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     [
       {"call-with-current-continuation", 1, &call_cc/1},
       {"call/cc", 1, &call_cc/1},

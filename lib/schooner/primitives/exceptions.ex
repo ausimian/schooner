@@ -32,7 +32,12 @@ defmodule Schooner.Primitives.Exceptions do
     end)
   end
 
-  defp specs do
+  @doc """
+  Return every exception primitive as a `{name, arity, fun}` tuple.
+  Used by both `register_into/1` and `Schooner.Library.Standard`.
+  """
+  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  def specs do
     [
       {"error", {:at_least, 1}, &error/1},
       {"error?", 1, &error_p/1},

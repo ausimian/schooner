@@ -18,8 +18,78 @@ defmodule Schooner.Library.StandardTest do
     :ok
   end
 
-  test "build_registry/0 returns an empty registry in the 13.1 skeleton" do
-    assert Standard.build_registry() == %{}
+  test "build_registry/0 produces all standard libraries" do
+    registry = Standard.build_registry()
+
+    expected_names = [
+      ["scheme", "base"],
+      ["scheme", "cxr"],
+      ["scheme", "char"],
+      ["scheme", "inexact"],
+      ["scheme", "write"],
+      ["scheme", "read"],
+      ["scheme", "case-lambda"],
+      ["scheme", "lazy"]
+    ]
+
+    for name <- expected_names do
+      assert {:ok, _lib} = Library.lookup(registry, name),
+             "expected library #{Library.render_name(name)} in standard registry"
+    end
+  end
+
+  test "every standard library declares the :r7rs feature" do
+    registry = Standard.build_registry()
+
+    for {_name, lib} <- registry do
+      assert :r7rs in lib.features
+    end
+  end
+
+  test "(scheme base) exports the unioned primitives" do
+    %{exports: exports} =
+      Library.fetch!(Standard.build_registry(), ["scheme", "base"])
+
+    # spot-check one binding from each contributing module
+    assert match?({:var, _}, Map.fetch!(exports, "+")), "from Primitives.Base"
+    # `make-record-instance` etc. live behind generated names; check a stable one
+    assert match?({:var, _}, Map.fetch!(exports, "raise")), "from Primitives.Exceptions"
+    assert match?({:var, _}, Map.fetch!(exports, "call/cc")), "from Primitives.Continuations"
+  end
+
+  test "(scheme inexact) exports every r7rs name" do
+    %{exports: exports} =
+      Library.fetch!(Standard.build_registry(), ["scheme", "inexact"])
+
+    expected = ~w(exp log sin cos tan asin acos atan finite? infinite? nan?)
+    assert Enum.sort(Map.keys(exports)) == Enum.sort(expected)
+  end
+
+  test "(scheme write) exports the four write procedures" do
+    %{exports: exports} =
+      Library.fetch!(Standard.build_registry(), ["scheme", "write"])
+
+    expected = ~w(write display write-shared write-simple)
+    assert Enum.sort(Map.keys(exports)) == Enum.sort(expected)
+  end
+
+  test "(scheme read) exports read" do
+    %{exports: exports} =
+      Library.fetch!(Standard.build_registry(), ["scheme", "read"])
+
+    assert Map.keys(exports) == ["read"]
+  end
+
+  test "(scheme case-lambda) is a stub awaiting 13.3 macros" do
+    %{exports: exports} =
+      Library.fetch!(Standard.build_registry(), ["scheme", "case-lambda"])
+
+    assert exports == %{}
+  end
+
+  test "(scheme lazy) is a stub awaiting 13.3 macros" do
+    %{exports: exports} = Library.fetch!(Standard.build_registry(), ["scheme", "lazy"])
+    assert exports == %{}
   end
 
   test "boot/0 stores the registry under the canonical persistent term key" do
@@ -40,10 +110,6 @@ defmodule Schooner.Library.StandardTest do
   end
 
   test "the OTP application has already booted the registry" do
-    # `Schooner.Application.start/2` calls `Standard.boot/0` before any
-    # test runs, so the persistent-term key is populated for every
-    # process in the VM. This pins that contract — if someone removes
-    # the boot wiring, this test fails.
     {:ok, _apps_started} = Application.ensure_all_started(:schooner)
     refute :persistent_term.get({Library, :standard}, :unset) == :unset
   end
