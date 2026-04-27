@@ -21,7 +21,7 @@ defmodule Schooner.Env do
   @enforce_keys [:globals, :lex]
   defstruct [:globals, :lex]
 
-  @type frame :: %{optional(binary()) => Value.t()} | {:rec, :ets.tid()}
+  @type frame :: %{optional(binary()) => Value.t()} | {:rec, reference()}
   @type t :: %__MODULE__{globals: :ets.tid(), lex: [frame()]}
 
   @spec new() :: t()
@@ -41,10 +41,10 @@ defmodule Schooner.Env do
 
   defp lex_lookup([], _name), do: :error
 
-  defp lex_lookup([{:rec, tid} | rest], name) do
-    case :ets.lookup(tid, name) do
-      [{^name, value}] -> {:ok, value}
-      [] -> lex_lookup(rest, name)
+  defp lex_lookup([{:rec, ref} | rest], name) do
+    case Map.fetch(Process.get(ref), name) do
+      {:ok, _} = ok -> ok
+      :error -> lex_lookup(rest, name)
     end
   end
 
@@ -82,20 +82,25 @@ defmodule Schooner.Env do
   Push a fresh `letrec`-style frame whose bindings can be assigned later
   via `rec_set/3`. Closures created against the returned env see the
   bindings by frame identity, so forward references resolve once the
-  frame has been populated. The frame is backed by an ETS table owned by
-  the calling process and is cleaned up when that process exits.
+  frame has been populated. Backed by a process-dictionary slot keyed by
+  a fresh reference; the slot is process-local and is GC'd with the
+  owning process.
   """
   @spec extend_rec(t(), [binary()]) :: t()
   def extend_rec(%__MODULE__{lex: lex} = env, names) when is_list(names) do
-    tid = :ets.new(:schooner_rec, [:set, :protected])
-    Enum.each(names, fn name when is_binary(name) -> :ets.insert(tid, {name, :unspecified}) end)
-    %{env | lex: [{:rec, tid} | lex]}
+    ref = make_ref()
+    Process.put(ref, Map.new(names, fn name when is_binary(name) -> {name, :unspecified} end))
+    %{env | lex: [{:rec, ref} | lex]}
   end
 
   @doc "Set a binding in the topmost recursive frame on `env`."
   @spec rec_set(t(), binary(), Value.t()) :: t()
-  def rec_set(%__MODULE__{lex: [{:rec, tid} | _]} = env, name, value) when is_binary(name) do
-    :ets.insert(tid, {name, value})
+  def rec_set(%__MODULE__{lex: [{:rec, ref} | _]} = env, name, value) when is_binary(name) do
+    Process.put(ref, Map.put(Process.get(ref), name, value))
     env
   end
+
+  @doc "Pop the topmost lexical frame on `env`."
+  @spec pop(t()) :: t()
+  def pop(%__MODULE__{lex: [_top | rest]} = env), do: %{env | lex: rest}
 end

@@ -210,11 +210,8 @@ defmodule Schooner.Eval do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # and / or — short-circuit, return the deciding value (r7rs §4.2.1).
-  # `(and)` => #t, `(or)` => #f. Last form is in tail position.
-  # ---------------------------------------------------------------------------
-
+  # `(and)` returns #t and `(or)` returns #f per r7rs §4.2.1; the last
+  # sub-form is in tail position so a chain of `and`s preserves TCO.
   defp eval_and(:null, _env), do: Value.bool(true)
   defp eval_and({:pair, last, :null}, env), do: eval(last, env)
 
@@ -239,10 +236,6 @@ defmodule Schooner.Eval do
 
   defp eval_or(_, _env), do: raise(Error, reason: {:bad_special_form, "or"})
 
-  # ---------------------------------------------------------------------------
-  # when / unless
-  # ---------------------------------------------------------------------------
-
   defp eval_when({:pair, test, body}, env) when body != :null do
     if Value.truthy?(eval(test, env)) do
       eval_sequence(body, env)
@@ -263,10 +256,9 @@ defmodule Schooner.Eval do
 
   defp eval_unless(_, _env), do: raise(Error, reason: {:bad_special_form, "unless"})
 
-  # ---------------------------------------------------------------------------
-  # cond — supports (test), (test expr ...), (test => proc), (else expr ...).
-  # ---------------------------------------------------------------------------
-
+  # `cond` clause shapes per r7rs §4.2.1: `(test)` returns the test value,
+  # `(test expr ...)` evaluates the body, `(test => proc)` applies proc
+  # to the test value, and `(else expr ...)` is the unconditional fallback.
   defp eval_cond(:null, _env), do: :unspecified
 
   defp eval_cond({:pair, {:pair, {:sym, "else"}, body}, _rest}, env) when body != :null do
@@ -305,11 +297,8 @@ defmodule Schooner.Eval do
 
   defp eval_cond(_, _env), do: raise(Error, reason: {:bad_special_form, "cond"})
 
-  # ---------------------------------------------------------------------------
-  # case — keys matched with `eqv?`. `(else expr ...)` and `(keys => proc)`
-  # supported. Empty key list never matches (it falls through).
-  # ---------------------------------------------------------------------------
-
+  # `case` keys are matched with `eqv?` per r7rs §4.2.1. Empty key list
+  # never matches and falls through to the next clause.
   defp eval_case({:pair, key_expr, clauses}, env) do
     eval_case_clauses(eval(key_expr, env), clauses, env)
   end
@@ -320,33 +309,25 @@ defmodule Schooner.Eval do
 
   defp eval_case_clauses(key, {:pair, {:pair, {:sym, "else"}, body}, _rest}, env)
        when body != :null do
-    case body do
-      {:pair, {:sym, "=>"}, {:pair, recv, :null}} ->
-        apply_proc(eval(recv, env), [key])
-
-      _ ->
-        eval_sequence(body, env)
-    end
+    eval_case_body(key, body, env)
   end
 
   defp eval_case_clauses(key, {:pair, {:pair, keys, body}, rest}, env) do
     if case_match?(key, keys) do
-      case body do
-        {:pair, {:sym, "=>"}, {:pair, recv, :null}} ->
-          apply_proc(eval(recv, env), [key])
-
-        :null ->
-          raise(Error, reason: {:bad_special_form, "case"})
-
-        _ ->
-          eval_sequence(body, env)
-      end
+      eval_case_body(key, body, env)
     else
       eval_case_clauses(key, rest, env)
     end
   end
 
   defp eval_case_clauses(_key, _, _env), do: raise(Error, reason: {:bad_special_form, "case"})
+
+  defp eval_case_body(key, {:pair, {:sym, "=>"}, {:pair, recv, :null}}, env) do
+    apply_proc(eval(recv, env), [key])
+  end
+
+  defp eval_case_body(_key, :null, _env), do: raise(Error, reason: {:bad_special_form, "case"})
+  defp eval_case_body(_key, body, env), do: eval_sequence(body, env)
 
   defp case_match?(_key, :null), do: false
 
@@ -355,10 +336,6 @@ defmodule Schooner.Eval do
   end
 
   defp case_match?(_key, _), do: raise(Error, reason: {:bad_special_form, "case"})
-
-  # ---------------------------------------------------------------------------
-  # let — including the named-let recursion form.
-  # ---------------------------------------------------------------------------
 
   defp eval_let({:pair, {:sym, name}, {:pair, bindings_form, body}}, env)
        when body != :null do
@@ -429,10 +406,6 @@ defmodule Schooner.Eval do
 
   defp parse_bindings(_, ctx, _, _), do: raise(Error, reason: {:bad_special_form, ctx})
 
-  # ---------------------------------------------------------------------------
-  # do — iteration with stepped variables and a termination test.
-  # ---------------------------------------------------------------------------
-
   defp eval_do({:pair, bindings_form, {:pair, test_form, body}}, env) do
     {names, inits, steps} = parse_do_bindings(bindings_form)
     {test, results} = parse_do_test(test_form)
@@ -450,12 +423,10 @@ defmodule Schooner.Eval do
     else
       _ = eval_sequence(body, env)
       step_values = Enum.map(steps, &eval(&1, env))
-      next_env = Env.extend(pop_lex(env), Enum.zip(names, step_values))
+      next_env = Env.extend(Env.pop(env), Enum.zip(names, step_values))
       do_loop(names, steps, test, results, body, next_env)
     end
   end
-
-  defp pop_lex(%Env{lex: [_top | rest]} = env), do: %{env | lex: rest}
 
   defp parse_do_bindings(:null), do: {[], [], []}
 
@@ -474,12 +445,8 @@ defmodule Schooner.Eval do
   defp parse_do_test({:pair, test, results}), do: {test, results}
   defp parse_do_test(_), do: raise(Error, reason: {:bad_special_form, "do"})
 
-  # ---------------------------------------------------------------------------
-  # quasiquote — recursive expansion with nested-level tracking.
-  # `unquote` and `unquote-splicing` only fire at level 1; nested
-  # quasiquotes raise the level, nested unquotes lower it.
-  # ---------------------------------------------------------------------------
-
+  # `unquote` and `unquote-splicing` only fire at quasi level 1; nested
+  # `quasiquote` raises the level, nested `unquote` lowers it.
   defp eval_quasiquote_top({:pair, datum, :null}, env) do
     quasi(datum, env, 1)
   end
@@ -510,11 +477,7 @@ defmodule Schooner.Eval do
 
   defp quasi({:vector, t}, env, level) do
     list = Value.list(Tuple.to_list(t))
-
-    case quasi(list, env, level) do
-      {:pair, _, _} = pair -> {:vector, List.to_tuple(scheme_list_to_elixir(pair))}
-      :null -> {:vector, {}}
-    end
+    Value.vector(scheme_list_to_elixir(quasi(list, env, level)))
   end
 
   defp quasi(other, _env, _level), do: other
