@@ -14,27 +14,15 @@ defmodule Schooner.Primitives.Exceptions do
   is internal so it cannot be observed from Scheme.
   """
 
-  alias Schooner.Env
   alias Schooner.Eval
   alias Schooner.Eval.ExceptionState
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
   @doc """
-  Define every exception-system primitive on `env`. Returns the
-  same env (the global table is mutated in place — consistent with
-  `Env.define/3`).
-  """
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
-  @doc """
   Return every exception primitive as a `{name, arity, fun}` tuple.
-  Used by both `register_into/1` and `Schooner.Library.Standard`.
+  Consumed by `Schooner.Library.Standard` as part of the
+  `(scheme base)` assembly.
   """
   @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
   def specs do

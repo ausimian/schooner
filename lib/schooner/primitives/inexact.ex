@@ -17,24 +17,16 @@ defmodule Schooner.Primitives.Inexact do
   `:math.log/1` once we recognise zero as a special edge case.
   """
 
-  alias Schooner.Env
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
   defguardp is_finite_number(n) when is_integer(n) or is_float(n)
   defguardp is_special(n) when is_tuple(n) and tuple_size(n) == 2 and elem(n, 0) == :float_special
 
-  @doc "Define every `(scheme inexact)` primitive on `env`."
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
   @doc """
   Return every `(scheme inexact)` primitive as a `{name, arity, fun}`
-  tuple. Used by both `register_into/1` and `Schooner.Library.Standard`.
+  tuple. Used by `Schooner.Library.Standard` to assemble
+  `(scheme inexact)`.
   """
   @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
   def specs do

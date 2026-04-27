@@ -5,14 +5,19 @@ defmodule Schooner.Primitives.RecordTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Env
+  alias Schooner.Expander.SyntaxEnv
+  alias Schooner.Library
+  alias Schooner.Library.Import, as: LibImport
   alias Schooner.Primitive.Error, as: PError
-  alias Schooner.Primitives.Record
   alias Schooner.Value
 
+  # `(scheme base)` includes both Primitives.Base and the
+  # Primitives.Record machinery (`%record-instance`, `%record-of?`,
+  # `%record-ref`), so a single import covers what these tests need.
   defp env do
-    Env.new()
-    |> Schooner.Primitives.Base.register_into()
-    |> Record.register_into()
+    base = Library.fetch!(Library.standard(), ["scheme", "base"]).exports
+    {env, _} = LibImport.apply_bindings(base, Env.new(), SyntaxEnv.new())
+    env
   end
 
   defp run(source, env), do: Schooner.eval(source, env)

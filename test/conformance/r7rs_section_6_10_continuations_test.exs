@@ -30,23 +30,17 @@ defmodule Schooner.Conformance.R7rsSection610ContinuationsTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Env
-  alias Schooner.Primitives
   alias Schooner.Value
 
   @recorder_key {__MODULE__, :record}
+  @imports "(import (scheme base) (scheme cxr) (scheme char))\n"
 
-  defp run(source), do: Schooner.eval(source, recording_env())
+  defp run(source), do: Schooner.eval(@imports <> source, recording_env())
 
   defp recording_env do
     Process.delete(@recorder_key)
 
     Env.new()
-    |> Primitives.Base.register_into()
-    |> Primitives.Cxr.register_into()
-    |> Primitives.Char.register_into()
-    |> Primitives.Record.register_into()
-    |> Primitives.Exceptions.register_into()
-    |> Primitives.Continuations.register_into()
     |> Env.define(
       "record!",
       Value.primitive("record!", 1, fn [v] ->

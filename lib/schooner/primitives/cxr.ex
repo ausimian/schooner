@@ -9,9 +9,7 @@ defmodule Schooner.Primitives.Cxr do
   which keeps the mapping unambiguous and the code under a hundred lines.
   """
 
-  alias Schooner.Env
   alias Schooner.Primitive.Error
-  alias Schooner.Value
 
   # Names of length 2/3/4 between `c` and `r`, in the canonical r7rs order
   # (depth-first over `a`/`d` per position, outermost first).
@@ -40,17 +38,9 @@ defmodule Schooner.Primitives.Cxr do
                 end),
              do: "c" <> Enum.join(chars) <> "r"
 
-  @doc "Register every `c..r` accessor on `env`."
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
   @doc """
   Return every `c..r` accessor as a `{name, arity, fun}` tuple. Used by
-  both `register_into/1` and `Schooner.Library.Standard`.
+  `Schooner.Library.Standard` to assemble `(scheme cxr)`.
   """
   @spec specs() :: [{binary(), 1, fun()}]
   def specs do

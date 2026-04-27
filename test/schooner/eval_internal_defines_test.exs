@@ -273,11 +273,9 @@ defmodule Schooner.EvalInternalDefinesTest do
     end
 
     test "many sequential letrec*s do not leak slots" do
-      env = Schooner.standard_env()
-
       assert_no_slot_leak(fn ->
         for _ <- 1..50 do
-          Schooner.eval("(letrec* ((x 1) (y 2)) (+ x y))", env)
+          Schooner.run("(letrec* ((x 1) (y 2)) (+ x y))")
         end
       end)
     end

@@ -11,7 +11,6 @@ defmodule Schooner.Primitives.Char do
   longer mapping is reachable through the string ops.
   """
 
-  alias Schooner.Env
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
@@ -22,17 +21,10 @@ defmodule Schooner.Primitives.Char do
   # r7rs whitespace = Unicode Z* + the ASCII control whitespace (HT, LF, VT, FF, CR).
   @whitespace_re ~r/^[\p{Z}\t\n\v\f\r]$/u
 
-  @doc "Register every `(scheme char)` primitive on `env`."
-  @spec register_into(Env.t()) :: Env.t()
-  def register_into(%Env{} = env) do
-    Enum.reduce(specs(), env, fn {name, arity, fun}, acc ->
-      Env.define(acc, name, Value.primitive(name, arity, fun))
-    end)
-  end
-
   @doc """
   Return every `(scheme char)` primitive as a `{name, arity, fun}`
-  tuple. Used by both `register_into/1` and `Schooner.Library.Standard`.
+  tuple. Used by `Schooner.Library.Standard` to assemble
+  `(scheme char)`.
   """
   @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
   def specs do

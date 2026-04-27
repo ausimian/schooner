@@ -33,7 +33,6 @@ defmodule Schooner do
   alias Schooner.Expander
   alias Schooner.Library
   alias Schooner.Library.Import, as: LibImport
-  alias Schooner.Primitives
   alias Schooner.Reader
   alias Schooner.Value
 
@@ -44,27 +43,6 @@ defmodule Schooner do
   @default_run_imports "(import (scheme base) (scheme cxr) (scheme char) " <>
                          "(scheme inexact) (scheme write) (scheme read) " <>
                          "(scheme lazy))"
-
-  @doc """
-  Build an environment populated with every primitive in the standard
-  libraries via the legacy `register_into/1` chain. Retained for tests
-  that depend on the flat-env path. New callers should prefer the
-  import-driven `eval/2` instead.
-  """
-  @spec standard_env() :: Env.t()
-  def standard_env do
-    Env.new()
-    |> Primitives.Base.register_into()
-    |> Primitives.Cxr.register_into()
-    |> Primitives.Char.register_into()
-    |> Primitives.Inexact.register_into()
-    |> Primitives.Write.register_into()
-    |> Primitives.Read.register_into()
-    |> Primitives.Lazy.register_into()
-    |> Primitives.Record.register_into()
-    |> Primitives.Exceptions.register_into()
-    |> Primitives.Continuations.register_into()
-  end
 
   @doc """
   Read and evaluate `source` in a fresh empty env. If `source`
