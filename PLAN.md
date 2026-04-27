@@ -258,6 +258,7 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 - `call-with-current-continuation` / `call/cc` returns a single-use escape procedure implemented via a fresh `throw` tag and a top-level `catch` reinstalled at each `call/cc` site. Invoking the procedure throws; the matching `catch` returns its argument as the value of the original `call/cc` call.
 - `dynamic-wind`: maintain a wind stack. On every escape (continuation invocation, exception raise, normal return out of a `dynamic-wind`), compute the difference between current and target wind stacks and run the appropriate `before` / `after` thunks.
 - Document explicitly: continuations are single-shot upward only. Calling a continuation after its dynamic extent has ended raises a Schooner-specific error.
+- **Forward-compatibility note.** The single-shot restriction is intentionally a documented error rather than undefined behaviour — full first-class `call/cc` is planned for v2.0 (see "Deferred to v2.0" below). Lifting an error case is non-breaking, so v1 scripts that respect the restriction will continue to work unchanged on v2.
 
 **Tests:**
 
@@ -297,8 +298,9 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 {:ok, value} = Schooner.eval_string("(+ 1 (now-ms))", env)
 ```
 
-- `Schooner.compile/1` produces a fully expanded core AST for caching.
-- `Schooner.Host` defines the marshalling rules: Scheme `{:string, b}` ↔ Elixir binary, lists ↔ lists, integers/floats unwrapped, vectors ↔ tuples, symbols stay tagged. Anything not representable raises a marshalling error at the boundary.
+- `Schooner.compile/1` produces a fully expanded core AST for caching. The returned term is **opaque** (wrap as `%Schooner.Compiled{}` or document "treat as opaque") — embedders must not pattern-match on its internals. This is the seam that lets the v2.0 evaluator rewrite swap representations without breaking the public API.
+- `Schooner.Host` defines the marshalling rules: Scheme `{:string, b}` ↔ Elixir binary, lists ↔ lists, integers/floats unwrapped, vectors ↔ tuples, symbols stay tagged. Anything not representable raises a marshalling error at the boundary. **Closures, records of host-unknown types, and continuations are explicitly not marshallable** — listing continuations now (even though v1's escape-only continuations cannot meaningfully cross the boundary) makes the rule stable across the v2.0 multi-shot upgrade.
+- **Host-boundary continuation barrier.** A Scheme procedure invoked from a host function executes inside a continuation barrier: capturing a continuation across the boundary and invoking it after the host call has returned is a Schooner error. Under v1's escape-only model this case is unreachable, so the rule is documentation-only; under v2.0's first-class `call/cc` it becomes load-bearing. Documenting it in v1 keeps v2 from having to introduce a new error case retroactively.
 - The host is responsible for resource limits — document the recommended pattern (run `Schooner.eval/2` inside a spawned process with `:max_heap_size` and a timeout `:after`).
 
 **Tests:**
@@ -341,10 +343,15 @@ The primary verification is the per-phase test suite called out in each phase ab
 
 - Mutation: `set!`, `set-car!`, `set-cdr!`, `string-set!`, `vector-set!`, `bytevector-u8-set!`, record-type mutators.
 - Numeric tower beyond integer/float exactness tags.
-- Multi-shot `call/cc`.
 - File I/O, the port abstraction, `(scheme file)`, `(scheme load)`, `(scheme repl)`, `(scheme process-context)`, `(scheme eval)`, `(scheme complex)`, `(scheme r5rs)`.
 - Datum labels in the reader.
 - A REPL binary. (Easy follow-up if wanted, but not core.)
+
+### Deferred to v2.0
+
+Items intentionally not in v1 but planned as a future major-version change. v1 documents and tests the restricted behaviour so that lifting the restriction in v2 is non-breaking for embedders who respected the v1 contract.
+
+- **Full first-class `call/cc`.** Multi-shot continuations, re-entry after the original `call/cc` has returned, and `dynamic-wind` re-entry semantics (`before` thunks fire on re-entry, not just `after` on escape). Requires replacing the direct mutual-tail-call evaluator with either a CPS transform or an explicit-continuation-frame trampoline, plus host-boundary barrier enforcement (the documentation-only rule from phase 14 becomes load-bearing).
 
 ## Follow-ups after MVP
 
@@ -352,3 +359,4 @@ The primary verification is the per-phase test suite called out in each phase ab
 - Performance pass: bind-time variable resolution (de Bruijn indices or precomputed lookup paths), primitive inlining, constant folding during expansion.
 - Optional: a minimal `(scheme time)` and `(scheme eval)` exposed only when the host opts in.
 - Optional: source-mapped error traces from `eval` back to original reader positions.
+- **v2.0: full first-class `call/cc`.** Evaluator rewrite to CPS or explicit-continuation-frame trampoline; multi-shot continuations; `dynamic-wind` re-entry firing `before` thunks on re-entry; host-boundary barrier enforcement (turn the v1 documentation-only rule into a runtime check); new test surface — generators, `amb`, yin-yang puzzle, captured-continuation-loop OOM regression, captured-continuation interaction with `with-exception-handler`. Re-run all phase 4 TCO regressions under the new evaluator shape.
