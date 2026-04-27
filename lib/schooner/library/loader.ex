@@ -34,7 +34,11 @@ defmodule Schooner.Library.Loader do
   Errors raised by the loader quote the file path and `line:column` of
   the offending source datum where the reader can supply one. Libraries
   loaded from disk record their origin in the `:source` field as
-  `{:file, path, {line, column}}`.
+  `{:file, path, {line, column}}`. The topological pre-pass over
+  `include-library-declarations` runs without per-path positions, so a
+  malformed path datum found during that pass is reported without a
+  line number; once the pass succeeds, the main walker re-reads the
+  same files with positions and quotes any subsequent error precisely.
   """
 
   alias Schooner.Env
@@ -60,12 +64,13 @@ defmodule Schooner.Library.Loader do
   Returns a `%Schooner.Library{}` ready for `Library.register/2`.
 
   `ctx` carries the directory used to resolve relative include paths
-  and the path threaded into diagnostics.
+  and the path threaded into diagnostics. When called with a raw datum
+  (no positioned tree from the reader), error messages render without
+  line/column information.
   """
   @spec compile(Value.t(), Library.registry(), ctx()) :: Library.t()
   def compile(datum, registry, ctx \\ default_ctx()) do
-    pos_tree = synthetic_pos_tree(datum)
-    compile_positioned(datum, pos_tree, registry, ctx)
+    compile_positioned(datum, synthetic_pos_tree(datum), registry, ctx)
   end
 
   defp compile_positioned(
@@ -76,12 +81,12 @@ defmodule Schooner.Library.Loader do
        ) do
     name = Library.canonicalise_name(name_datum)
     decls = Value.to_list(decls_list)
-    decl_positions = decl_position_trees(pos_tree)
+    decl_positions = tail_positions(pos_tree, 2)
 
     parts =
       decls
       |> Enum.zip(decl_positions)
-      |> Enum.reduce(%{imports: [], body: [], exports: [], export_positions: [], features: []}, fn
+      |> Enum.reduce(%{imports: [], body: [], exports: [], features: []}, fn
         {decl, decl_pos}, acc ->
           apply_decl(decl, decl_pos, acc, registry, ctx)
       end)
@@ -96,8 +101,7 @@ defmodule Schooner.Library.Loader do
 
     Enum.each(expanded, fn form -> Eval.eval(form, env) end)
 
-    library_exports =
-      build_exports(parts.exports, parts.export_positions, env, post_syntax_env, name, ctx)
+    library_exports = build_exports(parts.exports, env, post_syntax_env, name, ctx)
 
     Library.new(
       name: name,
@@ -154,10 +158,10 @@ defmodule Schooner.Library.Loader do
 
     ctx = %{base_dir: base_dir, root_dir: base_dir, path: path}
 
-    positioned = Reader.read_string_positioned(source)
-
     libs =
-      Enum.map(positioned, fn
+      source
+      |> Reader.read_string_positioned()
+      |> Enum.map(fn
         {{:pair, {:sym, "define-library"}, _} = d, p} ->
           {d, p}
 
@@ -186,26 +190,16 @@ defmodule Schooner.Library.Loader do
   end
 
   defp apply_decl({:pair, {:sym, "export"}, names}, pos_tree, acc, _registry, _ctx) do
-    name_positions = export_entry_positions(pos_tree)
-
-    %{
-      acc
-      | exports: acc.exports ++ Value.to_list(names),
-        export_positions: acc.export_positions ++ name_positions
-    }
+    entries = Enum.zip(Value.to_list(names), tail_positions(pos_tree, 1))
+    %{acc | exports: acc.exports ++ entries}
   end
 
   defp apply_decl({:pair, {:sym, "cond-expand"}, clauses}, pos_tree, acc, registry, ctx) do
-    clauses_list = Value.to_list(clauses)
-    clause_positions = cond_expand_clause_positions(pos_tree)
-
-    case select_cond_expand(clauses_list, clause_positions, registry, ctx) do
+    case select_cond_expand(Value.to_list(clauses), tail_positions(pos_tree, 1), registry, ctx) do
       {:ok, sub_decls, sub_positions} ->
         sub_decls
         |> Enum.zip(sub_positions)
-        |> Enum.reduce(acc, fn {decl, p}, acc ->
-          apply_decl(decl, p, acc, registry, ctx)
-        end)
+        |> Enum.reduce(acc, fn {decl, p}, acc -> apply_decl(decl, p, acc, registry, ctx) end)
 
       :no_match ->
         acc
@@ -213,16 +207,15 @@ defmodule Schooner.Library.Loader do
   end
 
   defp apply_decl({:pair, {:sym, "include"}, paths}, pos_tree, acc, _registry, ctx) do
-    path_positions = include_path_positions(pos_tree)
-
     forms =
       paths
       |> Value.to_list()
-      |> Enum.zip(path_positions)
+      |> Enum.zip(tail_positions(pos_tree, 1))
       |> Enum.flat_map(fn {path_datum, path_pos} ->
         path = expect_string(path_datum, "include", path_pos, ctx)
         resolved = resolve_include_path(path, ctx, path_pos)
-        read_datums(resolved, path, path_pos, ctx)
+        {datums, _} = read_include_file(resolved, path, path_pos, ctx, false)
+        datums
       end)
 
     %{acc | body: acc.body ++ forms}
@@ -235,25 +228,18 @@ defmodule Schooner.Library.Loader do
          registry,
          ctx
        ) do
-    path_positions = include_path_positions(pos_tree)
-
     paths
     |> Value.to_list()
-    |> Enum.zip(path_positions)
+    |> Enum.zip(tail_positions(pos_tree, 1))
     |> Enum.reduce(acc, fn {path_datum, path_pos}, acc ->
       path = expect_string(path_datum, "include-library-declarations", path_pos, ctx)
       resolved = resolve_include_path(path, ctx, path_pos)
-
-      {decls, decl_positions} =
-        read_positioned_datums(resolved, path, path_pos, ctx)
-
+      {decls, decl_positions} = read_include_file(resolved, path, path_pos, ctx, true)
       inner_ctx = %{ctx | base_dir: Path.dirname(resolved), path: resolved}
 
       decls
       |> Enum.zip(decl_positions)
-      |> Enum.reduce(acc, fn {decl, p}, acc ->
-        apply_decl(decl, p, acc, registry, inner_ctx)
-      end)
+      |> Enum.reduce(acc, fn {decl, p}, acc -> apply_decl(decl, p, acc, registry, inner_ctx) end)
     end)
   end
 
@@ -303,23 +289,16 @@ defmodule Schooner.Library.Loader do
     end
   end
 
-  defp read_datums(resolved, original, pos, ctx) do
+  # `with_positions?` controls which reader API the file goes through.
+  # Returns `{datums, positions}` either way; `positions` is `[]` when
+  # the unpositioned reader was used.
+  defp read_include_file(resolved, original, pos, ctx, with_positions?) do
     case File.read(resolved) do
-      {:ok, source} ->
-        Reader.read_string(source)
+      {:ok, source} when with_positions? ->
+        Enum.unzip(Reader.read_string_positioned(source))
 
-      {:error, reason} ->
-        raise ArgumentError,
-              "#{format_at(ctx, pos)}could not read include file #{inspect(original)}: " <>
-                List.to_string(:file.format_error(reason))
-    end
-  end
-
-  defp read_positioned_datums(resolved, original, pos, ctx) do
-    case File.read(resolved) do
       {:ok, source} ->
-        positioned = Reader.read_string_positioned(source)
-        {Enum.map(positioned, &elem(&1, 0)), Enum.map(positioned, &elem(&1, 1))}
+        {Reader.read_string(source), []}
 
       {:error, reason} ->
         raise ArgumentError,
@@ -340,7 +319,7 @@ defmodule Schooner.Library.Loader do
          _registry,
          _ctx
        ) do
-    {:ok, Value.to_list(body), cond_expand_body_positions(body_clause_pos)}
+    {:ok, Value.to_list(body), tail_positions(body_clause_pos, 1)}
   end
 
   defp select_cond_expand(
@@ -349,10 +328,10 @@ defmodule Schooner.Library.Loader do
          registry,
          ctx
        ) do
-    requirement_pos = clause_requirement_position(clause_pos)
+    [requirement_pos | _] = Reader.list_positions(clause_pos)
 
     if requirement_satisfied?(requirement, requirement_pos, registry, ctx) do
-      {:ok, Value.to_list(body), cond_expand_body_positions(clause_pos)}
+      {:ok, Value.to_list(body), tail_positions(clause_pos, 1)}
     else
       select_cond_expand(rest, rest_positions, registry, ctx)
     end
@@ -372,14 +351,14 @@ defmodule Schooner.Library.Loader do
   defp requirement_satisfied?({:pair, {:sym, "and"}, body}, pos, registry, ctx) do
     body
     |> Value.to_list()
-    |> Enum.zip(combinator_argument_positions(pos))
+    |> Enum.zip(tail_positions(pos, 1))
     |> Enum.all?(fn {req, p} -> requirement_satisfied?(req, p, registry, ctx) end)
   end
 
   defp requirement_satisfied?({:pair, {:sym, "or"}, body}, pos, registry, ctx) do
     body
     |> Value.to_list()
-    |> Enum.zip(combinator_argument_positions(pos))
+    |> Enum.zip(tail_positions(pos, 1))
     |> Enum.any?(fn {req, p} -> requirement_satisfied?(req, p, registry, ctx) end)
   end
 
@@ -389,7 +368,7 @@ defmodule Schooner.Library.Loader do
          registry,
          ctx
        ) do
-    [inner_pos] = combinator_argument_positions(pos)
+    [inner_pos] = tail_positions(pos, 1)
     not requirement_satisfied?(inner, inner_pos, registry, ctx)
   end
 
@@ -406,10 +385,8 @@ defmodule Schooner.Library.Loader do
   # Exports
   # ---------------------------------------------------------------------------
 
-  defp build_exports(export_decls, export_positions, env, syntax_env, lib_name, ctx) do
-    export_decls
-    |> Enum.zip(export_positions)
-    |> Enum.reduce(%{}, fn {decl, decl_pos}, acc ->
+  defp build_exports(export_entries, env, syntax_env, lib_name, ctx) do
+    Enum.reduce(export_entries, %{}, fn {decl, decl_pos}, acc ->
       {internal, external} = parse_export_entry(decl, decl_pos, ctx)
       Map.put(acc, external, freeze_one(internal, env, syntax_env, lib_name, decl_pos, ctx))
     end)
@@ -452,13 +429,10 @@ defmodule Schooner.Library.Loader do
   # ---------------------------------------------------------------------------
 
   defp topological_order!(libs, ctx) do
-    by_name =
-      Map.new(libs, fn {datum, pos_tree} -> {extract_name(datum), {datum, pos_tree}} end)
+    by_name = Map.new(libs, fn {datum, pos_tree} -> {extract_name(datum), {datum, pos_tree}} end)
 
     deps =
-      Map.new(libs, fn {datum, _pos} ->
-        {extract_name(datum), local_deps(datum, by_name, ctx)}
-      end)
+      Map.new(libs, fn {datum, _} -> {extract_name(datum), local_deps(datum, by_name, ctx)} end)
 
     {ordered, _done} =
       Enum.reduce(Map.keys(deps), {[], MapSet.new()}, fn name, {acc, done} ->
@@ -494,11 +468,8 @@ defmodule Schooner.Library.Loader do
     rendered = Library.render_name(name)
 
     case Map.fetch(by_name, name) do
-      {:ok, {_datum, pos_tree}} ->
-        "#{rendered} (#{format_position(ctx, pos_tree)})"
-
-      :error ->
-        rendered
+      {:ok, {_datum, pos_tree}} -> "#{rendered} (#{format_position(ctx, pos_tree)})"
+      :error -> rendered
     end
   end
 
@@ -524,16 +495,11 @@ defmodule Schooner.Library.Loader do
     paths
     |> Value.to_list()
     |> Enum.flat_map(fn path_datum ->
-      # Topological pre-pass cannot easily quote individual sub-positions
-      # because positions for path datums are not threaded here; surface a
-      # generic error if the path is not a string.
-      path = expect_string(path_datum, "include-library-declarations", :unknown, ctx)
-      resolved = resolve_include_path(path, ctx, :unknown)
+      path = expect_string(path_datum, "include-library-declarations", nil, ctx)
+      resolved = resolve_include_path(path, ctx, nil)
       inner_ctx = %{ctx | base_dir: Path.dirname(resolved), path: resolved}
-
-      resolved
-      |> read_datums(path, :unknown, ctx)
-      |> Enum.flat_map(&decl_imports(&1, inner_ctx))
+      {datums, _} = read_include_file(resolved, path, nil, ctx, false)
+      Enum.flat_map(datums, &decl_imports(&1, inner_ctx))
     end)
   end
 
@@ -548,88 +514,37 @@ defmodule Schooner.Library.Loader do
 
   defp spec_to_canonical_dependency(name_datum), do: Library.canonicalise_name(name_datum)
 
-  # Position-tree extractors. Each takes the position tree of a list
-  # whose datum is `(head item1 item2 ...)` and returns the trees of
-  # the items, skipping the head symbol.
-  defp decl_position_trees(pos_tree) do
-    case Reader.list_positions(pos_tree) do
-      [_head, _name | decls] -> decls
-      _ -> []
-    end
+  # Drop the first `n` elements of a list-shaped position tree, returning
+  # the trees of the remaining elements. Atom-shaped trees (improper or
+  # already-empty spines) yield `[]`.
+  defp tail_positions(pos_tree, n) do
+    pos_tree |> Reader.list_positions() |> Enum.drop(n)
+  rescue
+    ArgumentError -> []
   end
 
-  defp export_entry_positions(pos_tree) do
-    case Reader.list_positions(pos_tree) do
-      [_head | entries] -> entries
-      _ -> []
-    end
-  end
-
-  defp include_path_positions(pos_tree) do
-    case Reader.list_positions(pos_tree) do
-      [_head | paths] -> paths
-      _ -> []
-    end
-  end
-
-  defp cond_expand_clause_positions(pos_tree) do
-    case Reader.list_positions(pos_tree) do
-      [_head | clauses] -> clauses
-      _ -> []
-    end
-  end
-
-  defp cond_expand_body_positions(clause_pos) do
-    case Reader.list_positions(clause_pos) do
-      [_requirement | body] -> body
-      _ -> []
-    end
-  end
-
-  defp clause_requirement_position(clause_pos) do
-    case Reader.list_positions(clause_pos) do
-      [requirement | _] -> requirement
-      _ -> clause_pos
-    end
-  end
-
-  defp combinator_argument_positions(pos_tree) do
-    case Reader.list_positions(pos_tree) do
-      [_head | args] -> args
-      _ -> []
-    end
-  end
-
-  # When `compile/3` is called directly with a raw datum (no reader
-  # positions), synthesise a placeholder tree so the recursive walker
-  # has a uniform shape. Synthesised positions render as `?:?`.
-  defp synthetic_pos_tree(:null), do: {:atom, :unknown}
+  # Build a synthetic position tree mirroring `datum`'s spine with `nil`
+  # in every position slot. Used when `compile/3` is called directly
+  # without a positioned tree from the reader: callers can still walk
+  # the parallel structure, and diagnostics simply omit line/column.
+  defp synthetic_pos_tree(:null), do: {:atom, nil}
 
   defp synthetic_pos_tree({:pair, car, cdr}),
-    do: {:pair, :unknown, synthetic_pos_tree(car), synthetic_pos_tree(cdr)}
+    do: {:pair, nil, synthetic_pos_tree(car), synthetic_pos_tree(cdr)}
 
   defp synthetic_pos_tree({:vector, t}) do
-    items =
-      0..(tuple_size(t) - 1)//1
-      |> Enum.map(fn i -> synthetic_pos_tree(elem(t, i)) end)
-
-    {:vector, :unknown, items}
+    items = for i <- 0..(tuple_size(t) - 1)//1, do: synthetic_pos_tree(elem(t, i))
+    {:vector, nil, items}
   end
 
-  defp synthetic_pos_tree(_other), do: {:atom, :unknown}
+  defp synthetic_pos_tree(_other), do: {:atom, nil}
 
   defp default_ctx, do: %{base_dir: nil, root_dir: nil, path: nil}
 
   defp library_source(%{path: nil}, _pos_tree, _datum), do: :native
 
-  defp library_source(%{path: path}, pos_tree, _datum) do
-    {:file, path, position_or_unknown(pos_tree)}
-  end
-
-  defp position_or_unknown({:atom, pos}), do: pos
-  defp position_or_unknown({:pair, pos, _, _}), do: pos
-  defp position_or_unknown({:vector, pos, _}), do: pos
-  defp position_or_unknown({:bytevector, pos}), do: pos
+  defp library_source(%{path: path}, pos_tree, _datum),
+    do: {:file, path, Reader.position_of(pos_tree)}
 
   # ---------------------------------------------------------------------------
   # Diagnostic formatting
@@ -642,25 +557,14 @@ defmodule Schooner.Library.Loader do
     end
   end
 
-  defp format_position(ctx, pos_tree) do
-    {line, col} = pos_or_unknown_pair(pos_tree)
-    path = ctx[:path] || ctx.path
+  defp format_position(ctx, nil), do: ctx.path || ""
 
-    case {path, line, col} do
-      {nil, :unknown, :unknown} -> ""
-      {nil, l, c} -> "line #{l}, column #{c}"
-      {p, :unknown, :unknown} -> p
-      {p, l, c} -> "#{p}:#{l}:#{c}"
+  defp format_position(ctx, pos_tree) do
+    case {ctx.path, Reader.position_of(pos_tree)} do
+      {nil, nil} -> ""
+      {path, nil} -> path
+      {nil, {line, col}} -> "line #{line}, column #{col}"
+      {path, {line, col}} -> "#{path}:#{line}:#{col}"
     end
   end
-
-  defp pos_or_unknown_pair(:unknown), do: {:unknown, :unknown}
-  defp pos_or_unknown_pair({:atom, :unknown}), do: {:unknown, :unknown}
-  defp pos_or_unknown_pair({:atom, {l, c}}), do: {l, c}
-  defp pos_or_unknown_pair({:pair, :unknown, _, _}), do: {:unknown, :unknown}
-  defp pos_or_unknown_pair({:pair, {l, c}, _, _}), do: {l, c}
-  defp pos_or_unknown_pair({:vector, :unknown, _}), do: {:unknown, :unknown}
-  defp pos_or_unknown_pair({:vector, {l, c}, _}), do: {l, c}
-  defp pos_or_unknown_pair({:bytevector, :unknown}), do: {:unknown, :unknown}
-  defp pos_or_unknown_pair({:bytevector, {l, c}}), do: {l, c}
 end

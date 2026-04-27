@@ -24,8 +24,11 @@ defmodule Schooner.Reader do
   `read_string_positioned/1` returns each top-level datum paired with a
   parallel "position tree" mirroring the datum's spine. Each position
   tree node carries the `{line, column}` of the datum's first token.
-  Use the helpers `position_of/1`, `list_positions/1` and
-  `vector_positions/1` to walk the tree alongside the datum.
+  Use the helpers `position_of/1` and `list_positions/1` to walk the
+  tree alongside the datum. The unpositioned `read_string/1` runs a
+  separate fast path that does not allocate the position spine — it is
+  the right choice for hot paths (REPL, `Standard.boot/0`) where
+  positions are unused.
   """
 
   alias Schooner.Lexer
@@ -58,7 +61,7 @@ defmodule Schooner.Reader do
   @doc "Read a list of lexer tokens into a list of top-level datums."
   @spec read_tokens([Lexer.token()]) :: [Value.t()]
   def read_tokens(tokens) when is_list(tokens) do
-    tokens |> do_read_all([]) |> Enum.map(fn {datum, _pos} -> datum end)
+    do_read_all(tokens, [])
   end
 
   @doc """
@@ -68,7 +71,7 @@ defmodule Schooner.Reader do
   """
   @spec read_string_positioned(binary()) :: [{Value.t(), pos_tree()}]
   def read_string_positioned(source) when is_binary(source) do
-    source |> Lexer.tokenise() |> do_read_all([])
+    source |> Lexer.tokenise() |> do_read_all_pos([])
   end
 
   # ---------------------------------------------------------------------------
@@ -96,64 +99,43 @@ defmodule Schooner.Reader do
     raise ArgumentError, "expected a list position tree, got #{inspect(other)}"
   end
 
-  @doc """
-  Element-wise position trees of a vector position tree.
-  """
-  @spec vector_positions(pos_tree()) :: [pos_tree()]
-  def vector_positions({:vector, _, items}), do: items
-
-  def vector_positions(other) do
-    raise ArgumentError, "expected a vector position tree, got #{inspect(other)}"
-  end
-
   # ---------------------------------------------------------------------------
-  # Top-level driver
+  # Unpositioned reader — hot path used by `read_string/1`
   # ---------------------------------------------------------------------------
 
   defp do_read_all(tokens, acc) do
     case read_one(tokens) do
       :eof -> Enum.reverse(acc)
-      {:ok, datum, pos, rest} -> do_read_all(rest, [{datum, pos} | acc])
+      {:ok, datum, rest} -> do_read_all(rest, [datum | acc])
     end
   end
 
-  # `read_one/1` is the only place that yields `:eof`. Every interior context
-  # (inside a list, after a quote marker) treats `:eof` as a structured
-  # error specific to that context.
   defp read_one(tokens) do
     case skip_datum_comments(tokens) do
       [] ->
         :eof
 
       tokens ->
-        {datum, pos, rest} = read_datum(tokens)
-        {:ok, datum, pos, rest}
+        {datum, rest} = read_datum(tokens)
+        {:ok, datum, rest}
     end
   end
-
-  # ---------------------------------------------------------------------------
-  # Datum comments — `#;` consumes the next datum
-  # ---------------------------------------------------------------------------
 
   defp skip_datum_comments([{:datum_comment, _, pos} | rest]) do
     case read_one(rest) do
       :eof -> raise Error, reason: :datum_comment_at_eof, position: pos
-      {:ok, _skipped, _pos, rest} -> skip_datum_comments(rest)
+      {:ok, _skipped, rest} -> skip_datum_comments(rest)
     end
   end
 
   defp skip_datum_comments(tokens), do: tokens
 
-  # ---------------------------------------------------------------------------
-  # Single-datum dispatch
-  # ---------------------------------------------------------------------------
-
-  defp read_datum([{:integer, n, pos} | rest]), do: {n, {:atom, pos}, rest}
-  defp read_datum([{:float, f, pos} | rest]), do: {f, {:atom, pos}, rest}
-  defp read_datum([{:bool, b, pos} | rest]), do: {Value.bool(b), {:atom, pos}, rest}
-  defp read_datum([{:string, s, pos} | rest]), do: {Value.string(s), {:atom, pos}, rest}
-  defp read_datum([{:char, cp, pos} | rest]), do: {Value.char(cp), {:atom, pos}, rest}
-  defp read_datum([{:ident, name, pos} | rest]), do: {Value.symbol(name), {:atom, pos}, rest}
+  defp read_datum([{:integer, n, _} | rest]), do: {n, rest}
+  defp read_datum([{:float, f, _} | rest]), do: {f, rest}
+  defp read_datum([{:bool, b, _} | rest]), do: {Value.bool(b), rest}
+  defp read_datum([{:string, s, _} | rest]), do: {Value.string(s), rest}
+  defp read_datum([{:char, cp, _} | rest]), do: {Value.char(cp), rest}
+  defp read_datum([{:ident, name, _} | rest]), do: {Value.symbol(name), rest}
 
   defp read_datum([{:quote, _, pos} | rest]), do: read_quoted("quote", rest, pos)
   defp read_datum([{:quasiquote, _, pos} | rest]), do: read_quoted("quasiquote", rest, pos)
@@ -175,30 +157,180 @@ defmodule Schooner.Reader do
     raise Error, reason: :unexpected_dot, position: pos
   end
 
-  # ---------------------------------------------------------------------------
-  # Quote forms — desugar to `(<sym> <datum>)`
-  # ---------------------------------------------------------------------------
-
   defp read_quoted(sym_name, tokens, pos) do
     case read_one(tokens) do
       :eof ->
         raise Error, reason: {:unexpected_eof_after, sym_name}, position: pos
 
-      {:ok, datum, inner_pos, rest} ->
-        value = Value.list([Value.symbol(sym_name), datum])
+      {:ok, datum, rest} ->
+        {Value.list([Value.symbol(sym_name), datum]), rest}
+    end
+  end
 
-        pos_tree =
-          {:pair, pos, {:atom, pos}, {:pair, pos, inner_pos, {:atom, pos}}}
+  defp read_list(tokens, start) do
+    case skip_datum_comments(tokens) do
+      [{:rparen, _, _} | rest] ->
+        {:null, rest}
 
-        {value, pos_tree, rest}
+      [{:dot, _, pos} | _] ->
+        raise Error, reason: :dot_at_list_start, position: pos
+
+      [] ->
+        raise Error, reason: :unterminated_list, position: start
+
+      tokens ->
+        {datum, rest} = read_datum(tokens)
+        read_list_tail(rest, [datum], start)
+    end
+  end
+
+  defp read_list_tail(tokens, acc, start) do
+    case skip_datum_comments(tokens) do
+      [{:rparen, _, _} | rest] ->
+        {Value.list(Enum.reverse(acc)), rest}
+
+      [{:dot, _, dot_pos} | rest] ->
+        finish_dotted_list(rest, acc, dot_pos, start)
+
+      [] ->
+        raise Error, reason: :unterminated_list, position: start
+
+      tokens ->
+        {datum, rest} = read_datum(tokens)
+        read_list_tail(rest, [datum | acc], start)
+    end
+  end
+
+  defp finish_dotted_list(tokens, acc, dot_pos, start) do
+    case skip_datum_comments(tokens) do
+      [{:rparen, _, _} | _] ->
+        raise Error, reason: :missing_tail_after_dot, position: dot_pos
+
+      [] ->
+        raise Error, reason: :missing_tail_after_dot, position: dot_pos
+
+      tail_tokens ->
+        {tail, rest} = read_datum(tail_tokens)
+
+        case skip_datum_comments(rest) do
+          [{:rparen, _, _} | rest2] ->
+            {Value.improper_list(Enum.reverse(acc), tail), rest2}
+
+          [{_, _, pos} | _] ->
+            raise Error, reason: :extra_after_dot, position: pos
+
+          [] ->
+            raise Error, reason: :unterminated_list, position: start
+        end
+    end
+  end
+
+  defp read_vector(tokens, start), do: do_read_vector(tokens, [], start)
+
+  defp do_read_vector(tokens, acc, start) do
+    case skip_datum_comments(tokens) do
+      [{:rparen, _, _} | rest] ->
+        {Value.vector(Enum.reverse(acc)), rest}
+
+      [{:dot, _, pos} | _] ->
+        raise Error, reason: :dot_in_vector, position: pos
+
+      [] ->
+        raise Error, reason: :unterminated_vector, position: start
+
+      tokens ->
+        {datum, rest} = read_datum(tokens)
+        do_read_vector(rest, [datum | acc], start)
+    end
+  end
+
+  defp read_bytevector(tokens, start), do: do_read_bytevector(tokens, [], start)
+
+  defp do_read_bytevector(tokens, acc, start) do
+    case skip_datum_comments(tokens) do
+      [{:rparen, _, _} | rest] ->
+        {Value.bytevector(Enum.reverse(acc)), rest}
+
+      [{:integer, n, pos} | rest] ->
+        if n in 0..255 do
+          do_read_bytevector(rest, [n | acc], start)
+        else
+          raise Error, reason: {:invalid_byte, n}, position: pos
+        end
+
+      [] ->
+        raise Error, reason: :unterminated_bytevector, position: start
+
+      [{tag, _, pos} | _] ->
+        raise Error, reason: {:invalid_in_bytevector, tag}, position: pos
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Lists — proper `(a b c)` and dotted `(a b . c)`
+  # Positioned reader — used by the library loader for diagnostics
   # ---------------------------------------------------------------------------
 
-  defp read_list(tokens, start) do
+  defp do_read_all_pos(tokens, acc) do
+    case read_one_pos(tokens) do
+      :eof -> Enum.reverse(acc)
+      {:ok, datum, pos, rest} -> do_read_all_pos(rest, [{datum, pos} | acc])
+    end
+  end
+
+  defp read_one_pos(tokens) do
+    case skip_datum_comments(tokens) do
+      [] ->
+        :eof
+
+      tokens ->
+        {datum, pos, rest} = read_datum_pos(tokens)
+        {:ok, datum, pos, rest}
+    end
+  end
+
+  defp read_datum_pos([{:integer, n, pos} | rest]), do: {n, {:atom, pos}, rest}
+  defp read_datum_pos([{:float, f, pos} | rest]), do: {f, {:atom, pos}, rest}
+  defp read_datum_pos([{:bool, b, pos} | rest]), do: {Value.bool(b), {:atom, pos}, rest}
+  defp read_datum_pos([{:string, s, pos} | rest]), do: {Value.string(s), {:atom, pos}, rest}
+  defp read_datum_pos([{:char, cp, pos} | rest]), do: {Value.char(cp), {:atom, pos}, rest}
+  defp read_datum_pos([{:ident, name, pos} | rest]), do: {Value.symbol(name), {:atom, pos}, rest}
+
+  defp read_datum_pos([{:quote, _, pos} | rest]), do: read_quoted_pos("quote", rest, pos)
+
+  defp read_datum_pos([{:quasiquote, _, pos} | rest]),
+    do: read_quoted_pos("quasiquote", rest, pos)
+
+  defp read_datum_pos([{:unquote, _, pos} | rest]), do: read_quoted_pos("unquote", rest, pos)
+
+  defp read_datum_pos([{:unquote_splicing, _, pos} | rest]) do
+    read_quoted_pos("unquote-splicing", rest, pos)
+  end
+
+  defp read_datum_pos([{:lparen, _, pos} | rest]), do: read_list_pos(rest, pos)
+  defp read_datum_pos([{:vector_open, _, pos} | rest]), do: read_vector_pos(rest, pos)
+  defp read_datum_pos([{:bytevector_open, _, pos} | rest]), do: read_bytevector_pos(rest, pos)
+
+  defp read_datum_pos([{:rparen, _, pos} | _]) do
+    raise Error, reason: :unexpected_close_paren, position: pos
+  end
+
+  defp read_datum_pos([{:dot, _, pos} | _]) do
+    raise Error, reason: :unexpected_dot, position: pos
+  end
+
+  defp read_quoted_pos(sym_name, tokens, pos) do
+    case read_one_pos(tokens) do
+      :eof ->
+        raise Error, reason: {:unexpected_eof_after, sym_name}, position: pos
+
+      {:ok, datum, inner_pos, rest} ->
+        value = Value.list([Value.symbol(sym_name), datum])
+        pos_tree = {:pair, pos, {:atom, pos}, {:pair, pos, inner_pos, {:atom, pos}}}
+        {value, pos_tree, rest}
+    end
+  end
+
+  defp read_list_pos(tokens, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
         {:null, {:atom, start}, rest}
@@ -210,12 +342,12 @@ defmodule Schooner.Reader do
         raise Error, reason: :unterminated_list, position: start
 
       tokens ->
-        {datum, datum_pos, rest} = read_datum(tokens)
-        read_list_tail(rest, [datum], [datum_pos], start)
+        {datum, datum_pos, rest} = read_datum_pos(tokens)
+        read_list_tail_pos(rest, [datum], [datum_pos], start)
     end
   end
 
-  defp read_list_tail(tokens, dacc, pacc, start) do
+  defp read_list_tail_pos(tokens, dacc, pacc, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
         datum = Value.list(Enum.reverse(dacc))
@@ -223,18 +355,18 @@ defmodule Schooner.Reader do
         {datum, pos_tree, rest}
 
       [{:dot, _, dot_pos} | rest] ->
-        finish_dotted_list(rest, dacc, pacc, dot_pos, start)
+        finish_dotted_list_pos(rest, dacc, pacc, dot_pos, start)
 
       [] ->
         raise Error, reason: :unterminated_list, position: start
 
       tokens ->
-        {datum, datum_pos, rest} = read_datum(tokens)
-        read_list_tail(rest, [datum | dacc], [datum_pos | pacc], start)
+        {datum, datum_pos, rest} = read_datum_pos(tokens)
+        read_list_tail_pos(rest, [datum | dacc], [datum_pos | pacc], start)
     end
   end
 
-  defp finish_dotted_list(tokens, dacc, pacc, dot_pos, start) do
+  defp finish_dotted_list_pos(tokens, dacc, pacc, dot_pos, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | _] ->
         raise Error, reason: :missing_tail_after_dot, position: dot_pos
@@ -243,7 +375,7 @@ defmodule Schooner.Reader do
         raise Error, reason: :missing_tail_after_dot, position: dot_pos
 
       tail_tokens ->
-        {tail, tail_pos, rest} = read_datum(tail_tokens)
+        {tail, tail_pos, rest} = read_datum_pos(tail_tokens)
 
         case skip_datum_comments(rest) do
           [{:rparen, _, _} | rest2] ->
@@ -266,13 +398,9 @@ defmodule Schooner.Reader do
     {:pair, start, head, build_list_pos(rest, tail_pos, start)}
   end
 
-  # ---------------------------------------------------------------------------
-  # Vectors — `#(...)`
-  # ---------------------------------------------------------------------------
+  defp read_vector_pos(tokens, start), do: do_read_vector_pos(tokens, [], [], start)
 
-  defp read_vector(tokens, start), do: do_read_vector(tokens, [], [], start)
-
-  defp do_read_vector(tokens, dacc, pacc, start) do
+  defp do_read_vector_pos(tokens, dacc, pacc, start) do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
         datum = Value.vector(Enum.reverse(dacc))
@@ -285,34 +413,14 @@ defmodule Schooner.Reader do
         raise Error, reason: :unterminated_vector, position: start
 
       tokens ->
-        {datum, datum_pos, rest} = read_datum(tokens)
-        do_read_vector(rest, [datum | dacc], [datum_pos | pacc], start)
+        {datum, datum_pos, rest} = read_datum_pos(tokens)
+        do_read_vector_pos(rest, [datum | dacc], [datum_pos | pacc], start)
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Bytevectors — `#u8(...)`, only integer tokens in 0..255
-  # ---------------------------------------------------------------------------
-
-  defp read_bytevector(tokens, start), do: do_read_bytevector(tokens, [], start)
-
-  defp do_read_bytevector(tokens, acc, start) do
-    case skip_datum_comments(tokens) do
-      [{:rparen, _, _} | rest] ->
-        {Value.bytevector(Enum.reverse(acc)), {:bytevector, start}, rest}
-
-      [{:integer, n, pos} | rest] ->
-        if n in 0..255 do
-          do_read_bytevector(rest, [n | acc], start)
-        else
-          raise Error, reason: {:invalid_byte, n}, position: pos
-        end
-
-      [] ->
-        raise Error, reason: :unterminated_bytevector, position: start
-
-      [{tag, _, pos} | _] ->
-        raise Error, reason: {:invalid_in_bytevector, tag}, position: pos
+  defp read_bytevector_pos(tokens, start) do
+    case do_read_bytevector(tokens, [], start) do
+      {datum, rest} -> {datum, {:bytevector, start}, rest}
     end
   end
 end

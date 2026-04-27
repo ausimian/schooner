@@ -214,9 +214,9 @@ defmodule Schooner.Library.LoaderTest do
         (begin (define x 1)))
       """)
 
-      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:11.*not-defined/s, fn ->
-        Loader.load_file(path, standard())
-      end
+      err = assert_raise ArgumentError, fn -> Loader.load_file(path, standard()) end
+      assert err.message =~ "#{path}:3:11"
+      assert err.message =~ "not-defined"
     end
 
     @tag :tmp_dir
@@ -229,9 +229,9 @@ defmodule Schooner.Library.LoaderTest do
           (123 (export nope))))
       """)
 
-      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:6.*invalid cond-expand/s, fn ->
-        Loader.load_file(path, standard())
-      end
+      err = assert_raise ArgumentError, fn -> Loader.load_file(path, standard()) end
+      assert err.message =~ "#{path}:3:6"
+      assert err.message =~ "invalid cond-expand"
     end
 
     @tag :tmp_dir
@@ -244,9 +244,9 @@ defmodule Schooner.Library.LoaderTest do
         (export (rename only-one)))
       """)
 
-      assert_raise ArgumentError, ~r/#{Regex.escape(path)}:3:11.*invalid export entry/s, fn ->
-        Loader.load_file(path, standard())
-      end
+      err = assert_raise ArgumentError, fn -> Loader.load_file(path, standard()) end
+      assert err.message =~ "#{path}:3:11"
+      assert err.message =~ "invalid export entry"
     end
 
     @tag :tmp_dir
