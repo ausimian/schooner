@@ -19,6 +19,8 @@ defmodule Schooner do
   alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.ExceptionState
   alias Schooner.Expander
+  alias Schooner.Library
+  alias Schooner.Library.Import, as: LibImport
   alias Schooner.Primitives
   alias Schooner.Reader
   alias Schooner.Value
@@ -68,9 +70,16 @@ defmodule Schooner do
     ContinuationState.reset()
 
     try do
-      source
-      |> Reader.read_string()
-      |> Expander.expand_program(Expander.bootstrap_env())
+      forms = Reader.read_string(source)
+      {import_specs, body} = LibImport.extract_program_imports(forms)
+
+      bindings = LibImport.resolve(import_specs, Library.standard())
+
+      {env, syntax_env} =
+        LibImport.apply_bindings(bindings, env, Expander.bootstrap_env())
+
+      body
+      |> Expander.expand_program(syntax_env)
       |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
     after
       ExceptionState.restore(prev_handlers)
