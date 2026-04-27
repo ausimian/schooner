@@ -49,6 +49,11 @@ defmodule Schooner.Eval.ExceptionState do
   def snapshot, do: get_stack()
 
   @spec restore([Value.t()]) :: :ok
+  def restore([]) do
+    Process.delete(@key)
+    :ok
+  end
+
   def restore(stack) when is_list(stack) do
     Process.put(@key, stack)
     :ok

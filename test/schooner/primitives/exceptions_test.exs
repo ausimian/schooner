@@ -22,7 +22,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
         end
 
       assert {:error_obj, :user, {:string, "boom"}, [1, {:sym, "two"}]} = e.value
-      assert e.irritants == [1, {:sym, "two"}]
+      assert Schooner.Error.irritants(e) == [1, {:sym, "two"}]
     end
 
     test "non-string message rejected" do
@@ -117,7 +117,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
           run(~S|(error "message" 1 2)|)
         end
 
-      assert e.irritants == [1, 2]
+      assert Schooner.Error.irritants(e) == [1, 2]
       assert {:error_obj, :user, {:string, "message"}, _} = e.value
     end
   end

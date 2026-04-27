@@ -2,10 +2,10 @@ defmodule Schooner.Error do
   @moduledoc """
   Host-side exception raised when a Scheme `raise` / `raise-continuable`
   / `error` is not caught by any installed `with-exception-handler` or
-  `guard`. The struct carries the original Scheme value verbatim so the
-  host can inspect it; for the common case of an error object the
-  `:message` and `:irritants` fields are pre-extracted to make
-  pattern-matching from Elixir straightforward.
+  `guard`. The struct carries the original Scheme value verbatim in
+  `:value`; for an error object the host can pattern-match
+  `{:error_obj, kind, message, irritants}` directly, or use
+  `irritants/1` for the common case.
 
   This is distinct from `Schooner.Eval.Error` and
   `Schooner.Primitive.Error`, which signal evaluator/primitive failures
@@ -16,20 +16,23 @@ defmodule Schooner.Error do
 
   alias Schooner.Value
 
-  defexception [:value, :message, :irritants]
+  @type t :: %__MODULE__{value: Value.t(), message: binary() | nil}
+
+  defexception [:value, :message]
 
   @impl true
   def exception(opts) do
     value = Keyword.fetch!(opts, :value)
-
-    irritants =
-      case value do
-        {:error_obj, _kind, _msg, irrs} -> irrs
-        _ -> []
-      end
-
-    %__MODULE__{value: value, message: format(value), irritants: irritants}
+    %__MODULE__{value: value, message: format(value)}
   end
+
+  @doc """
+  Return the irritants of `error`'s wrapped value when it is an error
+  object; `[]` for any other raised value.
+  """
+  @spec irritants(t()) :: [Value.t()]
+  def irritants(%__MODULE__{value: {:error_obj, _, _, irrs}}), do: irrs
+  def irritants(%__MODULE__{}), do: []
 
   defp format({:error_obj, _kind, message, irritants}) do
     msg_text =
