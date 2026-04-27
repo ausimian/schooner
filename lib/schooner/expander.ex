@@ -56,9 +56,20 @@ defmodule Schooner.Expander do
 
   @doc """
   Return the cached bootstrap syntax env containing the derived-form
-  macros. Computed lazily on first call and cached via
-  `:persistent_term` so that subsequent runs do not re-parse the
-  bootstrap source.
+  macros.
+
+  Normally populated eagerly by `Schooner.Application.start/2` so that
+  the first `Schooner.eval/2` call on the node pays no bootstrap
+  parse-and-expand cost and concurrent first-evals cannot race the
+  put. A lazy fallback is retained for callers that use the library
+  without starting the OTP application (some test scenarios). Under
+  normal operation the fallback branch is dead.
+
+  The fallback is *not* race-safe: two callers observing `:unset`
+  simultaneously will both build and both `put`; the second `put`
+  becomes an update of an existing key, which triggers a global
+  literal-area GC across all processes. Eager init from
+  `Schooner.Application` avoids this by single-flighting the put.
   """
   @spec bootstrap_env() :: SyntaxEnv.t()
   def bootstrap_env do
