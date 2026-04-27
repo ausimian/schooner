@@ -188,6 +188,7 @@ Reason for not waiting: it lets phases 5/6 be exercised with realistic Scheme co
 
 - Body of `lambda` / `let` / etc. with internal `define`s desugars to `letrec*`.
 - Implement the "tying the knot" pattern in `Schooner.Env`: a `letrec*` frame is constructed once, and closure values capture the frame by reference so forward references resolve when invoked.
+- Address the rec-frame lifecycle leak introduced in phase 7. The current implementation (`Env.extend_rec/2`) backs each rec frame with a process-dictionary slot keyed by `make_ref()` and never deletes it; the slot only goes away when the owning process exits. Recommended embedding pattern (spawn-per-eval) bounds this in practice, but a long-running host that runs many `letrec`/`letrec*`/named-`let` forms in one process accumulates orphan slots. Phase 8 either (a) routes cleanup through the body's tail-call return path without breaking the TCO invariant in `eval.ex`, or (b) replaces mutable rec frames with a non-mutating alternative (e.g. capturing an env-thunk in closures and resolving lazily). Option (b) is preferred because it removes the leak entirely; option (a) is a smaller change with the same observable effect.
 
 **Tests:**
 
