@@ -229,7 +229,11 @@ defmodule Schooner.Expander.SyntaxRulesTest do
 
   describe "strip_mark/1" do
     test "round-trips a marked name back to its base" do
-      marked = "foo" <> SyntaxRules.mark_separator() <> "42"
+      # The mark separator is a NUL byte: invalid in r7rs identifiers
+      # so it can never collide with a user-written name. The exact
+      # encoding is internal to SyntaxRules; we synthesise one here
+      # purely to confirm strip_mark is the inverse of marking.
+      marked = "foo" <> <<0>> <> "42"
       assert SyntaxRules.strip_mark(marked) == {:ok, "foo"}
     end
 

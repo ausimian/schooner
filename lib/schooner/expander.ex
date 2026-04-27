@@ -100,7 +100,7 @@ defmodule Schooner.Expander do
   defp expand_top(form, env), do: expand(form, env)
 
   defp expand_top_begin(:null, env, acc) do
-    {:pair, {:sym, "begin"}, build_list(Enum.reverse(acc))}
+    {:pair, {:sym, "begin"}, Value.list(Enum.reverse(acc))}
     |> finalise_top_begin(env, acc)
   end
 
@@ -116,9 +116,6 @@ defmodule Schooner.Expander do
   defp finalise_top_begin(_form, env, []), do: {:syntax_def, env}
 
   defp finalise_top_begin(form, _env, _acc), do: form
-
-  defp build_list([]), do: :null
-  defp build_list([h | t]), do: {:pair, h, build_list(t)}
 
   # ---------------------------------------------------------------------------
   # Recursive expansion of an arbitrary form
@@ -187,11 +184,10 @@ defmodule Schooner.Expander do
     {:pair, expand(head, env), expand_each(args, env)}
   end
 
-  # Recognise a special-form name that has been alpha-renamed by hygiene
-  # (e.g. `lambda<NUL>42` produced from a template that didn't list the
-  # special form in its `core_keywords` set). We re-dispatch on the
-  # canonical form so the dedicated `expand_lambda` / `expand_define` /
-  # ... clauses do their thing and the output stays canonical.
+  # A core special form's name reached us with a hygiene mark — i.e.
+  # a template wrote one of `quote`/`if`/`lambda`/etc. without
+  # listing it in `SyntaxRules`'s `@core_keywords`. Re-dispatch on
+  # the canonical name so the dedicated handlers fire.
   defp canonicalise_special(base, {:pair, {:sym, _}, tail}, env) do
     expand({:pair, {:sym, base}, tail}, env)
   end
@@ -273,34 +269,41 @@ defmodule Schooner.Expander do
   defp expand_if(_, _env), do: raise(Error, reason: {:bad_special_form, "if"})
 
   defp expand_letrec_star({:pair, bindings_form, body}, env) when body != :null do
-    names = letrec_binding_names(bindings_form)
+    parsed = parse_letrec_bindings(bindings_form, [])
+    names = Enum.map(parsed, fn {sym, _} -> sym_name(sym) end)
     inner = SyntaxEnv.push_variables(env, names)
-    expanded_bindings = expand_letrec_bindings(bindings_form, inner)
-    expanded_body = expand_each(body, inner)
 
-    {:pair, {:sym, "letrec*"}, {:pair, expanded_bindings, expanded_body}}
+    expanded_bindings =
+      parsed
+      |> Enum.map(fn {sym, init} ->
+        {:pair, sym, {:pair, expand(init, inner), :null}}
+      end)
+      |> Value.list()
+
+    {:pair, {:sym, "letrec*"}, {:pair, expanded_bindings, expand_each(body, inner)}}
   end
 
   defp expand_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
-  defp letrec_binding_names(:null), do: []
+  defp sym_name({:sym, name}), do: name
 
-  defp letrec_binding_names({:pair, {:pair, {:sym, name}, _}, rest}) do
-    [name | letrec_binding_names(rest)]
-  end
+  # Single walk over the binding list yielding `[{sym, init}, ...]` —
+  # used twice by the caller (once to derive the binder names for
+  # the syntax-env shadow, once to expand the inits in that
+  # already-shadowed env), avoiding the duplicate parse the previous
+  # split into `letrec_binding_names/1` and `expand_letrec_bindings/2`
+  # required.
+  defp parse_letrec_bindings(:null, acc), do: Enum.reverse(acc)
 
-  defp letrec_binding_names(_), do: raise(Error, reason: {:bad_special_form, "letrec*"})
-
-  defp expand_letrec_bindings(:null, _env), do: :null
-
-  defp expand_letrec_bindings(
-         {:pair, {:pair, {:sym, _name} = sym, {:pair, init, :null}}, rest},
-         env
+  defp parse_letrec_bindings(
+         {:pair, {:pair, {:sym, _} = sym, {:pair, init, :null}}, rest},
+         acc
        ) do
-    {:pair, {:pair, sym, {:pair, expand(init, env), :null}}, expand_letrec_bindings(rest, env)}
+    parse_letrec_bindings(rest, [{sym, init} | acc])
   end
 
-  defp expand_letrec_bindings(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+  defp parse_letrec_bindings(_, _),
+    do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
   defp expand_let_syntax({:pair, bindings_form, body}, env) when body != :null do
     bindings = parse_syntax_bindings(bindings_form, env, "let-syntax")

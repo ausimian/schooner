@@ -35,17 +35,20 @@ defmodule Schooner.Expander.SyntaxRules do
   ## Hygiene
 
   At instantiation time each template-introduced identifier is
-  rewritten to `name + @mark_separator + mark` where `mark` is a
-  fresh integer per expansion. Pattern variables are substituted
-  verbatim, preserving any marks on user-supplied identifiers.
+  rewritten to `name <> @mark_separator <> Integer.to_string(mark)`
+  where `mark` is a fresh integer per expansion and the separator
+  is a NUL byte (invalid in r7rs identifiers, so the marked name
+  cannot collide with anything a user can write). Pattern variables
+  are substituted verbatim, preserving any marks on user-supplied
+  identifiers.
 
   At lookup time (in the expander's syntax env and in the evaluator's
   runtime env), an unmarked-base fallback handles free template
-  references — `+__42` is bound nowhere lexically, so the lookup
-  strips the mark and finds the global `+`. Template-introduced
-  binders such as the `t` in `(let ((t e1)) ...)` keep the mark
-  through both the binding and reference sites, which is what makes
-  the macro hygienic.
+  references — a marked `+` is bound nowhere lexically, so the
+  lookup strips the mark and finds the global `+`. Template-
+  introduced binders such as the `t` in `(let ((t e1)) ...)` keep
+  the mark through both the binding and reference sites, which is
+  what makes the macro hygienic.
   """
 
   alias Schooner.Eval.Error, as: EvalError
@@ -84,21 +87,26 @@ defmodule Schooner.Expander.SyntaxRules do
 
   def compile(_), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
 
-  @doc "Mark separator used by alpha-renaming. Exposed for the evaluator."
-  @spec mark_separator() :: binary()
-  def mark_separator, do: @mark_separator
-
   @doc """
   If `name` carries a hygiene mark, return `{:ok, base_name}` with the
   mark removed. Returns `:error` otherwise. Useful for the evaluator's
   fallback lookup and for the expander when an introduced keyword
   needs to be recognised as its base form.
+
+  Short-circuits with a no-allocation `:binary.match/2` before
+  falling into `:binary.split/2`, because the overwhelming common
+  case is unmarked names — every plain user-written variable
+  reference goes through this on a lookup miss.
   """
   @spec strip_mark(binary()) :: {:ok, binary()} | :error
   def strip_mark(name) when is_binary(name) do
-    case :binary.split(name, @mark_separator) do
-      [base, _mark] -> {:ok, base}
-      [_only] -> :error
+    case :binary.match(name, @mark_separator) do
+      :nomatch ->
+        :error
+
+      _ ->
+        [base, _mark] = :binary.split(name, @mark_separator)
+        {:ok, base}
     end
   end
 
@@ -156,7 +164,7 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp compile_pattern({:vector, t}, literals, depth) do
-    items = Tuple.to_list(t) |> wrap_as_list()
+    items = t |> Tuple.to_list() |> Value.list()
 
     case compile_list_pattern(items, literals, depth, []) do
       {:list, head, :null} -> {:vector, head}
@@ -166,9 +174,6 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp compile_pattern(other, _literals, _depth), do: {:const, other}
-
-  defp wrap_as_list([]), do: :null
-  defp wrap_as_list([h | t]), do: {:pair, h, wrap_as_list(t)}
 
   defp compile_list_pattern(
          {:pair, head, {:pair, {:sym, @ellipsis}, rest}},
@@ -278,7 +283,7 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp compile_template({:vector, t}, pvars) do
-    items = Tuple.to_list(t) |> wrap_as_list()
+    items = t |> Tuple.to_list() |> Value.list()
     {:t_list, list_items, _tail} = compile_template_list(items, pvars, [])
     {:t_vector, list_items}
   end
@@ -330,7 +335,7 @@ defmodule Schooner.Expander.SyntaxRules do
     items =
       t
       |> Tuple.to_list()
-      |> wrap_as_list()
+      |> Value.list()
       |> compile_quoted_list(pvars, [])
 
     case items do
@@ -417,7 +422,7 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp match({:vector, items}, {:vector, t}, env) do
-    list = wrap_as_list(Tuple.to_list(t))
+    list = Value.list(Tuple.to_list(t))
 
     case match_each(items, list, env) do
       {:ok, env2, :null} -> {:ok, env2}
@@ -426,7 +431,7 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp match({:vector_ell, pre, ell, post}, {:vector, t}, env) do
-    list = wrap_as_list(Tuple.to_list(t))
+    list = Value.list(Tuple.to_list(t))
     match_list_ell(pre, ell, post, :null, list, env)
   end
 
@@ -456,11 +461,12 @@ defmodule Schooner.Expander.SyntaxRules do
   defp match_after_pre(ell_pat, post_pats, tail_pat, input, env) do
     {items, tail_input} = collect_proper(input)
     num_post = length(post_pats)
+    num_items = length(items)
 
-    if length(items) < num_post do
+    if num_items < num_post do
       :no_match
     else
-      {ell_items, post_items} = Enum.split(items, length(items) - num_post)
+      {ell_items, post_items} = Enum.split(items, num_items - num_post)
 
       with {:ok, ell_bindings} <- match_ellipsis(ell_pat, ell_items),
            env2 <- merge_bindings(env, ell_bindings),
@@ -623,11 +629,21 @@ defmodule Schooner.Expander.SyntaxRules do
       raise Error, reason: {:ellipsis_no_pattern_var, "quoted template"}
     end
 
-    count = ellipsis_iteration_count(pvars_used, env)
+    pvars_used
+    |> pvar_lists(env)
+    |> validate_pvar_lengths(pvars_used)
+    |> iterate_quoted_ellipsis(q, n, env, pvars_used)
+  end
 
-    Enum.flat_map(0..(count - 1)//1, fn i ->
-      expand_quoted_ellipsis(q, n - 1, ellipsis_sub_env(env, pvars_used, i))
-    end)
+  defp iterate_quoted_ellipsis([[] | _], _q, _n, _env, _pvars), do: []
+  defp iterate_quoted_ellipsis([], _q, _n, _env, _pvars), do: []
+
+  defp iterate_quoted_ellipsis(lists, q, n, env, pvars_used) do
+    {heads, tails} = peel_lists(lists, [], [])
+    sub_env = put_pvars(env, pvars_used, heads)
+
+    expand_quoted_ellipsis(q, n - 1, sub_env) ++
+      iterate_quoted_ellipsis(tails, q, n, env, pvars_used)
   end
 
   defp expand_template_items([], _env, _mark), do: []
@@ -649,40 +665,56 @@ defmodule Schooner.Expander.SyntaxRules do
       raise Error, reason: {:ellipsis_no_pattern_var, "template"}
     end
 
-    count = ellipsis_iteration_count(pvars_used, env)
-    iterate_ellipsis(tmpl, n, env, mark, pvars_used, count)
+    pvars_used
+    |> pvar_lists(env)
+    |> validate_pvar_lengths(pvars_used)
+    |> iterate_ellipsis(tmpl, n, env, mark, pvars_used)
   end
 
-  defp iterate_ellipsis(_tmpl, _n, _env, _mark, _pvars, 0), do: []
+  # The driving pvars all have the same length (or we'd raise) and we
+  # need O(N) total work per iteration count, not O(N²). Walk all
+  # the bound `:ellipsis_list`s in lockstep, peeling one element off
+  # each at every step and putting them into the sub-env. Termination
+  # is by emptiness of the first list — `validate_pvar_lengths` has
+  # already proved every list has the same length, so checking one
+  # is enough.
+  defp iterate_ellipsis([[] | _], _tmpl, _n, _env, _mark, _pvars), do: []
+  defp iterate_ellipsis([], _tmpl, _n, _env, _mark, _pvars), do: []
 
-  defp iterate_ellipsis(tmpl, n, env, mark, pvars_used, count) do
-    Enum.flat_map(0..(count - 1)//1, fn i ->
-      expand_ellipsis(tmpl, n - 1, ellipsis_sub_env(env, pvars_used, i), mark)
+  defp iterate_ellipsis(lists, tmpl, n, env, mark, pvars_used) do
+    {heads, tails} = peel_lists(lists, [], [])
+    sub_env = put_pvars(env, pvars_used, heads)
+
+    expand_ellipsis(tmpl, n - 1, sub_env, mark) ++
+      iterate_ellipsis(tails, tmpl, n, env, mark, pvars_used)
+  end
+
+  defp peel_lists([], head_acc, tail_acc),
+    do: {Enum.reverse(head_acc), Enum.reverse(tail_acc)}
+
+  defp peel_lists([[h | t] | rest], head_acc, tail_acc),
+    do: peel_lists(rest, [h | head_acc], [t | tail_acc])
+
+  defp put_pvars(env, [], []), do: env
+
+  defp put_pvars(env, [name | rest_names], [value | rest_values]),
+    do: put_pvars(Map.put(env, name, value), rest_names, rest_values)
+
+  defp pvar_lists(pvars_used, env) do
+    Enum.map(pvars_used, fn name ->
+      case Map.fetch(env, name) do
+        {:ok, {:ellipsis_list, list}} -> list
+        {:ok, _} -> raise Error, reason: {:bad_template, "pvar `#{name}` not under ellipsis"}
+        :error -> raise Error, reason: {:bad_template, "pvar `#{name}` unbound"}
+      end
     end)
   end
 
-  defp ellipsis_sub_env(env, pvars_used, i) do
-    Enum.reduce(pvars_used, env, fn name, acc ->
-      {:ellipsis_list, list} = Map.fetch!(acc, name)
-      Map.put(acc, name, Enum.at(list, i))
-    end)
-  end
-
-  defp ellipsis_iteration_count(pvars_used, env) do
-    counts = Enum.map(pvars_used, &count_for_pvar(&1, env))
-
-    case Enum.uniq(counts) do
-      [count] -> count
-      [] -> 0
+  defp validate_pvar_lengths(lists, pvars_used) do
+    case lists |> Enum.map(&length/1) |> Enum.uniq() do
+      [_] -> lists
+      [] -> []
       _ -> raise Error, reason: {:ellipsis_count_mismatch, hd(pvars_used)}
-    end
-  end
-
-  defp count_for_pvar(name, env) do
-    case Map.fetch(env, name) do
-      {:ok, {:ellipsis_list, list}} -> length(list)
-      {:ok, _} -> raise Error, reason: {:bad_template, "pvar `#{name}` not under ellipsis"}
-      :error -> raise Error, reason: {:bad_template, "pvar `#{name}` unbound"}
     end
   end
 

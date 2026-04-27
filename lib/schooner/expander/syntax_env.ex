@@ -20,8 +20,6 @@ defmodule Schooner.Expander.SyntaxEnv do
   through top-level forms.
   """
 
-  alias Schooner.Expander.SyntaxRules
-
   @type transformer :: (term() -> term())
   @type binding ::
           {:macro, transformer()}
@@ -89,24 +87,5 @@ defmodule Schooner.Expander.SyntaxEnv do
   def push_variables(%__MODULE__{lex: lex} = env, names) when is_list(names) do
     frame = Map.new(names, &{&1, :variable})
     %{env | lex: [frame | lex]}
-  end
-
-  @doc "True iff `name` resolves to a macro binding."
-  @spec macro?(t(), binary()) :: boolean()
-  def macro?(env, name) do
-    case lookup(env, name) do
-      {:macro, _} -> true
-      _ -> false
-    end
-  end
-
-  @doc """
-  Compile and install a `syntax-rules` form as a top-level macro,
-  returning the updated env. Convenience for the bootstrap loader.
-  """
-  @spec define_syntax_rules(t(), binary(), term()) :: t()
-  def define_syntax_rules(env, name, syntax_rules_form) do
-    transformer = SyntaxRules.compile(syntax_rules_form)
-    define_macro(env, name, transformer)
   end
 end
