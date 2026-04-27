@@ -49,13 +49,13 @@ defmodule Schooner.Primitives.Lazy do
     ]
   end
 
-  defp make_promise([value]), do: Value.promise(fn -> value end)
-  defp lazy_from_thunk([thunk]), do: Value.promise(thunk)
+  defp make_promise([value]), do: Value.eager_promise(value)
+  defp lazy_from_thunk([thunk]), do: Value.lazy_promise(thunk)
 
   defp force_([value]), do: do_force(value)
 
-  defp do_force({:promise, thunk}) when is_function(thunk, 0), do: do_force(thunk.())
-  defp do_force({:promise, thunk}), do: do_force(Eval.apply_proc(thunk, []))
+  defp do_force({:promise, :forced, value}), do: value
+  defp do_force({:promise, :lazy, thunk}), do: do_force(Eval.apply_proc(thunk, []))
   defp do_force(other), do: other
 
   defp promise_p([v]), do: Value.bool(Value.promise?(v))

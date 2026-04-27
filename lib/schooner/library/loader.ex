@@ -47,8 +47,8 @@ defmodule Schooner.Library.Loader do
         {:pair, {:sym, "define-library"}, {:pair, name_datum, decls_list}},
         registry
       ) do
-    name = canonical_name(name_datum)
-    decls = list_to_elixir_list(decls_list)
+    name = Library.canonicalise_name(name_datum)
+    decls = Value.to_list(decls_list)
 
     parts =
       Enum.reduce(decls, %{imports: [], body: [], exports: [], features: []}, fn decl, acc ->
@@ -118,19 +118,19 @@ defmodule Schooner.Library.Loader do
   # ---------------------------------------------------------------------------
 
   defp apply_decl({:pair, {:sym, "import"}, specs}, acc, _registry) do
-    %{acc | imports: acc.imports ++ list_to_elixir_list(specs)}
+    %{acc | imports: acc.imports ++ Value.to_list(specs)}
   end
 
   defp apply_decl({:pair, {:sym, "begin"}, forms}, acc, _registry) do
-    %{acc | body: acc.body ++ list_to_elixir_list(forms)}
+    %{acc | body: acc.body ++ Value.to_list(forms)}
   end
 
   defp apply_decl({:pair, {:sym, "export"}, names}, acc, _registry) do
-    %{acc | exports: acc.exports ++ list_to_elixir_list(names)}
+    %{acc | exports: acc.exports ++ Value.to_list(names)}
   end
 
   defp apply_decl({:pair, {:sym, "cond-expand"}, clauses}, acc, registry) do
-    case select_cond_expand(list_to_elixir_list(clauses), registry) do
+    case select_cond_expand(Value.to_list(clauses), registry) do
       {:ok, sub_decls} ->
         Enum.reduce(sub_decls, acc, &apply_decl(&1, &2, registry))
 
@@ -166,12 +166,12 @@ defmodule Schooner.Library.Loader do
          [{:pair, {:sym, "else"}, body} | _],
          _registry
        ) do
-    {:ok, list_to_elixir_list(body)}
+    {:ok, Value.to_list(body)}
   end
 
   defp select_cond_expand([{:pair, requirement, body} | rest], registry) do
     if requirement_satisfied?(requirement, registry) do
-      {:ok, list_to_elixir_list(body)}
+      {:ok, Value.to_list(body)}
     else
       select_cond_expand(rest, registry)
     end
@@ -183,19 +183,18 @@ defmodule Schooner.Library.Loader do
          {:pair, {:sym, "library"}, {:pair, lib_name_datum, :null}},
          registry
        ) do
-    name = canonical_name(lib_name_datum)
-    match?({:ok, _}, Library.lookup(registry, name))
+    match?({:ok, _}, Library.lookup(registry, Library.canonicalise_name(lib_name_datum)))
   end
 
   defp requirement_satisfied?({:pair, {:sym, "and"}, body}, registry) do
     body
-    |> list_to_elixir_list()
+    |> Value.to_list()
     |> Enum.all?(&requirement_satisfied?(&1, registry))
   end
 
   defp requirement_satisfied?({:pair, {:sym, "or"}, body}, registry) do
     body
-    |> list_to_elixir_list()
+    |> Value.to_list()
     |> Enum.any?(&requirement_satisfied?(&1, registry))
   end
 
@@ -292,18 +291,18 @@ defmodule Schooner.Library.Loader do
   # ---------------------------------------------------------------------------
 
   defp extract_name({:pair, {:sym, "define-library"}, {:pair, name_datum, _}}) do
-    canonical_name(name_datum)
+    Library.canonicalise_name(name_datum)
   end
 
   defp local_deps({:pair, {:sym, "define-library"}, {:pair, _, decls}}, by_name) do
     decls
-    |> list_to_elixir_list()
+    |> Value.to_list()
     |> Enum.flat_map(&decl_imports/1)
     |> Enum.map(&spec_to_canonical_dependency/1)
     |> Enum.filter(&Map.has_key?(by_name, &1))
   end
 
-  defp decl_imports({:pair, {:sym, "import"}, specs}), do: list_to_elixir_list(specs)
+  defp decl_imports({:pair, {:sym, "import"}, specs}), do: Value.to_list(specs)
   defp decl_imports(_), do: []
 
   # Reduce an import spec to the canonical name of the library it
@@ -313,25 +312,5 @@ defmodule Schooner.Library.Loader do
     spec_to_canonical_dependency(inner)
   end
 
-  defp spec_to_canonical_dependency(name_datum), do: canonical_name(name_datum)
-
-  defp canonical_name(datum) do
-    datum
-    |> list_to_elixir_list()
-    |> Enum.map(&segment_to_canonical!/1)
-  end
-
-  defp segment_to_canonical!({:sym, name}), do: name
-  defp segment_to_canonical!(int) when is_integer(int) and int >= 0, do: int
-
-  defp segment_to_canonical!(other) do
-    raise ArgumentError,
-          "library name segments must be symbols or non-negative integers, got #{inspect(other)}"
-  end
-
-  defp list_to_elixir_list(:null), do: []
-  defp list_to_elixir_list({:pair, h, t}), do: [h | list_to_elixir_list(t)]
-
-  defp list_to_elixir_list(other),
-    do: raise(ArgumentError, "expected proper list, got #{inspect(other)}")
+  defp spec_to_canonical_dependency(name_datum), do: Library.canonicalise_name(name_datum)
 end

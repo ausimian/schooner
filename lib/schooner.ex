@@ -37,12 +37,13 @@ defmodule Schooner do
   alias Schooner.Value
 
   # Implicit imports applied by `run/1` when the script has no
-  # explicit `(import ...)` of its own. Covers every standard library
-  # shipped today so existing convenience callers see no behaviour
-  # change after the boot-path flip.
-  @default_run_imports "(import (scheme base) (scheme cxr) (scheme char) " <>
-                         "(scheme inexact) (scheme write) (scheme read) " <>
-                         "(scheme lazy))"
+  # explicit `(import ...)` of its own. Pre-parsed at compile time so
+  # the default path does not pay reader cost on every call.
+  @default_run_imports_forms Reader.read_string(
+                               "(import (scheme base) (scheme cxr) (scheme char) " <>
+                                 "(scheme inexact) (scheme write) (scheme read) " <>
+                                 "(scheme lazy))"
+                             )
 
   @doc """
   Read and evaluate `source` in a fresh empty env. If `source`
@@ -59,7 +60,7 @@ defmodule Schooner do
 
     forms =
       case explicit_imports do
-        [] -> Reader.read_string(@default_run_imports) ++ forms
+        [] -> @default_run_imports_forms ++ forms
         _ -> forms
       end
 

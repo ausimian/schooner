@@ -57,7 +57,7 @@ defmodule Schooner.Value do
   @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
   @type error_kind :: :user | :read | :file
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
-  @type promise_v :: {:promise, term()}
+  @type promise_v :: {:promise, :forced, t()} | {:promise, :lazy, term()}
   @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
 
   @type t ::
@@ -126,14 +126,21 @@ defmodule Schooner.Value do
   end
 
   @doc """
-  Wrap `thunk` (a zero-arg procedure value) as a promise. Forcing the
-  resulting promise applies the thunk; if the thunk returns another
-  promise, `force` keeps unwrapping until a non-promise value is
-  reached. Schooner promises do not memoise — repeated forcing
-  re-evaluates the thunk (no mutation is available to cache).
+  Wrap `value` as an already-forced (eager) promise. Forcing it
+  returns `value` without invoking any procedure — the same shape as
+  r7rs's `(make-promise obj)`.
   """
-  @spec promise(term()) :: promise_v()
-  def promise(thunk), do: {:promise, thunk}
+  @spec eager_promise(t()) :: promise_v()
+  def eager_promise(value), do: {:promise, :forced, value}
+
+  @doc """
+  Wrap `thunk` (a zero-arg Scheme procedure) as a lazy promise.
+  `force` applies the thunk and, if the result is itself a promise,
+  keeps unwrapping iteratively. Schooner promises do not memoise —
+  no mutation is available, so repeated forcing re-evaluates.
+  """
+  @spec lazy_promise(term()) :: promise_v()
+  def lazy_promise(thunk), do: {:promise, :lazy, thunk}
 
   @doc "Build a Scheme list (proper, null-terminated) from an Elixir list."
   @spec list([t()]) :: t()
@@ -147,6 +154,18 @@ defmodule Schooner.Value do
   @spec improper_list([t(), ...], t()) :: t()
   def improper_list([only], tail), do: {:pair, only, tail}
   def improper_list([h | t], tail), do: {:pair, h, improper_list(t, tail)}
+
+  @doc """
+  Convert a proper Scheme list (cons cells terminated by `:null`) into
+  an Elixir list. Raises `ArgumentError` on an improper list — the
+  inverse of `list/1`.
+  """
+  @spec to_list(t()) :: [t()]
+  def to_list(:null), do: []
+  def to_list({:pair, h, t}), do: [h | to_list(t)]
+
+  def to_list(other),
+    do: raise(ArgumentError, "expected proper Scheme list, got #{inspect(other)}")
 
   # ---------------------------------------------------------------------------
   # Predicates
@@ -248,7 +267,7 @@ defmodule Schooner.Value do
   def float_special?(_), do: false
 
   @spec promise?(term()) :: boolean()
-  def promise?({:promise, _}), do: true
+  def promise?({:promise, kind, _}) when kind in [:forced, :lazy], do: true
   def promise?(_), do: false
 
   @doc """
@@ -352,7 +371,7 @@ defmodule Schooner.Value do
   defp render({:primitive, name, _, _}, _), do: ["#<primitive ", name, ">"]
   defp render({:record, {:record_type, name, _}, _}, _), do: ["#<record ", name, ">"]
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
-  defp render({:promise, _}, _), do: "#<promise>"
+  defp render({:promise, _, _}, _), do: "#<promise>"
 
   defp render({:error_obj, kind, message, irritants}, mode),
     do: render_error(kind, message, irritants, mode)

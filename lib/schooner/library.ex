@@ -194,6 +194,27 @@ defmodule Schooner.Library do
     "(" <> Enum.map_join(name, " ", &render_segment/1) <> ")"
   end
 
+  @doc """
+  Convert a Scheme datum form of a library name (e.g. `(scheme base)`
+  read as a cons-cell list of `{:sym, _}` segments) into the canonical
+  registry-key form (`["scheme", "base"]`). Symbol segments become
+  binaries; non-negative integer segments pass through.
+  """
+  @spec canonicalise_name(Schooner.Value.t()) :: name()
+  def canonicalise_name(datum) do
+    datum
+    |> Schooner.Value.to_list()
+    |> Enum.map(&canonical_segment!/1)
+  end
+
+  defp canonical_segment!({:sym, name}), do: name
+  defp canonical_segment!(int) when is_integer(int) and int >= 0, do: int
+
+  defp canonical_segment!(other) do
+    raise ArgumentError,
+          "library name segments must be symbols or non-negative integers, got #{inspect(other)}"
+  end
+
   defp render_segment(seg) when is_binary(seg), do: seg
   defp render_segment(seg) when is_integer(seg), do: Integer.to_string(seg)
 

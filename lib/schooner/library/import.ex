@@ -50,8 +50,7 @@ defmodule Schooner.Library.Import do
   end
 
   defp do_extract(acc, [{:pair, {:sym, "import"}, tail} | rest]) do
-    specs = list_to_elixir_list(tail)
-    do_extract([specs | acc], rest)
+    do_extract([Value.to_list(tail) | acc], rest)
   end
 
   defp do_extract(acc, rest) do
@@ -74,16 +73,14 @@ defmodule Schooner.Library.Import do
 
   # (only spec n1 n2 ...)
   defp resolve_one({:pair, {:sym, "only"}, {:pair, inner, name_list}}, registry) do
-    names = name_list |> list_to_elixir_list() |> Enum.map(&sym_to_binary!/1)
-    inner_exports = resolve_one(inner, registry)
-    Map.take(inner_exports, names)
+    names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
+    Map.take(resolve_one(inner, registry), names)
   end
 
   # (except spec n1 n2 ...)
   defp resolve_one({:pair, {:sym, "except"}, {:pair, inner, name_list}}, registry) do
-    names = name_list |> list_to_elixir_list() |> Enum.map(&sym_to_binary!/1)
-    inner_exports = resolve_one(inner, registry)
-    Map.drop(inner_exports, names)
+    names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
+    Map.drop(resolve_one(inner, registry), names)
   end
 
   # (prefix spec p)
@@ -110,8 +107,7 @@ defmodule Schooner.Library.Import do
 
   # Bare library name like (scheme base) or (srfi 1).
   defp resolve_one({:pair, _, _} = name_datum, registry) do
-    name = canonicalise_name(name_datum)
-    Library.fetch!(registry, name).exports
+    Library.fetch!(registry, Library.canonicalise_name(name_datum)).exports
   end
 
   defp resolve_one(other, _registry) do
@@ -128,32 +124,12 @@ defmodule Schooner.Library.Import do
     raise ArgumentError, "invalid rename clause: #{inspect(other)}"
   end
 
-  defp canonicalise_name(datum) do
-    datum
-    |> list_to_elixir_list()
-    |> Enum.map(&segment_to_canonical!/1)
-  end
+  defp sym_name!({:sym, name}), do: name
 
-  defp segment_to_canonical!({:sym, name}), do: name
-  defp segment_to_canonical!(int) when is_integer(int) and int >= 0, do: int
-
-  defp segment_to_canonical!(other) do
-    raise ArgumentError,
-          "library name segments must be symbols or non-negative integers, got #{inspect(other)}"
-  end
-
-  defp sym_to_binary!({:sym, name}), do: name
-
-  defp sym_to_binary!(other) do
+  defp sym_name!(other) do
     raise ArgumentError,
           "import modifier name must be a symbol, got #{inspect(other)}"
   end
-
-  defp list_to_elixir_list(:null), do: []
-  defp list_to_elixir_list({:pair, h, t}), do: [h | list_to_elixir_list(t)]
-
-  defp list_to_elixir_list(other),
-    do: raise(ArgumentError, "expected proper list, got #{inspect(other)}")
 
   @doc """
   Apply `bindings` to `env` (variables) and `syntax_env` (macros).
