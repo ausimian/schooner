@@ -152,19 +152,6 @@ defmodule Schooner.Library.LoaderTest do
     end
   end
 
-  describe "deferred declarations" do
-    test "(include ...) raises a clear 'not yet supported' error" do
-      source = """
-      (define-library (with-include)
-        (include "missing.scm"))
-      """
-
-      assert_raise ArgumentError, ~r/include.*not yet supported/, fn ->
-        Loader.load_string(source, standard())
-      end
-    end
-  end
-
   describe "load_file/2" do
     @tag :tmp_dir
     test "loads define-library declarations from disk", %{tmp_dir: dir} do
@@ -180,6 +167,175 @@ defmodule Schooner.Library.LoaderTest do
       reg = Loader.load_file(path, standard())
       lib = Library.fetch!(reg, ["from-file"])
       assert {:var, 42} = Map.fetch!(lib.exports, "forty-two")
+    end
+  end
+
+  describe "(include ...)" do
+    @tag :tmp_dir
+    test "splices body forms from a file relative to the including file", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "body.scm"), """
+      (define (square x) (* x x))
+      (define forty-two 42)
+      """)
+
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (with-include)
+        (import (scheme base))
+        (export square forty-two)
+        (include "body.scm"))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      lib = Library.fetch!(reg, ["with-include"])
+
+      assert {:var, {:closure, _, _, _, _}} = Map.fetch!(lib.exports, "square")
+      assert {:var, 42} = Map.fetch!(lib.exports, "forty-two")
+    end
+
+    @tag :tmp_dir
+    test "concatenates multiple paths in source order", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "a.scm"), "(define a 1)")
+      File.write!(Path.join(dir, "b.scm"), "(define b (+ a 1))")
+
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (multi-include)
+        (import (scheme base))
+        (export a b)
+        (include "a.scm" "b.scm"))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      lib = Library.fetch!(reg, ["multi-include"])
+      assert {:var, 1} = Map.fetch!(lib.exports, "a")
+      assert {:var, 2} = Map.fetch!(lib.exports, "b")
+    end
+
+    @tag :tmp_dir
+    test "missing include file errors with the offending path quoted", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (with-include)
+        (include "no-such.scm"))
+      """)
+
+      assert_raise ArgumentError, ~r/no-such\.scm/, fn ->
+        Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      end
+    end
+
+    @tag :tmp_dir
+    test "rejects relative paths that escape the entry-point directory", %{tmp_dir: dir} do
+      sub = Path.join(dir, "sub")
+      File.mkdir_p!(sub)
+      File.write!(Path.join(dir, "outside.scm"), "(define x 1)")
+
+      File.write!(Path.join(sub, "lib.scm"), """
+      (define-library (escaping)
+        (import (scheme base))
+        (export x)
+        (include "../outside.scm"))
+      """)
+
+      assert_raise ArgumentError, ~r/resolves outside/, fn ->
+        Loader.load_file(Path.join(sub, "lib.scm"), standard())
+      end
+    end
+
+    test "relative include without a base directory is an error" do
+      source = """
+      (define-library (no-base)
+        (include "anything.scm"))
+      """
+
+      assert_raise ArgumentError, ~r/without a base directory/, fn ->
+        Loader.load_string(source, standard())
+      end
+    end
+  end
+
+  describe "(include-library-declarations ...)" do
+    @tag :tmp_dir
+    test "splices declarations from an external file", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "decls.scm"), """
+      (import (scheme base))
+      (export answer)
+      (begin (define answer 42))
+      """)
+
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (with-decls)
+        (include-library-declarations "decls.scm"))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      lib = Library.fetch!(reg, ["with-decls"])
+      assert {:var, 42} = Map.fetch!(lib.exports, "answer")
+    end
+
+    @tag :tmp_dir
+    test "nested includes resolve relative to the innermost file", %{tmp_dir: dir} do
+      sub = Path.join(dir, "sub")
+      File.mkdir_p!(sub)
+
+      File.write!(Path.join(sub, "body.scm"), "(define inner 7)")
+
+      File.write!(Path.join(sub, "decls.scm"), """
+      (import (scheme base))
+      (export inner)
+      (include "body.scm")
+      """)
+
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (nested)
+        (include-library-declarations "sub/decls.scm"))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      lib = Library.fetch!(reg, ["nested"])
+      assert {:var, 7} = Map.fetch!(lib.exports, "inner")
+    end
+
+    @tag :tmp_dir
+    test "cond-expand inside an included declaration file works", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "decls.scm"), """
+      (cond-expand
+        (r7rs (import (scheme base))
+              (export who)
+              (begin (define who 'r7rs)))
+        (else (import (scheme base))
+              (export who)
+              (begin (define who 'other))))
+      """)
+
+      File.write!(Path.join(dir, "lib.scm"), """
+      (define-library (cx-included)
+        (include-library-declarations "decls.scm"))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "lib.scm"), standard())
+      lib = Library.fetch!(reg, ["cx-included"])
+      assert {:var, {:sym, "r7rs"}} = Map.fetch!(lib.exports, "who")
+    end
+
+    @tag :tmp_dir
+    test "import inside an included file is followed for topological order", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "decls.scm"), """
+      (import (helpers))
+      (export use-help)
+      (begin (define use-help (helper)))
+      """)
+
+      File.write!(Path.join(dir, "libs.scm"), """
+      (define-library (uses)
+        (include-library-declarations "decls.scm"))
+      (define-library (helpers)
+        (import (scheme base))
+        (export helper)
+        (begin (define (helper) 99)))
+      """)
+
+      reg = Loader.load_file(Path.join(dir, "libs.scm"), standard())
+      lib = Library.fetch!(reg, ["uses"])
+      assert {:var, 99} = Map.fetch!(lib.exports, "use-help")
     end
   end
 end
