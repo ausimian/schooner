@@ -21,6 +21,12 @@ defmodule Schooner.Eval.Error do
   defp format({:bad_special_form, name}), do: "malformed `#{name}` form"
   defp format(:invalid_params), do: "invalid lambda parameter list"
   defp format(:improper_application), do: "improper application form"
+  defp format(:define_after_expression), do: "internal `define` after a non-definition expression"
+  defp format(:empty_body), do: "body must contain at least one expression"
+
+  defp format({:rec_uninitialised, name}) do
+    "letrec binding `#{name}` referenced before its init has been evaluated"
+  end
 
   defp format({:arity_mismatch, name, {:exact, expected}, got}) do
     "arity mismatch in #{name_str(name)}: expected #{expected}, got #{got}"
