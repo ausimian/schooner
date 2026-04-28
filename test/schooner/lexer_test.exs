@@ -223,6 +223,13 @@ defmodule Schooner.LexerTest do
       assert [{:integer, 31, _}] = Lexer.tokenise("#x1F")
     end
 
+    test "hex literal containing E digit is integer, not float" do
+      # `e` / `E` are valid hex digits, not the base-10 exponent marker.
+      assert [{:integer, 0xCE, _}] = Lexer.tokenise("#xCE")
+      assert [{:integer, 0xCE, _}] = Lexer.tokenise("#xce")
+      assert [{:integer, 0xDEAD, _}] = Lexer.tokenise("#xDEAD")
+    end
+
     test "exactness prefixes" do
       assert [{:integer, 1, _}] = Lexer.tokenise("#e1.5") |> Enum.map(&clamp/1)
       # #e on a float truncates / converts to integer

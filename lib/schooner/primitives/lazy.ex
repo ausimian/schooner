@@ -54,7 +54,9 @@ defmodule Schooner.Primitives.Lazy do
 
   defp force_([value]), do: do_force(value)
 
-  defp do_force({:promise, :forced, value}), do: value
+  # Iterate through nested eager promises: r7rs §4.2.6 requires `force`
+  # on an eager promise whose value is itself a promise to keep forcing.
+  defp do_force({:promise, :forced, value}), do: do_force(value)
   defp do_force({:promise, :lazy, thunk}), do: do_force(Eval.apply_proc(thunk, []))
   defp do_force(other), do: other
 

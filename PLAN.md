@@ -283,7 +283,17 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 - Unit: every shipped library exposes exactly its r7rs-specified bindings (table-driven test enumerating expected exports per library).
 - Unit: importing a non-existent library produces a clear error pointing at the offending `import` form's source position.
 
-### Phase 14 — Embedding API & host injection (`Schooner`, `Schooner.Host`)
+### Phase 14 — Conformance subset & docs
+
+- Curate a subset of the Chibi-Scheme test suite covering the implemented surface; commit as `test/conformance/`.
+- README documents the deviations from r7rs-small in one table: no mutation, no rationals, no complex, escape-only `call/cc`, no file I/O, host-controlled environment.
+
+**Tests:**
+
+- Conformance: curated Chibi tests run as a single ExUnit case per source file under `test/conformance/`. Every excluded test is documented inline with a one-line reason (skipped because of mutation / numeric tower / multi-shot call/cc / etc.). Driven through `Schooner.run/1` (the same entry point used by the existing eval tests) so this phase has no dependency on the Phase 15 embedding API.
+- Doc test: README code examples are exercised via ExUnit doctests once Phase 15 lands and the README's embedding examples exist; for now, the conformance suite stands alone.
+
+### Phase 15 — Embedding API & host injection (`Schooner`, `Schooner.Host`)
 
 ```elixir
 {:ok, env} =
@@ -313,16 +323,6 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 - Integration: `Task.async/Task.await` running `Schooner.eval/2` with a low `:max_heap_size` is killed cleanly when a runaway script allocates beyond the budget — host process is unaffected.
 - Integration: a script that loops forever is killed by `Task.shutdown/2` with a timeout — host process is unaffected.
 
-### Phase 15 — Conformance subset & docs
-
-- Curate a subset of the Chibi-Scheme test suite covering the implemented surface; commit as `test/conformance/`.
-- README documents the deviations from r7rs-small in one table: no mutation, no rationals, no complex, escape-only `call/cc`, no file I/O, host-controlled environment.
-
-**Tests:**
-
-- Conformance: curated Chibi tests run as a single ExUnit case per source file under `test/conformance/`. Every excluded test is documented inline with a one-line reason (skipped because of mutation / numeric tower / multi-shot call/cc / etc.).
-- Doc test: every code example in the README is exercised via ExUnit doctests — no documentation drift.
-
 ## Critical invariants (call out at top of relevant files)
 
 1. **`eval/2` and `apply/2` MUST end every branch with a direct tail call to one of them.** No wrapping `try`, no `case` on the result, no tuple construction around the recursive call. Violating this breaks proper tail calls. (`lib/schooner/eval.ex`)
@@ -351,7 +351,7 @@ The primary verification is the per-phase test suite called out in each phase ab
 
 Items intentionally not in v1 but planned as a future major-version change. v1 documents and tests the restricted behaviour so that lifting the restriction in v2 is non-breaking for embedders who respected the v1 contract.
 
-- **Full first-class `call/cc`.** Multi-shot continuations, re-entry after the original `call/cc` has returned, and `dynamic-wind` re-entry semantics (`before` thunks fire on re-entry, not just `after` on escape). Requires replacing the direct mutual-tail-call evaluator with either a CPS transform or an explicit-continuation-frame trampoline, plus host-boundary barrier enforcement (the documentation-only rule from phase 14 becomes load-bearing).
+- **Full first-class `call/cc`.** Multi-shot continuations, re-entry after the original `call/cc` has returned, and `dynamic-wind` re-entry semantics (`before` thunks fire on re-entry, not just `after` on escape). Requires replacing the direct mutual-tail-call evaluator with either a CPS transform or an explicit-continuation-frame trampoline, plus host-boundary barrier enforcement (the documentation-only rule from phase 15 becomes load-bearing).
 
 ## Follow-ups after MVP
 

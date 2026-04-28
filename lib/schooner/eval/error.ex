@@ -24,6 +24,10 @@ defmodule Schooner.Eval.Error do
   defp format(:define_after_expression), do: "internal `define` after a non-definition expression"
   defp format(:empty_body), do: "body must contain at least one expression"
 
+  defp format(:nested_define_syntax_unsupported) do
+    "nested `define-syntax` (a `define-syntax` introduced by macro expansion) is not supported"
+  end
+
   defp format(:continuation_expired) do
     "continuation invoked after its dynamic extent has ended " <>
       "(Schooner continuations are escape-only — see PLAN.md phase 12)"
