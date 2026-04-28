@@ -14,6 +14,10 @@ defmodule Schooner.Primitives.LazyTest do
       assert run("(force 42)") == 42
       assert run(~S|(force "hi")|) == Value.string("hi")
     end
+
+    test "force iterates through nested eager promises (r7rs §4.2.6)" do
+      assert run("(force (make-promise (make-promise 4)))") == 4
+    end
   end
 
   describe "delay + force" do

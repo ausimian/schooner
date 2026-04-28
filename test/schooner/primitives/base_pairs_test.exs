@@ -41,9 +41,9 @@ defmodule Schooner.Primitives.BasePairsTest do
       assert run("(list-copy '())") == []
     end
 
-    test "list-copy on improper list raises" do
-      e = assert_raise PError, fn -> run("(list-copy (cons 1 2))") end
-      assert match?({:improper_list, "list-copy", _}, e.reason)
+    test "list-copy preserves an improper tail (r7rs §6.4)" do
+      assert run("(list-copy (cons 1 2))") == [1 | 2]
+      assert run("(list-copy '(6 7 8 . 9))") == [6, 7, 8 | 9]
     end
   end
 

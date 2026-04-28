@@ -642,10 +642,13 @@ defmodule Schooner.Primitives.Base do
 
   defp list_ctor(args), do: Value.list(args)
 
-  defp list_copy([list]) do
-    require_proper_list!("list-copy", list)
-    list
-  end
+  # r7rs §6.4: returns a freshly-allocated copy of the list spine.
+  # Improper tails are accepted and preserved as-is (only the cons
+  # cells are copied, the elements themselves are shared).
+  defp list_copy([list]), do: do_list_copy(list)
+
+  defp do_list_copy([h | t]), do: [h | do_list_copy(t)]
+  defp do_list_copy(other), do: other
 
   defp length_([list]) do
     case proper_length(list, 0) do

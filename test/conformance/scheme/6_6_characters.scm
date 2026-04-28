@@ -1,0 +1,91 @@
+;; Curated from Chibi-Scheme r7rs-tests.scm §6.6 "Characters".
+;; Source: https://github.com/ashinn/chibi-scheme/blob/master/tests/r7rs-tests.scm
+;;
+;; Excluded from the upstream section, with reasons:
+;;   - `digit-value` cluster at lines 1271-1277: `digit-value` is not
+;;     in Schooner's shipped surface (PLAN.md leaves digit-value out
+;;     of `(scheme char)` to keep the Unicode tables minimal).
+
+(test-begin "6.6 Characters")
+
+(test #t (char? #\a))
+(test #f (char? "a"))
+(test #f (char? 'a))
+(test #f (char? 0))
+
+(test #t (char=? #\a #\a #\a))
+(test #f (char=? #\a #\A))
+(test #t (char<? #\a #\b #\c))
+(test #f (char<? #\a #\a))
+(test #f (char<? #\b #\a))
+(test #f (char>? #\a #\b))
+(test #f (char>? #\a #\a))
+(test #t (char>? #\c #\b #\a))
+(test #t (char<=? #\a #\b #\b))
+(test #t (char<=? #\a #\a))
+(test #f (char<=? #\b #\a))
+(test #f (char>=? #\a #\b))
+(test #t (char>=? #\a #\a))
+(test #t (char>=? #\b #\b #\a))
+
+(test #t (char-ci=? #\a #\a))
+(test #t (char-ci=? #\a #\A #\a))
+(test #f (char-ci=? #\a #\b))
+(test #t (char-ci<? #\a #\B #\c))
+(test #f (char-ci<? #\A #\a))
+(test #f (char-ci<? #\b #\A))
+(test #f (char-ci>? #\A #\b))
+(test #f (char-ci>? #\a #\A))
+(test #t (char-ci>? #\c #\B #\a))
+(test #t (char-ci<=? #\a #\B #\b))
+(test #t (char-ci<=? #\A #\a))
+(test #f (char-ci<=? #\b #\A))
+(test #f (char-ci>=? #\A #\b))
+(test #t (char-ci>=? #\a #\A))
+(test #t (char-ci>=? #\b #\B #\a))
+
+(test #t (char-alphabetic? #\a))
+(test #f (char-alphabetic? #\space))
+(test #t (char-numeric? #\0))
+(test #f (char-numeric? #\.))
+(test #f (char-numeric? #\a))
+(test #t (char-whitespace? #\space))
+(test #t (char-whitespace? #\tab))
+(test #t (char-whitespace? #\newline))
+(test #f (char-whitespace? #\_))
+(test #f (char-whitespace? #\a))
+(test #t (char-upper-case? #\A))
+(test #f (char-upper-case? #\a))
+(test #f (char-upper-case? #\3))
+(test #t (char-lower-case? #\a))
+(test #f (char-lower-case? #\A))
+(test #f (char-lower-case? #\3))
+
+(test #t (char-alphabetic? #\Λ))
+(test #f (char-alphabetic? #\x0E50))
+(test #t (char-upper-case? #\Λ))
+(test #f (char-upper-case? #\λ))
+(test #f (char-lower-case? #\Λ))
+(test #t (char-lower-case? #\λ))
+(test #f (char-numeric? #\Λ))
+(test #t (char-numeric? #\x0E50))
+(test #t (char-whitespace? #\x1680))
+
+(test 97 (char->integer #\a))
+(test #\a (integer->char 97))
+
+(test #\A (char-upcase #\a))
+(test #\A (char-upcase #\A))
+(test #\a (char-downcase #\a))
+(test #\a (char-downcase #\A))
+(test #\a (char-foldcase #\a))
+(test #\a (char-foldcase #\A))
+
+(test #\Λ (char-upcase #\λ))
+(test #\Λ (char-upcase #\Λ))
+(test #\λ (char-downcase #\λ))
+(test #\λ (char-downcase #\Λ))
+(test #\λ (char-foldcase #\λ))
+(test #\λ (char-foldcase #\Λ))
+
+(test-end)

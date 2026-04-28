@@ -597,7 +597,7 @@ defmodule Schooner.Lexer do
   defp parse_number(raw, radix, exactness) do
     {sign, body} = strip_sign(raw)
 
-    case body == "" or classify_body(body) do
+    case body == "" or classify_body(body, radix) do
       true -> :error
       :rational -> :error
       :real when radix != 10 -> :error
@@ -610,11 +610,13 @@ defmodule Schooner.Lexer do
   defp strip_sign(<<?-, rest::binary>>), do: {-1, rest}
   defp strip_sign(rest), do: {1, rest}
 
-  defp classify_body(<<>>), do: :integer
-  defp classify_body(<<?/, _::binary>>), do: :rational
-  defp classify_body(<<?., _::binary>>), do: :real
-  defp classify_body(<<c, _::binary>>) when c in [?e, ?E], do: :real
-  defp classify_body(<<_, rest::binary>>), do: classify_body(rest)
+  # `e` / `E` only mark a base-10 exponent — under base 16 they are
+  # ordinary digits, so don't treat them as the float marker.
+  defp classify_body(<<>>, _radix), do: :integer
+  defp classify_body(<<?/, _::binary>>, _radix), do: :rational
+  defp classify_body(<<?., _::binary>>, _radix), do: :real
+  defp classify_body(<<c, _::binary>>, 10) when c in [?e, ?E], do: :real
+  defp classify_body(<<_, rest::binary>>, radix), do: classify_body(rest, radix)
 
   defp parse_integer_literal(sign, body, radix, exactness) do
     if digits_in_radix?(body, radix) do
