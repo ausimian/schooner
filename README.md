@@ -36,7 +36,7 @@ each excluded upstream case annotated inline.
 | Numeric tower                | Integer + double-precision float only. No rationals (`6/10`), no complex (`3+4i`).                                                                        |
 | Object identity              | `eq?` / `eqv?` reduce to structural equality on pairs, vectors, and strings — there is no mutable cell identity. `memq` / `assq` follow the same rule.    |
 | Special-form names           | `if`, `let`, `cond`'s `=>`, etc. cannot be lexically rebound as ordinary variables. The expander dispatches them on the literal symbol before consulting the lexical environment. |
-| Macro hygiene                | `(... ...)` ellipsis-escape, `(syntax-rules <id> () ...)` custom-ellipsis identifier, `(syntax-rules (_) ...)` literal-underscore, and `define-syntax` introduced by another macro template are not supported. |
+| Macro hygiene                | `(syntax-rules <id> () ...)` custom-ellipsis identifier and `define-syntax` introduced by another macro template are not supported.                                                                          |
 | `define-syntax` placement    | Top-level only — a `define-syntax` inside a `(let () ...)` body is rejected.                                                                              |
 | `call/cc`                    | Escape-only. A captured continuation invoked after its dynamic extent has ended raises a Schooner error. Multi-shot continuations and `dynamic-wind` re-entry are deferred to v2.0. |
 | Letrec closure escape        | A closure created inside a `letrec` / `letrec*` / named `let` cannot recurse after escaping its frame; the rec frame does not survive. The mutation-free model rules out classical letrec via post-hoc assignment. |

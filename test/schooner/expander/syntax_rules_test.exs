@@ -207,6 +207,57 @@ defmodule Schooner.Expander.SyntaxRulesTest do
     end
   end
 
+  describe "patterns: literal underscore" do
+    test "_ in literals matches only the literal _ symbol" do
+      t = transformer("(syntax-rules (_) ((_ _ x) (list 'lit x)))")
+      assert_form_equal(expand(t, "(use _ 1)"), "(list 'lit 1)")
+      assert_raise Schooner.Eval.Error, fn -> expand(t, "(use foo 1)") end
+    end
+
+    test "_ as the keyword position is still treated as wildcard even when literal" do
+      # `_` in the keyword position is the conventional placeholder; r7rs
+      # says the macro keyword position is matched against the macro name
+      # regardless of the rule. So the macro is still invocable as
+      # `(use ...)` even though the rule writes `(_ _ x)` and `_` is
+      # listed as a literal — the leading `_` matches `use`, the inner
+      # `_` is the literal, `x` is the pattern variable.
+      t = transformer("(syntax-rules (_) ((_ _ x) (list 'lit x)))")
+      assert_form_equal(expand(t, "(use _ 99)"), "(list 'lit 99)")
+    end
+
+    test "_ stays a wildcard when not in literals" do
+      t = transformer("(syntax-rules () ((_ _ x) (list 'wild x)))")
+      assert_form_equal(expand(t, "(use foo 1)"), "(list 'wild 1)")
+      assert_form_equal(expand(t, "(use _ 1)"), "(list 'wild 1)")
+    end
+  end
+
+  describe "templates: ellipsis-escape" do
+    test "(... ...) emits a literal ... symbol" do
+      t = transformer("(syntax-rules () ((_) (... ...)))")
+      assert_form_equal(expand(t, "(use)"), "...")
+    end
+
+    test "(... template) suppresses ellipsis spread inside the template" do
+      # Without the escape, `(foo ...)` would error (no pvar to drive
+      # the spread). With the escape, both `foo` and `...` come through
+      # literally as part of the output list, while the `x` pvar still
+      # substitutes its bound value.
+      t = transformer("(syntax-rules () ((_ x) (... (foo ... x))))")
+      assert_form_equal(expand(t, "(use 9)"), "(foo ... 9)")
+    end
+
+    test "literal ... emitted from an escape stays unmarked across hygiene" do
+      # `...` has special meaning to syntax-rules; when an escape emits
+      # it into a context that itself contains a `syntax-rules` form,
+      # the inner expander must still recognise it as the ellipsis
+      # token. So `...` rides through instantiation without picking up
+      # a hygiene mark.
+      t = transformer("(syntax-rules () ((_) (... ...)))")
+      assert expand(t, "(use)") == {:sym, "..."}
+    end
+  end
+
   describe "compile errors" do
     test "duplicate pattern variable raises" do
       assert_raise Schooner.Expander.Error, fn ->
