@@ -153,7 +153,7 @@ defmodule Schooner.Primitives.Char do
 
   defp char_numeric_p([{:char, cp}]) when cp in ?0..?9, do: Value.bool(true)
   defp char_numeric_p([{:char, cp}]) when cp < 128, do: Value.bool(false)
-  defp char_numeric_p([{:char, cp}]), do: Value.bool(Regex.match?(@numeric_re, <<cp::utf8>>))
+  defp char_numeric_p([{:char, cp}]), do: Value.bool(nd?(cp))
   defp char_numeric_p([other]), do: raise_char("char-numeric?", other)
 
   defp char_whitespace_p([{:char, cp}]) when cp in [?\s, ?\t, ?\n, ?\r, ?\v, ?\f],
@@ -192,27 +192,19 @@ defmodule Schooner.Primitives.Char do
   defp digit_value([{:char, cp}]) when cp < 128, do: Value.bool(false)
 
   defp digit_value([{:char, cp}]) do
-    if Regex.match?(@numeric_re, <<cp::utf8>>) do
-      nd_block_offset(cp, 0)
-    else
-      Value.bool(false)
-    end
+    if nd?(cp), do: nd_block_offset(cp, 0), else: Value.bool(false)
   end
 
-  defp digit_value([other]),
-    do: raise(Error, reason: {:type_error, "digit-value", "char", other})
+  defp digit_value([other]), do: raise_char("digit-value", other)
 
   defp nd_block_offset(_cp, 9), do: 9
 
   defp nd_block_offset(cp, n) do
     prev = cp - 1
-
-    if prev >= 0 and Regex.match?(@numeric_re, <<prev::utf8>>) do
-      nd_block_offset(prev, n + 1)
-    else
-      n
-    end
+    if nd?(prev), do: nd_block_offset(prev, n + 1), else: n
   end
+
+  defp nd?(cp), do: Regex.match?(@numeric_re, <<cp::utf8>>)
 
   # ---------------------------------------------------------------------------
   # Helpers

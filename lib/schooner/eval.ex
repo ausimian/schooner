@@ -35,22 +35,17 @@ defmodule Schooner.Eval do
   alias Schooner.Value
 
   @doc """
-  Coerce a value reaching a single-value context. A bare value passes
-  through unchanged. A `{:values, {v}}` (single-arg `(values v)`)
-  unwraps to `v`. A `{:values, vtup}` with `tuple_size(vtup) != 1`
-  raises a `Schooner.Primitive.Error` with reason
-  `{:wrong_value_count, got, 1}`.
-
-  Used at every site that consumes one value: `eval_args`, the `if`
-  test, top-level of `Schooner.run/1` / `Schooner.eval/2`. The only
-  context that does *not* run through this is `call-with-values`'s
-  producer return path, which is the whole point of the marker.
+  Coerce a multi-value to a single value. Auto-unwraps a 1-element
+  `{:values, [v]}` to `v`; any other `{:values, vs}` raises
+  `{:wrong_value_count, got, 1}`. Bare values pass through. Called at
+  every single-value context — `call-with-values`'s producer return
+  path is the only deliberate exception.
   """
-  @spec single_value!(Value.t() | {:values, tuple()}) :: Value.t()
-  def single_value!({:values, {v}}), do: v
+  @spec single_value!(Value.t() | {:values, [Value.t()]}) :: Value.t()
+  def single_value!({:values, [v]}), do: v
 
-  def single_value!({:values, vtup}) when is_tuple(vtup) do
-    raise PError, reason: {:wrong_value_count, tuple_size(vtup), 1}
+  def single_value!({:values, vs}) when is_list(vs) do
+    raise PError, reason: {:wrong_value_count, length(vs), 1}
   end
 
   def single_value!(other), do: other
@@ -104,22 +99,16 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
 
   defp eval_if([test | [then_e | []]], env) do
-    if Value.truthy?(single_value!(eval(test, env))) do
-      eval(then_e, env)
-    else
-      :unspecified
-    end
+    if eval_test(test, env), do: eval(then_e, env), else: :unspecified
   end
 
   defp eval_if([test | [then_e | [else_e | []]]], env) do
-    if Value.truthy?(single_value!(eval(test, env))) do
-      eval(then_e, env)
-    else
-      eval(else_e, env)
-    end
+    if eval_test(test, env), do: eval(then_e, env), else: eval(else_e, env)
   end
 
   defp eval_if(_, _env), do: raise(Error, reason: {:bad_special_form, "if"})
+
+  defp eval_test(test, env), do: Value.truthy?(single_value!(eval(test, env)))
 
   # ---------------------------------------------------------------------------
   # lambda
