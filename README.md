@@ -33,7 +33,7 @@ each excluded upstream case annotated inline.
 | Area                         | Schooner                                                                                                                                                  |
 | ---                          | ---                                                                                                                                                       |
 | Mutation                     | None. `set!`, `set-car!`, `set-cdr!`, `string-set!`, `vector-set!`, `bytevector-u8-set!`, record mutators, `string-fill!`/`copy!`, `vector-fill!`/`copy!`, `list-set!` are not defined. |
-| Numeric tower                | Integer + double-precision float only. No rationals (`6/10`), no complex (`3+4i`), no `exact`/`inexact` coercion procedures, no `digit-value`.            |
+| Numeric tower                | Integer + double-precision float only. No rationals (`6/10`), no complex (`3+4i`).                                                                        |
 | Object identity              | `eq?` / `eqv?` reduce to structural equality on pairs, vectors, and strings — there is no mutable cell identity. `memq` / `assq` follow the same rule.    |
 | Special-form names           | `if`, `let`, `cond`'s `=>`, etc. cannot be lexically rebound as ordinary variables. The expander dispatches them on the literal symbol before consulting the lexical environment. |
 | Macro hygiene                | `(... ...)` ellipsis-escape, `(syntax-rules <id> () ...)` custom-ellipsis identifier, `(syntax-rules (_) ...)` literal-underscore, and `define-syntax` introduced by another macro template are not supported. |

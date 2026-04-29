@@ -136,6 +136,36 @@ defmodule Schooner.Primitives.CharTest do
     end
   end
 
+  describe "digit-value" do
+    test "ASCII digits return their numeric value" do
+      assert run(~S|(digit-value #\0)|) == 0
+      assert run(~S|(digit-value #\5)|) == 5
+      assert run(~S|(digit-value #\9)|) == 9
+    end
+
+    test "non-digit characters return #f" do
+      assert run(~S|(digit-value #\a)|) == false
+      assert run(~S|(digit-value #\space)|) == false
+      assert run(~S|(digit-value #\.)|) == false
+    end
+
+    test "non-ASCII Nd characters return their digit value" do
+      # Arabic-Indic digit five (U+0665).
+      assert run("(digit-value (integer->char #x0665))") == 5
+      # Devanagari digit zero (U+0966).
+      assert run("(digit-value (integer->char #x0966))") == 0
+      # Devanagari digit nine (U+096F).
+      assert run("(digit-value (integer->char #x096F))") == 9
+    end
+
+    test "non-Nd unicode characters return #f" do
+      # Latin letter with diacritic — alphabetic but not a digit.
+      assert run(~s|(digit-value #\\é)|) == false
+      # Emoji.
+      assert run("(digit-value (integer->char #x1F600))") == false
+    end
+  end
+
   describe "type errors" do
     test "comparator rejects non-char arg" do
       e = assert_raise PError, fn -> run(~S|(char=? #\a 1)|) end
@@ -176,6 +206,11 @@ defmodule Schooner.Primitives.CharTest do
         e = assert_raise PError, fn -> run("(#{op} 1)") end
         assert match?({:type_error, ^op, "char", _}, e.reason)
       end
+    end
+
+    test "digit-value rejects non-char arg" do
+      e = assert_raise PError, fn -> run("(digit-value 1)") end
+      assert match?({:type_error, "digit-value", "char", _}, e.reason)
     end
   end
 end

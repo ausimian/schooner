@@ -359,6 +359,23 @@ defmodule Schooner.Primitives.BaseTest do
       e = assert_raise PError, fn -> run("(inexact->exact 1.5)") end
       assert match?({:not_representable_exact, _}, e.reason)
     end
+
+    test "inexact and exact are r7rs aliases for the legacy arrow forms" do
+      assert run("(inexact 3)") === 3.0
+      assert run("(inexact 3.0)") === 3.0
+      assert run("(exact 3.0)") === 3
+      assert run("(exact 3)") === 3
+    end
+
+    test "inexact alias error message uses the alias name" do
+      e = assert_raise PError, fn -> run(~s|(inexact "foo")|) end
+      assert match?({:type_error, "inexact", _, _}, e.reason)
+    end
+
+    test "exact alias error message uses the alias name" do
+      e = assert_raise PError, fn -> run(~s|(exact "foo")|) end
+      assert match?({:type_error, "exact", _, _}, e.reason)
+    end
   end
 
   # ---------------------------------------------------------------------------
