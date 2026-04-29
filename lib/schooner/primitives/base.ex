@@ -64,7 +64,9 @@ defmodule Schooner.Primitives.Base do
       {"lcm", {:at_least, 0}, &lcm_/1},
       {"sqrt", 1, &sqrt_/1},
       {"exact->inexact", 1, &exact_to_inexact/1},
-      {"inexact->exact", 1, &inexact_to_exact/1}
+      {"inexact->exact", 1, &inexact_to_exact/1},
+      {"inexact", 1, &inexact_/1},
+      {"exact", 1, &exact_/1}
     ]
   end
 
@@ -409,23 +411,29 @@ defmodule Schooner.Primitives.Base do
     if nx >= x, do: x, else: isqrt_loop(n, nx)
   end
 
-  defp exact_to_inexact([n]) do
-    require_number!("exact->inexact", n)
+  defp exact_to_inexact([n]), do: to_inexact("exact->inexact", n)
+  defp inexact_([n]), do: to_inexact("inexact", n)
+
+  defp inexact_to_exact([n]), do: to_exact("inexact->exact", n)
+  defp exact_([n]), do: to_exact("exact", n)
+
+  defp to_inexact(op, n) do
+    require_number!(op, n)
     if is_special(n), do: n, else: to_float(n)
   end
 
-  defp inexact_to_exact([n]) when is_integer(n), do: n
+  defp to_exact(_op, n) when is_integer(n), do: n
 
-  defp inexact_to_exact([n]) when is_float(n) do
+  defp to_exact(_op, n) when is_float(n) do
     if Value.integer?(n), do: trunc(n), else: raise(Error, reason: {:not_representable_exact, n})
   end
 
-  defp inexact_to_exact([{:float_special, _} = n]) do
+  defp to_exact(_op, {:float_special, _} = n) do
     raise Error, reason: {:not_representable_exact, n}
   end
 
-  defp inexact_to_exact([other]) do
-    raise Error, reason: {:type_error, "inexact->exact", "number", other}
+  defp to_exact(op, other) do
+    raise Error, reason: {:type_error, op, "number", other}
   end
 
   # ---------------------------------------------------------------------------

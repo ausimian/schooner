@@ -1,10 +1,5 @@
 ;; Curated from Chibi-Scheme r7rs-tests.scm §6.6 "Characters".
 ;; Source: https://github.com/ashinn/chibi-scheme/blob/master/tests/r7rs-tests.scm
-;;
-;; Excluded from the upstream section, with reasons:
-;;   - `digit-value` cluster at lines 1271-1277: `digit-value` is not
-;;     in Schooner's shipped surface (PLAN.md leaves digit-value out
-;;     of `(scheme char)` to keep the Unicode tables minimal).
 
 (test-begin "6.6 Characters")
 
@@ -87,5 +82,12 @@
 (test #\λ (char-downcase #\Λ))
 (test #\λ (char-foldcase #\λ))
 (test #\λ (char-foldcase #\Λ))
+
+(test 0 (digit-value #\0))
+(test 9 (digit-value #\9))
+(test 5 (digit-value #\x0665))
+(test 0 (digit-value #\x0966))
+(test #f (digit-value #\.))
+(test #f (digit-value #\a))
 
 (test-end)

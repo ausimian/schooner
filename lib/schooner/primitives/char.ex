@@ -48,7 +48,8 @@ defmodule Schooner.Primitives.Char do
       {"char-numeric?", 1, &char_numeric_p/1},
       {"char-whitespace?", 1, &char_whitespace_p/1},
       {"char-upper-case?", 1, &char_upper_case_p/1},
-      {"char-lower-case?", 1, &char_lower_case_p/1}
+      {"char-lower-case?", 1, &char_lower_case_p/1},
+      {"digit-value", 1, &digit_value/1}
     ]
   end
 
@@ -177,6 +178,41 @@ defmodule Schooner.Primitives.Char do
 
   defp raise_char(op, other),
     do: raise(Error, reason: {:type_error, op, "char", other})
+
+  # ---------------------------------------------------------------------------
+  # Digit value
+  # ---------------------------------------------------------------------------
+
+  # Per r7rs §6.6: returns the numeric value (0..9) of a Unicode Nd
+  # character, or #f for any other character. Each Nd block spans exactly
+  # ten consecutive codepoints starting at a "digit zero", so the digit
+  # value of `cp` equals its offset from the start of its block — found
+  # by walking down until the codepoint stops being Nd.
+  defp digit_value([{:char, cp}]) when cp in ?0..?9, do: cp - ?0
+  defp digit_value([{:char, cp}]) when cp < 128, do: Value.bool(false)
+
+  defp digit_value([{:char, cp}]) do
+    if Regex.match?(@numeric_re, <<cp::utf8>>) do
+      nd_block_offset(cp, 0)
+    else
+      Value.bool(false)
+    end
+  end
+
+  defp digit_value([other]),
+    do: raise(Error, reason: {:type_error, "digit-value", "char", other})
+
+  defp nd_block_offset(_cp, 9), do: 9
+
+  defp nd_block_offset(cp, n) do
+    prev = cp - 1
+
+    if prev >= 0 and Regex.match?(@numeric_re, <<prev::utf8>>) do
+      nd_block_offset(prev, n + 1)
+    else
+      n
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Helpers
