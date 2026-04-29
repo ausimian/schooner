@@ -135,3 +135,35 @@
   (syntax-rules ()
     ((_ var) var)
     ((_ var step) step)))
+
+;; -- multi-value binding ---------------------------------------------------
+;;
+;; Standard r7rs §4.2.2 reference implementation, using string literals
+;; ("bind" / "mktmp") as helper-rule keywords to drive the binding-walk.
+
+(define-syntax let-values
+  (syntax-rules ()
+    ((let-values (binding ...) body0 body1 ...)
+     (let-values "bind" (binding ...) () (begin body0 body1 ...)))
+    ((let-values "bind" () tmps body)
+     (let tmps body))
+    ((let-values "bind" ((b0 e0) binding ...) tmps body)
+     (let-values "mktmp" b0 e0 () (binding ...) tmps body))
+    ((let-values "mktmp" () e0 args bindings tmps body)
+     (call-with-values (lambda () e0)
+       (lambda args
+         (let-values "bind" bindings tmps body))))
+    ((let-values "mktmp" (a . b) e0 (arg ...) bindings (tmp ...) body)
+     (let-values "mktmp" b e0 (arg ... x) bindings (tmp ... (a x)) body))
+    ((let-values "mktmp" a e0 (arg ...) bindings (tmp ...) body)
+     (call-with-values (lambda () e0)
+       (lambda (arg ... . a)
+         (let-values "bind" bindings (tmp ...) body))))))
+
+(define-syntax let*-values
+  (syntax-rules ()
+    ((let*-values () body0 body1 ...)
+     (let () body0 body1 ...))
+    ((let*-values ((b0 e0) binding ...) body0 body1 ...)
+     (let-values ((b0 e0))
+       (let*-values (binding ...) body0 body1 ...)))))

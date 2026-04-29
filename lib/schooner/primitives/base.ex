@@ -40,7 +40,8 @@ defmodule Schooner.Primitives.Base do
       vector_specs() ++
       bytevector_specs() ++
       string_specs() ++
-      symbol_specs()
+      symbol_specs() ++
+      multi_value_specs()
   end
 
   # ---------------------------------------------------------------------------
@@ -1211,6 +1212,38 @@ defmodule Schooner.Primitives.Base do
 
   defp string_to_symbol([other]),
     do: raise(Error, reason: {:type_error, "string->symbol", "string", other})
+
+  # ---------------------------------------------------------------------------
+  # Multi-value returns
+  # ---------------------------------------------------------------------------
+  #
+  # `(values v ...)` produces a `{:values, vtup}` marker (vtup is a
+  # tuple of the produced values) that is destructured only by
+  # `call-with-values`. Anywhere else a multi-value reaches a
+  # single-value context (`eval_args`, `eval_if`'s test, the script's
+  # top-level), `Schooner.Eval.single_value!/1` either auto-unwraps
+  # the 1-element case to a bare value or raises
+  # `{:wrong_value_count, …}`. `{:values, vtup}` is therefore never
+  # observable by `write`, `display`, or any predicate — it is purely
+  # a transit marker between `values` and `call-with-values`. Using a
+  # tuple (not a list) keeps the marker shape distinct from any
+  # Scheme list value that might also flow through these paths.
+
+  defp multi_value_specs do
+    [
+      {"values", {:at_least, 0}, &values_proc/1},
+      {"call-with-values", 2, &call_with_values_proc/1}
+    ]
+  end
+
+  defp values_proc(args), do: {:values, List.to_tuple(args)}
+
+  defp call_with_values_proc([producer, consumer]) do
+    case Eval.apply_proc(producer, []) do
+      {:values, vtup} -> Eval.apply_proc(consumer, Tuple.to_list(vtup))
+      single -> Eval.apply_proc(consumer, [single])
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Helpers

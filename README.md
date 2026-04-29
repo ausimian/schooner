@@ -40,7 +40,7 @@ each excluded upstream case annotated inline.
 | `define-syntax` placement    | Top-level only — a `define-syntax` inside a `(let () ...)` body is rejected.                                                                              |
 | `call/cc`                    | Escape-only. A captured continuation invoked after its dynamic extent has ended raises a Schooner error. Multi-shot continuations and `dynamic-wind` re-entry are deferred to v2.0. |
 | Letrec closure escape        | A closure created inside a `letrec` / `letrec*` / named `let` cannot recurse after escaping its frame; the rec frame does not survive. The mutation-free model rules out classical letrec via post-hoc assignment. |
-| Multi-value returns          | `values`, `call-with-values`, `define-values`, `let-values`, `let*-values` are not implemented.                                                           |
+| Multi-value returns          | `values`, `call-with-values`, `let-values`, `let*-values` are implemented; `define-values` is not (would need a non-mutating splice in the body desugarer). |
 | Parameter objects            | `make-parameter` and `parameterize` are not implemented.                                                                                                  |
 | Primitive errors             | Type / arity / domain errors raised by primitives surface as `Schooner.Primitive.Error` on the Elixir side and are *not* catchable from Scheme `guard` / `with-exception-handler`. Only Scheme-level `(raise ...)` / `(error ...)` enter the handler chain. |
 | Libraries shipped            | `(scheme base)`, `(scheme cxr)`, `(scheme char)`, `(scheme inexact)`, `(scheme case-lambda)`, `(scheme lazy)`, `(scheme write)`, `(scheme read)`.        |

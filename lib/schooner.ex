@@ -99,6 +99,7 @@ defmodule Schooner do
       body
       |> Expander.expand_program(syntax_env)
       |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
+      |> Eval.single_value!()
     after
       ExceptionState.restore(prev_handlers)
       ContinuationState.restore(prev_conts)

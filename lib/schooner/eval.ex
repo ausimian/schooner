@@ -31,7 +31,29 @@ defmodule Schooner.Eval do
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
   alias Schooner.Expander.SyntaxRules
+  alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
+
+  @doc """
+  Coerce a value reaching a single-value context. A bare value passes
+  through unchanged. A `{:values, {v}}` (single-arg `(values v)`)
+  unwraps to `v`. A `{:values, vtup}` with `tuple_size(vtup) != 1`
+  raises a `Schooner.Primitive.Error` with reason
+  `{:wrong_value_count, got, 1}`.
+
+  Used at every site that consumes one value: `eval_args`, the `if`
+  test, top-level of `Schooner.run/1` / `Schooner.eval/2`. The only
+  context that does *not* run through this is `call-with-values`'s
+  producer return path, which is the whole point of the marker.
+  """
+  @spec single_value!(Value.t() | {:values, tuple()}) :: Value.t()
+  def single_value!({:values, {v}}), do: v
+
+  def single_value!({:values, vtup}) when is_tuple(vtup) do
+    raise PError, reason: {:wrong_value_count, tuple_size(vtup), 1}
+  end
+
+  def single_value!(other), do: other
 
   @spec eval(Value.t(), Env.t()) :: Value.t()
 
@@ -82,7 +104,7 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
 
   defp eval_if([test | [then_e | []]], env) do
-    if Value.truthy?(eval(test, env)) do
+    if Value.truthy?(single_value!(eval(test, env))) do
       eval(then_e, env)
     else
       :unspecified
@@ -90,7 +112,7 @@ defmodule Schooner.Eval do
   end
 
   defp eval_if([test | [then_e | [else_e | []]]], env) do
-    if Value.truthy?(eval(test, env)) do
+    if Value.truthy?(single_value!(eval(test, env))) do
       eval(then_e, env)
     else
       eval(else_e, env)
@@ -135,7 +157,7 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
 
   defp eval_define([{:sym, name} | [expr | []]], env) do
-    Env.define(env, name, eval(expr, env))
+    Env.define(env, name, single_value!(eval(expr, env)))
     :unspecified
   end
 
@@ -169,13 +191,17 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
 
   defp eval_apply(head_expr, args_form, env) do
-    proc = eval(head_expr, env)
+    proc = single_value!(eval(head_expr, env))
     args = eval_args(args_form, env, [])
     apply_proc(proc, args)
   end
 
   defp eval_args([], _env, acc), do: Enum.reverse(acc)
-  defp eval_args([h | t], env, acc), do: eval_args(t, env, [eval(h, env) | acc])
+
+  defp eval_args([h | t], env, acc) do
+    eval_args(t, env, [single_value!(eval(h, env)) | acc])
+  end
+
   defp eval_args(_, _env, _acc), do: raise(Error, reason: :improper_application)
 
   @spec apply_proc(Value.t(), [Value.t()]) :: Value.t()
@@ -243,7 +269,7 @@ defmodule Schooner.Eval do
       names
       |> Enum.zip(inits)
       |> Enum.each(fn {name, init} ->
-        Env.rec_set(rec_env, name, eval(init, rec_env))
+        Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
       end)
 
       eval_body(body, rec_env)
