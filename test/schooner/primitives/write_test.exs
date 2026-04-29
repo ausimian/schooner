@@ -2,6 +2,7 @@ defmodule Schooner.Primitives.WriteTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Eval.Error, as: EvalError
+  alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
   defp run(source), do: Schooner.run(source)
@@ -45,6 +46,28 @@ defmodule Schooner.Primitives.WriteTest do
     test "delegate to write for cycle-free immutable values" do
       assert run(~S|(write-shared "hi")|) == Value.string("\"hi\"")
       assert run("(write-simple '(1 2))") == Value.string("(1 2)")
+    end
+  end
+
+  describe "newline" do
+    test "returns the literal newline string" do
+      assert run("(newline)") == Value.string("\n")
+    end
+
+    test "errors when given an argument" do
+      assert_raise EvalError, fn -> run("(newline 'extra)") end
+    end
+  end
+
+  describe "write-string" do
+    test "returns the input string unchanged" do
+      assert run(~S|(write-string "hello")|) == Value.string("hello")
+      assert run(~S|(write-string "")|) == Value.string("")
+    end
+
+    test "rejects non-string input" do
+      e = assert_raise PError, fn -> run("(write-string 42)") end
+      assert match?({:type_error, "write-string", "string", _}, e.reason)
     end
   end
 

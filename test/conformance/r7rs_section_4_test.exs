@@ -12,7 +12,9 @@ defmodule Schooner.Conformance.R7rsSection4Test do
   #   - delayed evaluation (delay, force, make-promise): phase 13
   #   - dynamic bindings (parameterize, make-parameter): out of scope
   #   - exception handling (guard, raise): phase 11
-  #   - I/O (display, write, newline): host-injected; not in default env
+  #   - file ports / read-line: out of scope; `display`, `write`,
+  #     `newline`, `write-string` are present in the string-port flavour
+  #     (return rendered text instead of writing to a port)
   use ExUnit.Case, async: true
 
   alias Schooner.Value

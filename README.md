@@ -45,4 +45,4 @@ each excluded upstream case annotated inline.
 | Primitive errors             | Type / arity / domain errors raised by primitives surface as `Schooner.Primitive.Error` on the Elixir side and are *not* catchable from Scheme `guard` / `with-exception-handler`. Only Scheme-level `(raise ...)` / `(error ...)` enter the handler chain. |
 | Libraries shipped            | `(scheme base)`, `(scheme cxr)`, `(scheme char)`, `(scheme inexact)`, `(scheme case-lambda)`, `(scheme lazy)`, `(scheme write)`, `(scheme read)`.        |
 | Libraries omitted            | `(scheme file)`, `(scheme load)`, `(scheme repl)`, `(scheme process-context)`, `(scheme time)`, `(scheme eval)`, `(scheme complex)`, `(scheme r5rs)`.    |
-| I/O                          | `display` only. No file ports, no string ports beyond what `(scheme read)` needs internally, no `newline` / `read-line` / `write-string`.                |
+| I/O                          | No file ports, no string ports beyond what `(scheme read)` needs internally, no `read-line`. `display` / `write` / `newline` / `write-string` are present in the string-port flavour: they return the rendered text instead of writing to a port. |
