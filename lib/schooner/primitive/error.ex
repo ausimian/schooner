@@ -72,4 +72,8 @@ defmodule Schooner.Primitive.Error do
   defp format({:wrong_record_type, op, type_name}) do
     "`#{op}`: value is not a record of type `#{type_name}`"
   end
+
+  defp format({:wrong_value_count, got, expected}) do
+    "wrong number of values: expected #{expected}, got #{got}"
+  end
 end

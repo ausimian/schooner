@@ -3,12 +3,13 @@
 ;;
 ;; Excluded from the upstream section, with reasons:
 ;;   - letrec* `means` test, exact-integer-sqrt cluster, and the
-;;     '(x y x y) shadowing case at lines 182-238: rely on (values),
-;;     (let*-values), exact-integer-sqrt and rationals — none of
-;;     which Schooner supports (no multi-value returns, no rational
-;;     tower, exact-integer-sqrt not in the shipped surface).
-;;   - `(let-values () 'ok)` and the `(let*-values () (define ...))`
-;;     scoping case at 240-246: let-values / let*-values not supported.
+;;     '(x y x y) shadowing case at lines 182-238: rely on
+;;     exact-integer-sqrt and rationals — neither shipped. (The
+;;     `values` / `let*-values` parts are now supported but the
+;;     other dependencies still gate these specific cases.)
+;;   - The `(let*-values () (define ...))` scoping case at 240-246:
+;;     uses an internal `define` after a `let*-values` body began,
+;;     which Schooner's body desugarer rejects.
 ;;   - `(set! x 5)` smoke at 248-251: mutation is out of scope (PLAN.md).
 ;;   - `(do ... (vector-set! vec i i))` at 253-256: vector-set! is a
 ;;     mutator. The pure `do` summing example at 258-261 is kept.

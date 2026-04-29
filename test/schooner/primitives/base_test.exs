@@ -1023,4 +1023,58 @@ defmodule Schooner.Primitives.BaseTest do
       assert match?({:codepoint_out_of_range, "char", _}, e.reason)
     end
   end
+
+  describe "multi-value returns" do
+    test "(values v) in single-value context returns v unchanged" do
+      assert run("(values 42)") == 42
+      assert run("(+ (values 5) 10)") == 15
+    end
+
+    test "(values) in single-value context errors with wrong-value-count" do
+      e = assert_raise PError, fn -> run("(values)") end
+      assert match?({:wrong_value_count, 0, 1}, e.reason)
+    end
+
+    test "(values v1 v2 ...) in single-value context errors with wrong-value-count" do
+      e = assert_raise PError, fn -> run("(values 1 2)") end
+      assert match?({:wrong_value_count, 2, 1}, e.reason)
+    end
+
+    test "call-with-values routes a single-value producer to a 1-arg consumer" do
+      assert run("(call-with-values (lambda () 5) (lambda (x) (* x 2)))") == 10
+    end
+
+    test "call-with-values routes a multi-value producer to a multi-arg consumer" do
+      assert run("(call-with-values (lambda () (values 1 2 3)) +)") == 6
+      assert run("(call-with-values (lambda () (values 4 5)) -)") == -1
+    end
+
+    test "call-with-values routes a zero-value producer to a zero-arg consumer" do
+      assert run("(call-with-values (lambda () (values)) (lambda () 'ok))") == Value.symbol("ok")
+    end
+
+    test "let-values binds multiple values from a single producer" do
+      assert run("(let-values (((a b) (values 1 2))) (+ a b))") == 3
+    end
+
+    test "let-values with rest formals binds all values to a list" do
+      assert run("(let-values ((all (values 1 2 3))) all)") == Value.list([1, 2, 3])
+    end
+
+    test "let-values with multiple bindings independently destructures each producer" do
+      assert run("""
+             (let-values (((a b) (values 1 2))
+                          ((c d) (values 3 4)))
+               (list a b c d))
+             """) == Value.list([1, 2, 3, 4])
+    end
+
+    test "let*-values lets later bindings see earlier ones" do
+      assert run("""
+             (let*-values (((a b) (values 1 2))
+                           ((c) (values (+ a b))))
+               c)
+             """) == 3
+    end
+  end
 end
