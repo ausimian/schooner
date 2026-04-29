@@ -62,6 +62,7 @@ defmodule Schooner.Expander.SyntaxRules do
     quote if lambda define begin set!
     define-syntax let-syntax letrec-syntax syntax-rules
     quasiquote unquote unquote-splicing
+    ...
   ))
 
   @doc """
@@ -131,11 +132,23 @@ defmodule Schooner.Expander.SyntaxRules do
   defp parse_rules([], _literals), do: []
 
   defp parse_rules([[pat | [tmpl | []]] | rest], literals) do
-    cpat = compile_pattern(pat, literals, 0)
+    # The macro keyword's position in the pattern is matched against the
+    # macro name regardless of what the rule writes (r7rs §4.3.2). Force
+    # it to `:wild` so a `_` literal in the literals list does not turn
+    # the conventional `_` placeholder into "match only the literal `_`".
+    cpat = pat |> compile_pattern(literals, 0) |> ignore_keyword_position()
     pvars = collect_pvars(cpat, %{})
-    ctmpl = compile_template(tmpl, pvars)
+    ctmpl = compile_template(tmpl, pvars, false)
     [{cpat, ctmpl} | parse_rules(rest, literals)]
   end
+
+  defp ignore_keyword_position({:list, [_kw | rest], tail}),
+    do: {:list, [:wild | rest], tail}
+
+  defp ignore_keyword_position({:list_ell, [_kw | pre], ell, post, tail}),
+    do: {:list_ell, [:wild | pre], ell, post, tail}
+
+  defp ignore_keyword_position(other), do: other
 
   defp parse_rules(_, _), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
 
@@ -143,7 +156,11 @@ defmodule Schooner.Expander.SyntaxRules do
   # Pattern compilation
   # ---------------------------------------------------------------------------
 
-  defp compile_pattern({:sym, "_"}, _literals, _depth), do: :wild
+  # `_` is the wildcard *unless* the user puts `_` in the literals list,
+  # in which case it matches only the literal `_` symbol (r7rs §4.3.2).
+  defp compile_pattern({:sym, "_"}, literals, _depth) do
+    if MapSet.member?(literals, "_"), do: {:literal, "_"}, else: :wild
+  end
 
   defp compile_pattern({:sym, @ellipsis}, _literals, _depth) do
     raise Error, reason: {:bad_pattern, "stray ellipsis"}
@@ -255,18 +272,30 @@ defmodule Schooner.Expander.SyntaxRules do
   # Template compilation
   # ---------------------------------------------------------------------------
 
-  defp compile_template({:sym, @ellipsis}, _pvars) do
+  # When `escape?` is true, every `...` inside the template is treated as
+  # an ordinary identifier. r7rs §4.3.2 ellipsis-escape: `(... template)`
+  # is identical to `template` except that ellipses inside have no
+  # special meaning.
+  defp compile_template({:sym, @ellipsis}, _pvars, false) do
     raise Error, reason: {:bad_template, "stray ellipsis"}
   end
 
-  defp compile_template({:sym, name}, pvars) do
+  defp compile_template({:sym, @ellipsis}, _pvars, true), do: {:t_sym, @ellipsis}
+
+  defp compile_template({:sym, name}, pvars, _escape?) do
     case Map.fetch(pvars, name) do
       {:ok, depth} -> {:t_pvar, name, depth}
       :error -> {:t_sym, name}
     end
   end
 
-  defp compile_template([], _pvars), do: {:t_list, [], []}
+  defp compile_template([], _pvars, _escape?), do: {:t_list, [], []}
+
+  # Ellipsis-escape `(... template)`. Only valid outside an existing
+  # escape — once `escape?` is set, `...` is an ordinary identifier.
+  defp compile_template([{:sym, @ellipsis} | [tmpl | []]], pvars, false) do
+    compile_template(tmpl, pvars, true)
+  end
 
   # `(quote datum)` in a template emits `(quote datum)` verbatim. The
   # datum is data — its non-pattern-variable identifiers must NOT
@@ -274,39 +303,40 @@ defmodule Schooner.Expander.SyntaxRules do
   # author wrote it. Pattern variables inside the datum do still
   # substitute (the standard `case` macro relies on `'(d ...)` to
   # produce a list of the literal datums for `memv`).
-  defp compile_template([{:sym, "quote"} | [datum | []]], pvars) do
+  defp compile_template([{:sym, "quote"} | [datum | []]], pvars, _escape?) do
     {:t_quote, compile_quoted_datum(datum, pvars)}
   end
 
-  defp compile_template([_ | _] = list, pvars) do
-    compile_template_list(list, pvars, [])
+  defp compile_template([_ | _] = list, pvars, escape?) do
+    compile_template_list(list, pvars, [], escape?)
   end
 
-  defp compile_template({:vector, t}, pvars) do
+  defp compile_template({:vector, t}, pvars, escape?) do
     items = t |> Tuple.to_list() |> Value.list()
-    {:t_list, list_items, _tail} = compile_template_list(items, pvars, [])
+    {:t_list, list_items, _tail} = compile_template_list(items, pvars, [], escape?)
     {:t_vector, list_items}
   end
 
-  defp compile_template(other, _pvars), do: {:t_const, other}
+  defp compile_template(other, _pvars, _escape?), do: {:t_const, other}
 
-  defp compile_template_list([head | rest], pvars, acc) do
-    item_tmpl = compile_template(head, pvars)
-    {n, after_dots} = count_template_ellipses(rest, 0)
-    compile_template_list(after_dots, pvars, [{item_tmpl, n} | acc])
+  defp compile_template_list([head | rest], pvars, acc, escape?) do
+    item_tmpl = compile_template(head, pvars, escape?)
+    {n, after_dots} = count_template_ellipses(rest, 0, escape?)
+    compile_template_list(after_dots, pvars, [{item_tmpl, n} | acc], escape?)
   end
 
-  defp compile_template_list([], _pvars, acc), do: {:t_list, Enum.reverse(acc), []}
+  defp compile_template_list([], _pvars, acc, _escape?),
+    do: {:t_list, Enum.reverse(acc), []}
 
-  defp compile_template_list(other, pvars, acc) do
-    {:t_list, Enum.reverse(acc), compile_template(other, pvars)}
+  defp compile_template_list(other, pvars, acc, escape?) do
+    {:t_list, Enum.reverse(acc), compile_template(other, pvars, escape?)}
   end
 
-  defp count_template_ellipses([{:sym, @ellipsis} | rest], n) do
-    count_template_ellipses(rest, n + 1)
+  defp count_template_ellipses([{:sym, @ellipsis} | rest], n, false) do
+    count_template_ellipses(rest, n + 1, false)
   end
 
-  defp count_template_ellipses(rest, n), do: {n, rest}
+  defp count_template_ellipses(rest, n, _escape?), do: {n, rest}
 
   # Walk a quoted datum into a parallel AST. Pattern variables within
   # the datum are tagged for substitution (with their pattern depth
@@ -348,7 +378,7 @@ defmodule Schooner.Expander.SyntaxRules do
 
   defp compile_quoted_list([head | rest], pvars, acc) do
     item = compile_quoted_datum(head, pvars)
-    {n, after_dots} = count_template_ellipses(rest, 0)
+    {n, after_dots} = count_template_ellipses(rest, 0, false)
     compile_quoted_list(after_dots, pvars, [{item, n} | acc])
   end
 
