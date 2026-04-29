@@ -142,6 +142,8 @@ defmodule Schooner.Expander.SyntaxRules do
     [{cpat, ctmpl} | parse_rules(rest, literals)]
   end
 
+  defp parse_rules(_, _), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
+
   defp ignore_keyword_position({:list, [_kw | rest], tail}),
     do: {:list, [:wild | rest], tail}
 
@@ -149,8 +151,6 @@ defmodule Schooner.Expander.SyntaxRules do
     do: {:list_ell, [:wild | pre], ell, post, tail}
 
   defp ignore_keyword_position(other), do: other
-
-  defp parse_rules(_, _), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
 
   # ---------------------------------------------------------------------------
   # Pattern compilation
