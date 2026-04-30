@@ -276,9 +276,13 @@ defmodule Schooner.Primitives.BaseRationalsTest do
       assert run("(denominator 3.0)") === 1.0
     end
 
-    test "numerator / denominator on +inf.0 / +nan.0 raise" do
-      assert_raise PError, fn -> run("(numerator +inf.0)") end
-      assert_raise PError, fn -> run("(denominator +nan.0)") end
+    test "numerator / denominator on non-finite floats propagate the special" do
+      assert run("(numerator +inf.0)") == {:float_special, :pos_inf}
+      assert run("(numerator -inf.0)") == {:float_special, :neg_inf}
+      assert run("(numerator +nan.0)") == {:float_special, :nan}
+      assert run("(denominator +inf.0)") === 1.0
+      assert run("(denominator -inf.0)") === 1.0
+      assert run("(denominator +nan.0)") == {:float_special, :nan}
     end
 
     test "numerator / denominator type-check non-numbers" do
