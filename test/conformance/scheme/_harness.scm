@@ -25,6 +25,7 @@
         (scheme cxr)
         (scheme char)
         (scheme inexact)
+        (scheme complex)
         (scheme lazy)
         (scheme write)
         (scheme read)

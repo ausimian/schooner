@@ -83,6 +83,36 @@ defmodule Schooner.ValueTest do
       refute Value.rational?({:float_special, :pos_inf})
     end
 
+    test "complex — constructor, predicates, exact-zero collapse" do
+      z = Value.complex(3, 4)
+      assert z == {:complex, 3, 4}
+      assert Value.complex?(z)
+      assert Value.number?(z)
+      refute Value.real?(z)
+      refute Value.rational?(z)
+      refute Value.integer?(z)
+
+      # exact-zero imag collapses to bare real
+      assert Value.complex(5, 0) === 5
+      assert Value.complex(1.0, 0) === 1.0
+
+      # inexact-zero imag stays tagged
+      assert Value.complex(1.0, 0.0) == {:complex, 1.0, 0.0}
+
+      # exactness folds across components
+      assert Value.exact?(Value.complex(1, 2))
+      refute Value.exact?(Value.complex(1.0, 2))
+      assert Value.inexact?(Value.complex(1.0, 2))
+      refute Value.inexact?(Value.complex(1, 2))
+
+      # writers / equality
+      assert Value.write({:complex, 0, 1}) == "+i"
+      assert Value.write({:complex, 3, -4}) == "3-4i"
+      assert Value.write({:complex, 1.0, 2.0}) == "1.0+2.0i"
+      assert Value.eqv?({:complex, 1, 2}, {:complex, 1, 2})
+      refute Value.eqv?({:complex, 1, 2}, {:complex, 1.0, 2.0})
+    end
+
     test "vectors and bytevectors" do
       v = Value.vector([1, 2, 3])
       assert Value.vector?(v)

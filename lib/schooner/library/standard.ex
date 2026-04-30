@@ -16,6 +16,7 @@ defmodule Schooner.Library.Standard do
     * `(scheme cxr)` → `Primitives.Cxr`
     * `(scheme char)` → `Primitives.Char`
     * `(scheme inexact)` → `Primitives.Inexact`
+    * `(scheme complex)` → `Primitives.Complex`
     * `(scheme write)` → `Primitives.Write`
     * `(scheme read)` → `Primitives.Read`
     * `(scheme lazy)` → `Primitives.Lazy` plus the `delay` and
@@ -60,6 +61,7 @@ defmodule Schooner.Library.Standard do
     |> Library.register(scheme_cxr())
     |> Library.register(scheme_char())
     |> Library.register(scheme_inexact())
+    |> Library.register(scheme_complex())
     |> Library.register(scheme_write())
     |> Library.register(scheme_read())
     |> Library.register(scheme_case_lambda())
@@ -104,6 +106,14 @@ defmodule Schooner.Library.Standard do
     Library.new(
       name: ["scheme", "inexact"],
       exports: exports_from_specs([Primitives.Inexact.specs()]),
+      features: [:r7rs]
+    )
+  end
+
+  defp scheme_complex do
+    Library.new(
+      name: ["scheme", "complex"],
+      exports: exports_from_specs([Primitives.Complex.specs()]),
       features: [:r7rs]
     )
   end

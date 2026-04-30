@@ -62,14 +62,12 @@ defmodule Schooner.Primitives.InexactTest do
       assert match?({:irrational, "log", _}, e.reason)
     end
 
-    test "log of negative integer raises" do
-      e = assert_raise PError, fn -> run("(log -1)") end
-      assert match?({:irrational, "log", _}, e.reason)
+    test "log of negative integer lifts to complex" do
+      assert run("(log -1)") == {:complex, 0.0, :math.pi()}
     end
 
-    test "log of negative float raises" do
-      e = assert_raise PError, fn -> run("(log -1.5)") end
-      assert match?({:irrational, "log", _}, e.reason)
+    test "log of negative float lifts to complex" do
+      assert run("(log -1.5)") == {:complex, :math.log(1.5), :math.pi()}
     end
 
     test "log on non-number raises type error" do

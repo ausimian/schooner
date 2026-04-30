@@ -397,9 +397,8 @@ defmodule Schooner.Primitives.BaseRationalsTest do
       assert match?({:irrational, "sqrt", _}, e.reason)
     end
 
-    test "sqrt of negative rational raises irrational" do
-      e = assert_raise PError, fn -> run("(sqrt -1/4)") end
-      assert match?({:irrational, "sqrt", _}, e.reason)
+    test "sqrt of negative rational lifts into the imaginary axis" do
+      assert run("(sqrt -1/4)") == {:complex, 0, 0.5}
     end
   end
 
