@@ -45,6 +45,22 @@ defmodule Schooner.Primitives.BasePairsTest do
       assert run("(list-copy (cons 1 2))") == [1 | 2]
       assert run("(list-copy '(6 7 8 . 9))") == [6, 7, 8 | 9]
     end
+
+    test "list-copy spine is fresh — eq? distinguishes copy from source" do
+      # Each spine cons is freshly allocated, so identity-aware `eq?`
+      # separates the copy from the source. Element identity is
+      # preserved (the elements are shared, not cloned).
+      assert run("(let ((l '(1 2 3))) (eq? l (list-copy l)))") == Value.bool(false)
+      assert run("(let ((l '(1 2 3))) (equal? l (list-copy l)))") == Value.bool(true)
+
+      assert run("(let* ((a (list 'x)) (l (list a))) (eq? a (car (list-copy l))))") ==
+               Value.bool(true)
+    end
+
+    test "freshly consed pairs are not eq? to a structurally equal pair" do
+      assert run("(eq? (cons 1 2) (cons 1 2))") == Value.bool(false)
+      assert run("(let ((p (cons 1 2))) (eq? p p))") == Value.bool(true)
+    end
   end
 
   describe "length / reverse" do

@@ -60,12 +60,7 @@
 (test '(a b c) (memq 'a '(a b c)))
 (test '(b c) (memq 'b '(a b c)))
 (test #f (memq 'a '(b c d)))
-;; Skipped: `(memq (list 'a) '(b (a) c))` from upstream line 1148.
-;; r7rs `memq` walks the list with `eq?`; the freshly consed
-;; `(list 'a)` is not eq? to the literal `(a)` in the constant list,
-;; so the result is #f. Schooner's `memq` on pairs reduces to
-;; structural equality (matching its `eqv?` deviation), returning
-;; the rest of the list. Documented deviation.
+(test #f (memq (list 'a) '(b (a) c)))
 (test '((a) c) (member (list 'a) '(b (a) c)))
 ;; Skipped: `(member "B" '(...) string-ci=?)` from upstream line 1150.
 ;; The 3-argument form of `member` (custom comparison) and the
@@ -78,9 +73,7 @@
   (test '(b 2) (assq 'b e))
   (test #f (assq 'd e)))
 
-;; Skipped: `(assq (list 'a) '(((a)) ((b)) ((c))))` from upstream
-;; line 1159 — same deviation as the `memq`/`eq?` cases. Schooner's
-;; `assq` falls back to structural pair equality.
+(test #f (assq (list 'a) '(((a)) ((b)) ((c)))))
 (test '((a)) (assoc (list 'a) '(((a)) ((b)) ((c)))))
 ;; Skipped: `(assoc 2.0 ... =)` from upstream line 1161. The
 ;; 3-argument form of `assoc` (custom comparison) is not in
@@ -96,11 +89,7 @@
   (test l2 '((a b) (c d) e))
   (test #t (eq? (car l1) (car l2)))
   (test #t (eq? (cadr l1) (cadr l2)))
-  ;; Skipped: `(eq? (cdr l1) (cdr l2))` and `(cddr ...)` checks at
-  ;; upstream lines 1174-1175. They assert that `list-copy` produces
-  ;; *fresh* spine cons cells (so the cdr pairs differ by identity).
-  ;; Schooner's `eq?` reduces to structural equality on pairs, so
-  ;; the post-copy cdrs are still `eq?`. Documented deviation.
-  )
+  (test #f (eq? (cdr l1) (cdr l2)))
+  (test #f (eq? (cddr l1) (cddr l2))))
 
 (test-end)

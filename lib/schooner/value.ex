@@ -411,24 +411,56 @@ defmodule Schooner.Value do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Scheme `eq?`. In a fully immutable value model `eq?` is indistinguishable
-  from `eqv?` — there is no observable identity beyond structural value, so
-  the two collapse together. r7rs explicitly permits this.
+  Scheme `eq?`. Identical to `eqv?` for Schooner — r7rs permits an
+  implementation to collapse the two so long as the stronger discriminations
+  `eq?` is allowed to draw (distinct heap copies of structurally-equal
+  aggregates) are also drawn by `eqv?`. They are: see `eqv?/2` below.
   """
   @spec eq?(t(), t()) :: boolean()
   def eq?(a, b), do: eqv?(a, b)
 
   @doc """
-  Scheme `eqv?`. Numerically equal numbers compare equal only if they share
-  exactness — `(eqv? 1 1.0)` is `#f`. Erlang's `===` already enforces this
-  because integers and floats are distinct terms.
+  Scheme `eqv?`. Atomic values (numbers, characters, symbols, booleans,
+  `()`, `:eof`, `:unspecified`) compare by content, with exactness preserved
+  for numbers — `(eqv? 1 1.0)` is `#f`. Aggregates (pairs, vectors, strings,
+  bytevectors, records, procedures, promises, parameters, error objects)
+  compare by physical identity via `:erts_debug.same/2` — two
+  structurally-equal aggregates built independently are *not* `eqv?`. This
+  is r7rs's "denote different locations in the store" semantics, recovered
+  for an immutable value model by leaning on the BEAM's heap layout instead
+  of explicit identity tags.
+
+  `:erts_debug.same/2` is an unofficial OTP BIF; it has been stable across
+  many releases and is used by the Erlang/OTP test suite. Compiler / loader
+  literal sharing means two source-level literals like `'(1 2)` written in
+  the same module *may* be deduplicated and report `same` — r7rs explicitly
+  permits constants to be shared, so this is allowed but worth pinning with
+  a test if relevant to caller behaviour.
   """
   @spec eqv?(t(), t()) :: boolean()
   # IEEE-754: NaN is never equal to anything, including another NaN.
   def eqv?({:float_special, :nan}, _), do: false
   def eqv?(_, {:float_special, :nan}), do: false
   def eqv?({:complex, r1, i1}, {:complex, r2, i2}), do: eqv?(r1, r2) and eqv?(i1, i2)
-  def eqv?(a, b), do: a === b
+  def eqv?(a, b), do: :erts_debug.same(a, b) or (atomic?(a) and a === b)
+
+  # Values for which r7rs requires `eqv?` (and therefore `eq?`) to compare
+  # by content rather than by location. Bare integers / floats / atoms are
+  # immediates on the BEAM and already collapse under `:erts_debug.same/2`,
+  # but listing them here keeps the predicate self-contained against future
+  # boxing changes and means callers can rely on it independently.
+  defp atomic?(n) when is_integer(n) or is_float(n), do: true
+  defp atomic?({:rational, _, _}), do: true
+  defp atomic?({:float_special, _}), do: true
+  defp atomic?({:complex, _, _}), do: true
+  defp atomic?({:char, _}), do: true
+  defp atomic?({:sym, _}), do: true
+  defp atomic?(true), do: true
+  defp atomic?(false), do: true
+  defp atomic?([]), do: true
+  defp atomic?(:eof), do: true
+  defp atomic?(:unspecified), do: true
+  defp atomic?(_), do: false
 
   @doc """
   Scheme `equal?`. Recurses structurally into pairs, vectors, bytevectors,

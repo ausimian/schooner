@@ -242,6 +242,45 @@ defmodule Schooner.ValueTest do
       b = Value.record({:type, "p"}, {1, 2, 3})
       refute Value.equal?(a, b)
     end
+
+    test "eq? on aggregates is by physical identity, not by content" do
+      v = Value.vector([1, 2, 3])
+      assert Value.eq?(v, v)
+      refute Value.eq?(v, Value.vector([1, 2, 3]))
+
+      bv = Value.bytevector([1, 2, 3])
+      assert Value.eq?(bv, bv)
+      refute Value.eq?(bv, Value.bytevector([1, 2, 3]))
+
+      p = Value.pair(1, 2)
+      assert Value.eq?(p, p)
+      refute Value.eq?(p, Value.pair(1, 2))
+
+      r = Value.record({:type, "p"}, {1, 2})
+      assert Value.eq?(r, r)
+      refute Value.eq?(r, Value.record({:type, "p"}, {1, 2}))
+    end
+
+    test "eq? on atomic values still compares by content" do
+      # Tagged-tuple atomics: separate constructions are distinct heap
+      # terms, so `:erts_debug.same/2` returns false; the atomic fallback
+      # in `eqv?/2` recovers the content comparison r7rs requires.
+      assert Value.eq?(Value.symbol("foo"), Value.symbol("foo"))
+      assert Value.eq?(Value.char(?a), Value.char(?a))
+      assert Value.eq?({:rational, 1, 2}, {:rational, 1, 2})
+      assert Value.eq?({:complex, 1, 2}, {:complex, 1, 2})
+
+      # Big integers can be heap-allocated; eq? must still see them equal.
+      big = :erlang.bsl(1, 100)
+      assert Value.eq?(big, :erlang.bsl(1, 100))
+    end
+
+    test "equal? remains structural across copies" do
+      v1 = Value.vector([1, 2, 3])
+      v2 = Value.vector([1, 2, 3])
+      refute Value.eq?(v1, v2)
+      assert Value.equal?(v1, v2)
+    end
   end
 
   describe "write / display" do

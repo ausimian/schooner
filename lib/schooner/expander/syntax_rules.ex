@@ -17,7 +17,9 @@ defmodule Schooner.Expander.SyntaxRules do
       `name` (modulo mark-stripping)
     * `{:pvar, name, depth}` — pattern variable; `depth` is the number
       of enclosing ellipses (used to validate template uses)
-    * `{:const, value}` — matches `value` by `eqv?`
+    * `{:const, value}` — matches `value` by `equal?` (r7rs §4.3.2:
+      "P is a datum and F is equal to P in the sense of the equal?
+      procedure")
     * `{:list, head_pats, tail_pat}` — proper-or-improper list
     * `{:list_ell, pre_pats, ell_pat, post_pats, tail_pat}` — list with
       one ellipsis
@@ -437,7 +439,7 @@ defmodule Schooner.Expander.SyntaxRules do
   end
 
   defp match({:const, v}, input, env) do
-    if Value.eqv?(v, input), do: {:ok, env}, else: :no_match
+    if Value.equal?(v, input), do: {:ok, env}, else: :no_match
   end
 
   defp match({:list, head_pats, tail_pat}, input, env) do

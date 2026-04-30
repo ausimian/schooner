@@ -1424,11 +1424,15 @@ defmodule Schooner.Primitives.Base do
   defp string_copy([v, start]), do: string_copy_range(v, start, nil)
   defp string_copy([v, start, end_]), do: string_copy_range(v, start, end_)
 
-  defp string_copy_range(s, nil, nil) when is_binary(s), do: Value.string(s)
+  # `:binary.copy/1` forces a fresh allocation so identity-aware `eq?`
+  # (via `:erts_debug.same/2`) can distinguish the copy from its source.
+  # Without it the no-range branch would return the input binary verbatim
+  # and `(eq? s (string-copy s))` would be `#t`, contradicting r7rs.
+  defp string_copy_range(s, nil, nil) when is_binary(s), do: Value.string(:binary.copy(s))
 
   defp string_copy_range(s, start, end_) when is_binary(s) do
     {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string-copy")
-    Value.string(:binary.part(s, sbyte, slen))
+    Value.string(:binary.copy(:binary.part(s, sbyte, slen)))
   end
 
   defp string_copy_range(other, _, _),
