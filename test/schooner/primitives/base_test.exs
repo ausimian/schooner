@@ -266,9 +266,8 @@ defmodule Schooner.Primitives.BaseTest do
       assert is_float(run("(/ 1.0 3)"))
     end
 
-    test "(sqrt 2) with non-square exact integer raises irrational" do
-      e = assert_raise PError, fn -> run("(sqrt 2)") end
-      assert match?({:irrational, "sqrt", 2}, e.reason)
+    test "(sqrt 2) widens a non-square exact integer to an inexact result" do
+      assert run("(sqrt 2)") == :math.sqrt(2.0)
     end
 
     test "(sqrt 4) returns exact 2" do

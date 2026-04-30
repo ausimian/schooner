@@ -392,9 +392,8 @@ defmodule Schooner.Primitives.BaseRationalsTest do
       assert run("(sqrt 9/16)") == {:rational, 3, 4}
     end
 
-    test "sqrt of rational without exact result raises irrational" do
-      e = assert_raise PError, fn -> run("(sqrt 1/2)") end
-      assert match?({:irrational, "sqrt", _}, e.reason)
+    test "sqrt of rational without exact result widens to an inexact float" do
+      assert run("(sqrt 1/2)") == :math.sqrt(0.5)
     end
 
     test "sqrt of negative rational lifts into the imaginary axis" do

@@ -508,17 +508,15 @@ defmodule Schooner.Primitives.Base do
   defp do_sqrt({:float_special, _}), do: {:float_special, :nan}
   defp do_sqrt(n) when is_float(n) and n < 0.0, do: complex_sqrt_real(n)
   defp do_sqrt(n) when is_float(n), do: :math.sqrt(n)
-  defp do_sqrt(n) when is_integer(n) and n >= 0, do: exact_isqrt_or_raise(n)
+  defp do_sqrt(n) when is_integer(n) and n >= 0, do: exact_isqrt_or_widen(n)
   defp do_sqrt(n) when is_integer(n), do: complex_sqrt_real(n)
-  defp do_sqrt({:rational, n, _} = r) when n >= 0, do: rational_sqrt_or_raise(r)
+  defp do_sqrt({:rational, n, _} = r) when n >= 0, do: rational_sqrt_or_widen(r)
   defp do_sqrt({:rational, _, _} = r), do: complex_sqrt_real(r)
   defp do_sqrt({:complex, _, _} = z), do: complex_sqrt(z)
   defp do_sqrt(n), do: raise(Error, reason: {:irrational, "sqrt", n})
 
-  # `sqrt` of a negative real lifts into the imaginary axis. The
-  # magnitude becomes inexact (sqrt of a non-square exact still raises
-  # in the real-only path; the complex lift uses `:math.sqrt/1` so the
-  # imaginary component is a float).
+  # `sqrt` of a negative real lifts into the imaginary axis with an
+  # inexact imaginary component (`:math.sqrt/1` returns a float).
   defp complex_sqrt_real(n) do
     Value.complex(0, :math.sqrt(-to_float(n)))
   end
@@ -536,22 +534,19 @@ defmodule Schooner.Primitives.Base do
     Value.complex(re, im)
   end
 
-  defp exact_isqrt_or_raise(n) do
+  defp exact_isqrt_or_widen(n) do
     r = isqrt(n)
-    if r * r == n, do: r, else: raise(Error, reason: {:irrational, "sqrt", n})
+    if r * r == n, do: r, else: :math.sqrt(to_float(n))
   end
 
-  defp rational_sqrt_or_raise({:rational, n, d} = r) when n >= 0 do
+  defp rational_sqrt_or_widen({:rational, n, d} = r) when n >= 0 do
     sn = isqrt(n)
     sd = isqrt(d)
 
     if sn * sn == n and sd * sd == d,
       do: Value.rational(sn, sd),
-      else: raise(Error, reason: {:irrational, "sqrt", r})
+      else: :math.sqrt(to_float(r))
   end
-
-  defp rational_sqrt_or_raise({:rational, _, _} = r),
-    do: raise(Error, reason: {:irrational, "sqrt", r})
 
   # Integer square root via Newton's method on arbitrary-precision integers.
   defp isqrt(0), do: 0
