@@ -54,7 +54,7 @@ defmodule Schooner.Primitives.Continuations do
   Consumed by `Schooner.Library.Standard` as part of the
   `(scheme base)` assembly.
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
       {"call-with-current-continuation", 1, &call_cc/1},

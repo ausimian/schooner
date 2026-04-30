@@ -1,6 +1,7 @@
 defmodule Schooner.Primitives.BaseTest do
   use ExUnit.Case, async: true
 
+  alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
@@ -873,8 +874,9 @@ defmodule Schooner.Primitives.BaseTest do
     end
 
     test "make-vector with too many args" do
-      e = assert_raise PError, fn -> run("(make-vector 3 0 0)") end
-      assert match?({:type_error, "make-vector", "1 or 2 arguments", :too_many}, e.reason)
+      e = assert_raise EvalError, fn -> run("(make-vector 3 0 0)") end
+      assert e.reason == {:arity_mismatch, "make-vector", {:between, 1, 2}, 3}
+      assert e.message =~ "expected between 1 and 2, got 3"
     end
 
     test "bytevector ops reject non-bytevector arg" do
@@ -891,14 +893,14 @@ defmodule Schooner.Primitives.BaseTest do
     end
 
     test "make-bytevector / bytevector-copy / utf8->string with too many args" do
-      for {op, src} <- [
-            {"make-bytevector", "(make-bytevector 3 0 0)"},
-            {"bytevector-copy", "(bytevector-copy #u8(1 2 3) 0 1 2)"},
-            {"utf8->string", "(utf8->string #u8(1) 0 1 2)"},
-            {"string->utf8", ~S|(string->utf8 "x" 0 1 2)|}
+      for {op, src, hi} <- [
+            {"make-bytevector", "(make-bytevector 3 0 0)", 2},
+            {"bytevector-copy", "(bytevector-copy #u8(1 2 3) 0 1 2)", 3},
+            {"utf8->string", "(utf8->string #u8(1) 0 1 2)", 3},
+            {"string->utf8", ~S|(string->utf8 "x" 0 1 2)|, 3}
           ] do
-        e = assert_raise PError, fn -> run(src) end
-        assert match?({:type_error, ^op, _, :too_many}, e.reason)
+        e = assert_raise EvalError, fn -> run(src) end
+        assert match?({:arity_mismatch, ^op, {:between, 1, ^hi}, _}, e.reason)
       end
     end
 
@@ -923,13 +925,13 @@ defmodule Schooner.Primitives.BaseTest do
     end
 
     test "make-string / string-copy / string->list with too many args" do
-      for {op, src} <- [
-            {"make-string", ~S|(make-string 3 #\a #\b)|},
-            {"string-copy", ~S|(string-copy "abc" 0 1 2)|},
-            {"string->list", ~S|(string->list "abc" 0 1 2)|}
+      for {op, src, hi} <- [
+            {"make-string", ~S|(make-string 3 #\a #\b)|, 2},
+            {"string-copy", ~S|(string-copy "abc" 0 1 2)|, 3},
+            {"string->list", ~S|(string->list "abc" 0 1 2)|, 3}
           ] do
-        e = assert_raise PError, fn -> run(src) end
-        assert match?({:type_error, ^op, _, :too_many}, e.reason)
+        e = assert_raise EvalError, fn -> run(src) end
+        assert match?({:arity_mismatch, ^op, {:between, 1, ^hi}, _}, e.reason)
       end
     end
   end
@@ -1001,23 +1003,24 @@ defmodule Schooner.Primitives.BaseTest do
 
   describe "1-to-3-argument primitives reject too many args" do
     test "vector-copy with 4 args" do
-      e = assert_raise PError, fn -> run("(vector-copy #(1 2 3) 0 3 99)") end
-      assert e.reason == {:type_error, "vector-copy", "1 to 3 arguments", :too_many}
+      e = assert_raise EvalError, fn -> run("(vector-copy #(1 2 3) 0 3 99)") end
+      assert e.reason == {:arity_mismatch, "vector-copy", {:between, 1, 3}, 4}
+      assert e.message =~ "expected between 1 and 3, got 4"
     end
 
     test "bytevector-copy with 4 args" do
-      e = assert_raise PError, fn -> run("(bytevector-copy #u8(1 2 3) 0 3 99)") end
-      assert e.reason == {:type_error, "bytevector-copy", "1 to 3 arguments", :too_many}
+      e = assert_raise EvalError, fn -> run("(bytevector-copy #u8(1 2 3) 0 3 99)") end
+      assert e.reason == {:arity_mismatch, "bytevector-copy", {:between, 1, 3}, 4}
     end
 
     test "utf8->string with 4 args" do
-      e = assert_raise PError, fn -> run("(utf8->string #u8(97 98 99) 0 3 99)") end
-      assert e.reason == {:type_error, "utf8->string", "1 to 3 arguments", :too_many}
+      e = assert_raise EvalError, fn -> run("(utf8->string #u8(97 98 99) 0 3 99)") end
+      assert e.reason == {:arity_mismatch, "utf8->string", {:between, 1, 3}, 4}
     end
 
     test "string->utf8 with 4 args" do
-      e = assert_raise PError, fn -> run(~S|(string->utf8 "abc" 0 3 99)|) end
-      assert e.reason == {:type_error, "string->utf8", "1 to 3 arguments", :too_many}
+      e = assert_raise EvalError, fn -> run(~S|(string->utf8 "abc" 0 3 99)|) end
+      assert e.reason == {:arity_mismatch, "string->utf8", {:between, 1, 3}, 4}
     end
   end
 

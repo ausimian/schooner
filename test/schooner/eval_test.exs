@@ -294,6 +294,20 @@ defmodule Schooner.EvalTest do
     end
   end
 
+  describe "primitive arity_mismatch surfaces on out-of-range supply to {:between, lo, hi}" do
+    test "make-vector with 3 args reports got count, not the :too_many sentinel" do
+      e = assert_raise Error, fn -> run("(make-vector 1 2 3)") end
+      assert e.reason == {:arity_mismatch, "make-vector", {:between, 1, 2}, 3}
+      assert e.message =~ "expected between 1 and 2, got 3"
+      refute e.message =~ ":too_many"
+    end
+
+    test "under-supply to a {:between, lo, hi} primitive also raises arity_mismatch" do
+      e = assert_raise Error, fn -> run("(make-vector)") end
+      assert e.reason == {:arity_mismatch, "make-vector", {:between, 1, 2}, 0}
+    end
+  end
+
   describe "guard clause whose test evaluates to literal #f" do
     test "false-test clause is skipped, next clause matches" do
       assert run("""

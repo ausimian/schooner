@@ -31,17 +31,17 @@ defmodule Schooner.Primitives.Inexact do
   tuple. Used by `Schooner.Library.Standard` to assemble
   `(scheme inexact)`.
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
       {"exp", 1, &exp_/1},
-      {"log", {:at_least, 1}, &log_/1},
+      {"log", {:between, 1, 2}, &log_/1},
       {"sin", 1, &sin_/1},
       {"cos", 1, &cos_/1},
       {"tan", 1, &tan_/1},
       {"asin", 1, &asin_/1},
       {"acos", 1, &acos_/1},
-      {"atan", {:at_least, 1}, &atan_/1},
+      {"atan", {:between, 1, 2}, &atan_/1},
       {"finite?", 1, &finite_p/1},
       {"infinite?", 1, &infinite_p/1},
       {"nan?", 1, &nan_p/1}
@@ -151,7 +151,6 @@ defmodule Schooner.Primitives.Inexact do
 
   defp atan_([x]), do: atan_one(x, "atan")
   defp atan_([y, x]), do: atan_two(y, x, "atan")
-  defp atan_(_), do: raise(Error, reason: {:type_error, "atan", "1 or 2 arguments", :too_many})
 
   defp atan_one(z, _) when is_complex(z), do: complex_atan(z)
   defp atan_one({:float_special, :pos_inf}, _), do: :math.pi() / 2.0

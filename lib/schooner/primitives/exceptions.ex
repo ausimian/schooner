@@ -24,7 +24,7 @@ defmodule Schooner.Primitives.Exceptions do
   Consumed by `Schooner.Library.Standard` as part of the
   `(scheme base)` assembly.
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
       {"error", {:at_least, 1}, &error/1},

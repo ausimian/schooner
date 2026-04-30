@@ -44,7 +44,7 @@ defmodule Schooner.Primitives.Record do
   `(scheme base)` assembly (record machinery is in r7rs §5.4 of
   base).
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
       {@instance_name, {:at_least, 1}, &record_instance/1},
