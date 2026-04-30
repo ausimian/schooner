@@ -22,7 +22,10 @@ defmodule Schooner.EvalInternalDefinesTest do
   end
 
   defp count_rec_slots do
-    Process.get_keys() |> Enum.count(&is_reference/1)
+    Process.get_keys()
+    |> Enum.count(fn k ->
+      is_reference(k) and match?({:rec_frame, _}, Process.get(k))
+    end)
   end
 
   describe "internal defines in lambda body" do

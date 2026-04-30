@@ -3,17 +3,24 @@ defmodule Schooner.Env do
   Immutable-ish environment for the Scheme evaluator.
 
   An environment is a chain of lexical frames innermost-first plus a
-  *globals* table identified by an `:ets` table id. Lexical frames are
-  immutable maps; new frames are pushed by `extend/2`. The globals
-  table is mutable in the strict sense — `define/3` writes to it — so
-  closures that captured an env see top-level definitions added after
-  they were created. This is the standard `letrec`-style knot-tying
-  applied to the top-level frame: closures reference the frame by
-  identity, not by value-at-bind-time.
+  *globals* slot identified by a process-dictionary key (a fresh
+  reference). Lexical frames are immutable maps; new frames are
+  pushed by `extend/2`. The globals slot is mutable in the strict
+  sense — `define/3` writes to it — so closures that captured an env
+  see top-level definitions added after they were created. This is
+  the standard `letrec`-style knot-tying applied to the top-level
+  frame: closures reference the frame by identity, not by
+  value-at-bind-time.
 
-  The globals table is owned by the process that calls `new/0` and is
-  GC'd when that process exits, so per-execution sandboxing falls out
-  of the BEAM's process model.
+  Globals are stored as a Map on the process heap, not in `:ets`, so
+  consecutive lookups of the same name return the *same* heap term.
+  This preserves `:erts_debug.same/2` identity for aggregates bound
+  at top level — `(eq? x x)` answers `#t` for vectors, pairs,
+  parameters, and other aggregates, matching the lexical case.
+
+  The globals slot is owned by the process that calls `new/0` and is
+  reclaimed when that process exits, so per-execution sandboxing
+  falls out of the BEAM's process model.
 
   ## Recursive lexical frames
 
@@ -42,13 +49,14 @@ defmodule Schooner.Env do
   defstruct [:globals, :lex]
 
   @type frame :: %{optional(binary()) => Value.t()} | {:rec, reference()}
-  @type t :: %__MODULE__{globals: :ets.tid(), lex: [frame()]}
+  @type t :: %__MODULE__{globals: reference(), lex: [frame()]}
   @type lookup_result :: {:ok, Value.t()} | :error | {:uninitialised, binary()}
 
   @spec new() :: t()
   def new do
-    table = :ets.new(:schooner_globals, [:set, :protected])
-    %__MODULE__{globals: table, lex: []}
+    ref = make_ref()
+    Process.put(ref, %{})
+    %__MODULE__{globals: ref, lex: []}
   end
 
   @doc """
@@ -82,7 +90,7 @@ defmodule Schooner.Env do
       nil ->
         lex_lookup(rest, name)
 
-      frame ->
+      {:rec_frame, frame} ->
         case Map.fetch(frame, name) do
           {:ok, @rec_uninitialised} -> {:uninitialised, name}
           {:ok, _} = ok -> ok
@@ -98,10 +106,10 @@ defmodule Schooner.Env do
     end
   end
 
-  defp globals_lookup(table, name) do
-    case :ets.lookup(table, name) do
-      [{^name, value}] -> {:ok, value}
-      [] -> :error
+  defp globals_lookup(ref, name) do
+    case Map.fetch(Process.get(ref), name) do
+      {:ok, _} = ok -> ok
+      :error -> :error
     end
   end
 
@@ -110,8 +118,8 @@ defmodule Schooner.Env do
   captured this env, regardless of when it was created.
   """
   @spec define(t(), binary(), Value.t()) :: t()
-  def define(%__MODULE__{globals: globals} = env, name, value) when is_binary(name) do
-    :ets.insert(globals, {name, value})
+  def define(%__MODULE__{globals: ref} = env, name, value) when is_binary(name) do
+    Process.put(ref, Map.put(Process.get(ref), name, value))
     env
   end
 
@@ -136,7 +144,7 @@ defmodule Schooner.Env do
 
     Process.put(
       ref,
-      Map.new(names, fn name when is_binary(name) -> {name, @rec_uninitialised} end)
+      {:rec_frame, Map.new(names, fn name when is_binary(name) -> {name, @rec_uninitialised} end)}
     )
 
     %{env | lex: [{:rec, ref} | lex]}
@@ -145,7 +153,8 @@ defmodule Schooner.Env do
   @doc "Set a binding in the topmost recursive frame on `env`."
   @spec rec_set(t(), binary(), Value.t()) :: t()
   def rec_set(%__MODULE__{lex: [{:rec, ref} | _]} = env, name, value) when is_binary(name) do
-    Process.put(ref, Map.put(Process.get(ref), name, value))
+    {:rec_frame, frame} = Process.get(ref)
+    Process.put(ref, {:rec_frame, Map.put(frame, name, value)})
     env
   end
 

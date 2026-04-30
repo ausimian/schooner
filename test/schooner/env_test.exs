@@ -7,7 +7,7 @@ defmodule Schooner.EnvTest do
   test "new/0 returns an env with no lexical frames" do
     env = Env.new()
     assert env.lex == []
-    assert is_reference(env.globals) or is_integer(env.globals)
+    assert is_reference(env.globals)
   end
 
   test "lookup of an unbound name returns :error" do
