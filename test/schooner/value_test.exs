@@ -67,6 +67,22 @@ defmodule Schooner.ValueTest do
       refute Value.inexact?(1)
     end
 
+    test "rationals — constructor, predicates, normalisation" do
+      r = Value.rational(1, 2)
+      assert r == {:rational, 1, 2}
+      assert Value.number?(r)
+      assert Value.exact?(r)
+      refute Value.inexact?(r)
+      refute Value.integer?(r)
+      assert Value.rational?(r)
+      # rational? is also true for integers and finite floats…
+      assert Value.rational?(0)
+      assert Value.rational?(1.0)
+      # …but not for the non-finite float specials.
+      refute Value.rational?({:float_special, :nan})
+      refute Value.rational?({:float_special, :pos_inf})
+    end
+
     test "vectors and bytevectors" do
       v = Value.vector([1, 2, 3])
       assert Value.vector?(v)
@@ -213,6 +229,15 @@ defmodule Schooner.ValueTest do
       assert Value.write(1.0) == "1.0"
       assert Value.write(1.5) == "1.5"
       assert Value.write(0.1) == "0.1"
+    end
+
+    test "rationals" do
+      assert Value.write(Value.rational(1, 2)) == "1/2"
+      assert Value.write(Value.rational(-3, 4)) == "-3/4"
+      assert Value.write(Value.rational(2, -4)) == "-1/2"
+      # denom-1 collapses, so no rational tag survives — just an integer.
+      assert Value.write(Value.rational(6, 3)) == "2"
+      assert Value.display(Value.rational(22, 7)) == "22/7"
     end
 
     test "symbols" do

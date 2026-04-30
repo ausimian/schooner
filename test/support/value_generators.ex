@@ -17,6 +17,7 @@ defmodule Schooner.Test.ValueGenerators do
     one_of([
       atom_value(),
       integer_value(),
+      rational_value(),
       float_value(),
       char_value(),
       string_value(),
@@ -36,6 +37,7 @@ defmodule Schooner.Test.ValueGenerators do
     one_of([
       readable_atom_value(),
       integer_value(),
+      rational_value(),
       float_value(),
       char_value(),
       string_value(),
@@ -75,6 +77,14 @@ defmodule Schooner.Test.ValueGenerators do
   end
 
   def integer_value, do: integer()
+
+  def rational_value do
+    bind(integer(-1_000_000..1_000_000), fn num ->
+      bind(integer(2..1_000_000), fn den ->
+        constant(Value.rational(num, den))
+      end)
+    end)
+  end
 
   def float_value do
     # Bound to finite floats so equality semantics are well-defined.

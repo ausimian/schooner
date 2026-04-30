@@ -7,11 +7,12 @@ defmodule Schooner.Primitives.Base do
   via `Schooner.Eval.apply_proc/2` — this module just supplies the
   Elixir-side implementations.
 
-  Exactness rules follow r7rs: integer-only inputs produce exact integer
-  results where possible; any inexact (float) operand contaminates the
-  whole expression. Operations that would step outside integer/float —
-  rationals, complex, irrationals — raise `Schooner.Primitive.Error`
-  rather than silently widening, because Schooner has no rational tower.
+  Exactness rules follow r7rs: exact inputs (integers and rationals)
+  produce exact results where possible; any inexact (float) operand
+  contaminates the whole expression. Operations that would step outside
+  the rational tower — complex numbers, irrationals — raise
+  `Schooner.Primitive.Error` rather than silently widening, since
+  Schooner ships only the integer/rational/real layers.
   """
 
   alias Schooner.Eval
@@ -20,6 +21,11 @@ defmodule Schooner.Primitives.Base do
 
   defguardp is_special(v)
             when is_tuple(v) and tuple_size(v) == 2 and elem(v, 0) == :float_special
+
+  defguardp is_rational(v)
+            when is_tuple(v) and tuple_size(v) == 3 and elem(v, 0) == :rational
+
+  defguardp is_exact(v) when is_integer(v) or is_rational(v)
 
   # ---------------------------------------------------------------------------
   # Public spec
@@ -67,7 +73,10 @@ defmodule Schooner.Primitives.Base do
       {"exact->inexact", 1, &exact_to_inexact/1},
       {"inexact->exact", 1, &inexact_to_exact/1},
       {"inexact", 1, &inexact_/1},
-      {"exact", 1, &exact_/1}
+      {"exact", 1, &exact_/1},
+      {"numerator", 1, &numerator_/1},
+      {"denominator", 1, &denominator_/1},
+      {"rationalize", 2, &rationalize_/1}
     ]
   end
 
@@ -105,20 +114,49 @@ defmodule Schooner.Primitives.Base do
 
   defp add_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, b)
   defp add_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) + to_float(b)
+  defp add_pair(a, b) when is_rational(a) or is_rational(b), do: rat_add(a, b)
   defp add_pair(a, b), do: a + b
 
   defp sub_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, negate(b))
   defp sub_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) - to_float(b)
+  defp sub_pair(a, b) when is_rational(a) or is_rational(b), do: rat_add(a, negate(b))
   defp sub_pair(a, b), do: a - b
 
   defp mul_pair(a, b) when is_special(a) or is_special(b), do: special_mul(a, b)
   defp mul_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) * to_float(b)
+  defp mul_pair(a, b) when is_rational(a) or is_rational(b), do: rat_mul(a, b)
   defp mul_pair(a, b), do: a * b
 
   defp negate({:float_special, :pos_inf}), do: {:float_special, :neg_inf}
   defp negate({:float_special, :neg_inf}), do: {:float_special, :pos_inf}
   defp negate({:float_special, :nan}), do: {:float_special, :nan}
+  defp negate({:rational, n, d}), do: {:rational, -n, d}
   defp negate(n), do: -n
+
+  # Exact rational arithmetic. Inputs may be integers or `{:rational, n, d}`;
+  # Value.rational/2 normalises and collapses denom-1 results back to a bare
+  # integer, keeping the integer/rational split total.
+  defp rat_add(a, b) do
+    {n1, d1} = rat_pair(a)
+    {n2, d2} = rat_pair(b)
+    Value.rational(n1 * d2 + n2 * d1, d1 * d2)
+  end
+
+  defp rat_mul(a, b) do
+    {n1, d1} = rat_pair(a)
+    {n2, d2} = rat_pair(b)
+    Value.rational(n1 * n2, d1 * d2)
+  end
+
+  defp rat_div(a, b) do
+    {n1, d1} = rat_pair(a)
+    {n2, d2} = rat_pair(b)
+    if n2 == 0, do: raise(Error, reason: {:division_by_zero, "/"})
+    Value.rational(n1 * d2, d1 * n2)
+  end
+
+  defp rat_pair({:rational, n, d}), do: {n, d}
+  defp rat_pair(n) when is_integer(n), do: {n, 1}
 
   # NaN propagates; otherwise IEEE-754 inf rules. `+inf + -inf` → NaN.
   defp special_add({:float_special, :nan}, _), do: {:float_special, :nan}
@@ -160,18 +198,23 @@ defmodule Schooner.Primitives.Base do
 
   # ---- Division --------------------------------------------------------------
 
-  defp divide_pair(_op, a, b) when is_integer(a) and is_integer(b) do
-    cond do
-      b == 0 -> raise Error, reason: {:division_by_zero, "/"}
-      rem(a, b) == 0 -> div(a, b)
-      true -> raise Error, reason: {:exact_division_not_integer, a, b}
-    end
-  end
-
   defp divide_pair(_op, a, b) when is_special(a) or is_special(b),
     do: special_divide(a, b)
 
-  defp divide_pair(_op, a, b), do: do_float_divide(to_float(a), to_float(b))
+  defp divide_pair(_op, a, b) when is_float(a) or is_float(b),
+    do: do_float_divide(to_float(a), to_float(b))
+
+  # Integer-only fast path keeps `(/ 6 3)` from paying the gcd cost of
+  # `Value.rational/2` for the common evenly-divisible case.
+  defp divide_pair(_op, a, b) when is_integer(a) and is_integer(b) do
+    cond do
+      b == 0 -> raise(Error, reason: {:division_by_zero, "/"})
+      rem(a, b) == 0 -> div(a, b)
+      true -> Value.rational(a, b)
+    end
+  end
+
+  defp divide_pair(_op, a, b) when is_exact(a) and is_exact(b), do: rat_div(a, b)
 
   # NaN propagates; inf/inf is NaN; finite/inf is 0; inf/finite preserves
   # sign of inf scaled by sign of divisor.
@@ -228,6 +271,7 @@ defmodule Schooner.Primitives.Base do
 
   defp abs_special({:float_special, :neg_inf}), do: {:float_special, :pos_inf}
   defp abs_special({:float_special, k}), do: {:float_special, k}
+  defp abs_special({:rational, n, d}), do: {:rational, abs(n), d}
   defp abs_special(n), do: abs(n)
 
   defp min_([first | rest]) do
@@ -257,7 +301,7 @@ defmodule Schooner.Primitives.Base do
   defp pick_min({:float_special, :pos_inf}, b), do: to_float(b)
   defp pick_min(a, {:float_special, :pos_inf}), do: to_float(a)
   defp pick_min(a, b) when is_float(a) or is_float(b), do: min(to_float(a), to_float(b))
-  defp pick_min(a, b), do: min(a, b)
+  defp pick_min(a, b), do: if(rat_lt(a, b), do: a, else: b)
 
   defp pick_max({:float_special, :nan}, _), do: {:float_special, :nan}
   defp pick_max(_, {:float_special, :nan}), do: {:float_special, :nan}
@@ -266,7 +310,7 @@ defmodule Schooner.Primitives.Base do
   defp pick_max({:float_special, :neg_inf}, b), do: to_float(b)
   defp pick_max(a, {:float_special, :neg_inf}), do: to_float(a)
   defp pick_max(a, b) when is_float(a) or is_float(b), do: max(to_float(a), to_float(b))
-  defp pick_max(a, b), do: max(a, b)
+  defp pick_max(a, b), do: if(rat_lt(a, b), do: b, else: a)
 
   defp expt([base, exp]) do
     require_number!("expt", base)
@@ -274,17 +318,15 @@ defmodule Schooner.Primitives.Base do
     do_expt(base, exp)
   end
 
-  defp do_expt(base, exp) when is_integer(base) and is_integer(exp) and exp >= 0 do
-    int_pow(base, exp)
+  defp do_expt(base, exp) when is_exact(base) and is_integer(exp) and exp >= 0 do
+    rat_int_pow(base, exp)
   end
 
-  defp do_expt(1, exp) when is_integer(exp), do: 1
-  defp do_expt(-1, exp) when is_integer(exp) and rem(exp, 2) == 0, do: 1
-  defp do_expt(-1, exp) when is_integer(exp), do: -1
+  defp do_expt(0, exp) when is_integer(exp) and exp < 0,
+    do: raise(Error, reason: {:division_by_zero, "expt"})
 
-  defp do_expt(base, exp) when is_integer(base) and is_integer(exp) do
-    raise Error, reason: {:negative_exponent, base, exp}
-  end
+  defp do_expt(base, exp) when is_exact(base) and is_integer(exp),
+    do: rat_div(1, rat_int_pow(base, -exp))
 
   defp do_expt(base, exp) when is_special(base) or is_special(exp),
     do: special_expt(base, exp)
@@ -348,15 +390,15 @@ defmodule Schooner.Primitives.Base do
   defp odd_integer?(e) when is_float(e), do: e == trunc(e) and rem(trunc(e), 2) != 0
   defp odd_integer?(_), do: false
 
-  defp int_pow(_b, 0), do: 1
-  defp int_pow(b, 1), do: b
+  defp rat_int_pow(_b, 0), do: 1
+  defp rat_int_pow(b, 1), do: b
 
-  defp int_pow(b, e) when rem(e, 2) == 0 do
-    half = int_pow(b, div(e, 2))
-    half * half
+  defp rat_int_pow(b, e) when rem(e, 2) == 0 do
+    half = rat_int_pow(b, div(e, 2))
+    rat_mul(half, half)
   end
 
-  defp int_pow(b, e), do: b * int_pow(b, e - 1)
+  defp rat_int_pow(b, e), do: rat_mul(b, rat_int_pow(b, e - 1))
 
   defp gcd_([]), do: 0
 
@@ -384,21 +426,33 @@ defmodule Schooner.Primitives.Base do
 
   defp sqrt_([n]) do
     require_number!("sqrt", n)
-
-    cond do
-      n == {:float_special, :pos_inf} -> {:float_special, :pos_inf}
-      is_special(n) -> {:float_special, :nan}
-      is_float(n) and n < 0.0 -> {:float_special, :nan}
-      is_float(n) -> :math.sqrt(n)
-      is_integer(n) and n >= 0 -> exact_isqrt_or_raise(n)
-      true -> raise Error, reason: {:irrational, "sqrt", n}
-    end
+    do_sqrt(n)
   end
+
+  defp do_sqrt({:float_special, :pos_inf}), do: {:float_special, :pos_inf}
+  defp do_sqrt({:float_special, _}), do: {:float_special, :nan}
+  defp do_sqrt(n) when is_float(n) and n < 0.0, do: {:float_special, :nan}
+  defp do_sqrt(n) when is_float(n), do: :math.sqrt(n)
+  defp do_sqrt(n) when is_integer(n) and n >= 0, do: exact_isqrt_or_raise(n)
+  defp do_sqrt({:rational, _, _} = r), do: rational_sqrt_or_raise(r)
+  defp do_sqrt(n), do: raise(Error, reason: {:irrational, "sqrt", n})
 
   defp exact_isqrt_or_raise(n) do
     r = isqrt(n)
     if r * r == n, do: r, else: raise(Error, reason: {:irrational, "sqrt", n})
   end
+
+  defp rational_sqrt_or_raise({:rational, n, d} = r) when n >= 0 do
+    sn = isqrt(n)
+    sd = isqrt(d)
+
+    if sn * sn == n and sd * sd == d,
+      do: Value.rational(sn, sd),
+      else: raise(Error, reason: {:irrational, "sqrt", r})
+  end
+
+  defp rational_sqrt_or_raise({:rational, _, _} = r),
+    do: raise(Error, reason: {:irrational, "sqrt", r})
 
   # Integer square root via Newton's method on arbitrary-precision integers.
   defp isqrt(0), do: 0
@@ -424,10 +478,9 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp to_exact(_op, n) when is_integer(n), do: n
+  defp to_exact(_op, {:rational, _, _} = r), do: r
 
-  defp to_exact(_op, n) when is_float(n) do
-    if Value.integer?(n), do: trunc(n), else: raise(Error, reason: {:not_representable_exact, n})
-  end
+  defp to_exact(_op, n) when is_float(n), do: float_to_exact(n)
 
   defp to_exact(_op, {:float_special, _} = n) do
     raise Error, reason: {:not_representable_exact, n}
@@ -436,6 +489,92 @@ defmodule Schooner.Primitives.Base do
   defp to_exact(op, other) do
     raise Error, reason: {:type_error, op, "number", other}
   end
+
+  # Bit-exact IEEE-754 → exact rational via `Float.ratio/1`. The signed-zero
+  # case is handled here because `Float.ratio(-0.0)` returns the giant
+  # subnormal pair `{0, 1 <<< 1074}` rather than `{0, 1}`; non-finite
+  # operands are filtered earlier by `to_exact/2`.
+  defp float_to_exact(f) when f == 0.0, do: 0
+
+  defp float_to_exact(f) when is_float(f) do
+    {n, d} = Float.ratio(f)
+    Value.rational(n, d)
+  end
+
+  # ---------------------------------------------------------------------------
+  # numerator / denominator / rationalize
+  # ---------------------------------------------------------------------------
+
+  defp numerator_([n]) when is_integer(n), do: n
+  defp numerator_([{:rational, n, _}]), do: n
+  defp numerator_([f]) when is_float(f), do: elem(Float.ratio(f), 0) * 1.0
+  defp numerator_([other]), do: raise_rational_required("numerator", other)
+
+  defp denominator_([n]) when is_integer(n), do: 1
+  defp denominator_([{:rational, _, d}]), do: d
+  defp denominator_([f]) when is_float(f), do: elem(Float.ratio(f), 1) * 1.0
+  defp denominator_([other]), do: raise_rational_required("denominator", other)
+
+  defp raise_rational_required(op, other),
+    do: raise(Error, reason: {:type_error, op, "rational", other})
+
+  # Stern-Brocot / continued-fraction simplest-rational. Operates on exact
+  # values; the wrapper widens float operands to exact, runs the algorithm,
+  # and narrows back so the result tracks input exactness as r7rs requires.
+  defp rationalize_([x, y]) do
+    require_number!("rationalize", x)
+    require_number!("rationalize", y)
+    do_rationalize(x, y)
+  end
+
+  defp do_rationalize({:float_special, :nan}, _), do: {:float_special, :nan}
+  defp do_rationalize(_, {:float_special, :nan}), do: {:float_special, :nan}
+  defp do_rationalize({:float_special, _} = v, _), do: v
+  # Infinite tolerance covers the entire real line; the simplest rational
+  # in any such interval is 0. Inexact `y` widens the result to inexact.
+  defp do_rationalize(_x, {:float_special, _}), do: 0.0
+
+  defp do_rationalize(x, y) do
+    inexact? = is_float(x) or is_float(y)
+    ex = if inexact?, do: float_to_exact(to_float(x)), else: x
+    ey = if inexact?, do: float_to_exact(to_float(y)), else: y
+    result = simplest_rational(ex, ey)
+    if inexact?, do: to_float(result), else: result
+  end
+
+  defp simplest_rational(x, y) do
+    # |y| is the tolerance; the simplest rational lies in [x - |y|, x + |y|].
+    abs_y = abs_special(y)
+    lo = sub_pair(x, abs_y)
+    hi = add_pair(x, abs_y)
+
+    cond do
+      not rat_lt(lo, 0) -> simplest_rational_pos(lo, hi)
+      not rat_lt(0, hi) -> negate(simplest_rational_pos(negate(hi), negate(lo)))
+      true -> 0
+    end
+  end
+
+  defp simplest_rational_pos(lo, hi) do
+    flo = rat_floor(lo)
+    fhi = rat_floor(hi)
+
+    cond do
+      rat_eq(flo, lo) ->
+        flo
+
+      rat_eq(flo, fhi) ->
+        inv_lo = rat_div(1, sub_pair(lo, flo))
+        inv_hi = rat_div(1, sub_pair(hi, fhi))
+        add_pair(flo, rat_div(1, simplest_rational_pos(inv_hi, inv_lo)))
+
+      true ->
+        add_pair(flo, 1)
+    end
+  end
+
+  defp rat_floor(n) when is_integer(n), do: n
+  defp rat_floor({:rational, n, d}), do: Integer.floor_div(n, d)
 
   # ---------------------------------------------------------------------------
   # Comparison
@@ -478,23 +617,38 @@ defmodule Schooner.Primitives.Base do
   # `=` is numerical equality; `(= 1 1.0)` is true (only `eqv?` cares about exactness).
   defp num_eq(a, b) when is_special(a) or is_special(b), do: special_cmp_eq(a, b)
   defp num_eq(a, b) when is_float(a) or is_float(b), do: to_float(a) == to_float(b)
-  defp num_eq(a, b), do: a == b
+  defp num_eq(a, b), do: rat_eq(a, b)
 
   defp num_lt(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) == :lt
   defp num_lt(a, b) when is_float(a) or is_float(b), do: to_float(a) < to_float(b)
-  defp num_lt(a, b), do: a < b
+  defp num_lt(a, b), do: rat_lt(a, b)
 
   defp num_gt(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) == :gt
   defp num_gt(a, b) when is_float(a) or is_float(b), do: to_float(a) > to_float(b)
-  defp num_gt(a, b), do: a > b
+  defp num_gt(a, b), do: rat_lt(b, a)
 
   defp num_le(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) in [:lt, :eq]
   defp num_le(a, b) when is_float(a) or is_float(b), do: to_float(a) <= to_float(b)
-  defp num_le(a, b), do: a <= b
+  defp num_le(a, b), do: not rat_lt(b, a)
 
   defp num_ge(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) in [:gt, :eq]
   defp num_ge(a, b) when is_float(a) or is_float(b), do: to_float(a) >= to_float(b)
-  defp num_ge(a, b), do: a >= b
+  defp num_ge(a, b), do: not rat_lt(a, b)
+
+  # Reduced rationals are structurally unique, so `===` decides equality on
+  # the entire (integer | rational) lattice — `Value.rational/2` collapses
+  # any `n/1` to a bare integer, and rationals share no shape with anything
+  # else here.
+  defp rat_eq(a, b), do: a === b
+
+  defp rat_lt(a, b) when is_integer(a) and is_integer(b), do: a < b
+
+  defp rat_lt(a, b) do
+    {n1, d1} = rat_pair(a)
+    {n2, d2} = rat_pair(b)
+    # both denominators are positive, so cross-multiplication preserves inequality.
+    n1 * d2 < n2 * d1
+  end
 
   # Equality and ordering between specials and finite reals (NaN handled
   # in `check_pairs/4`; not reached here for the generic comparison ops).
@@ -516,6 +670,7 @@ defmodule Schooner.Primitives.Base do
     [
       {"number?", 1, &number_p/1},
       {"integer?", 1, &integer_p/1},
+      {"rational?", 1, &rational_p/1},
       {"exact?", 1, &exact_p/1},
       {"inexact?", 1, &inexact_p/1},
       {"zero?", 1, &zero_p/1},
@@ -542,6 +697,7 @@ defmodule Schooner.Primitives.Base do
 
   defp number_p([v]), do: Value.bool(Value.number?(v))
   defp integer_p([v]), do: Value.bool(Value.integer?(v))
+  defp rational_p([v]), do: Value.bool(Value.rational?(v))
   defp exact_p([v]), do: Value.bool(Value.exact?(v))
   defp inexact_p([v]), do: Value.bool(Value.inexact?(v))
   defp boolean_p([v]), do: Value.bool(Value.boolean?(v))
@@ -567,6 +723,7 @@ defmodule Schooner.Primitives.Base do
 
   defp positive_p([{:float_special, :pos_inf}]), do: Value.bool(true)
   defp positive_p([{:float_special, _}]), do: Value.bool(false)
+  defp positive_p([{:rational, n, _}]), do: Value.bool(n > 0)
 
   defp positive_p([n]) do
     require_number!("positive?", n)
@@ -575,6 +732,7 @@ defmodule Schooner.Primitives.Base do
 
   defp negative_p([{:float_special, :neg_inf}]), do: Value.bool(true)
   defp negative_p([{:float_special, _}]), do: Value.bool(false)
+  defp negative_p([{:rational, n, _}]), do: Value.bool(n < 0)
 
   defp negative_p([n]) do
     require_number!("negative?", n)
@@ -1252,7 +1410,7 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp require_number!(_op, n) when is_integer(n) or is_float(n), do: :ok
-  defp require_number!(_op, n) when is_special(n), do: :ok
+  defp require_number!(_op, n) when is_special(n) or is_rational(n), do: :ok
 
   defp require_number!(op, other) do
     raise Error, reason: {:type_error, op, "number", other}
@@ -1270,6 +1428,7 @@ defmodule Schooner.Primitives.Base do
 
   defp to_float(n) when is_float(n), do: n
   defp to_float(n) when is_integer(n), do: n * 1.0
+  defp to_float({:rational, n, d}), do: n / d
 
   defp trunc_int(n) when is_integer(n), do: n
   defp trunc_int(n) when is_float(n), do: trunc(n)
