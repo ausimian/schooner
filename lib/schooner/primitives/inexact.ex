@@ -137,8 +137,8 @@ defmodule Schooner.Primitives.Inexact do
   defp bounded_inv(z, _f, fc, _name) when is_complex(z), do: fc.(z)
   defp bounded_inv(special, _f, _fc, _name) when is_special(special), do: {:float_special, :nan}
 
-  defp bounded_inv(n, _f, _fc, name) when is_finite_number(n) and (n < -1 or n > 1),
-    do: raise_irrational(name, n)
+  defp bounded_inv(n, _f, fc, _name) when is_finite_number(n) and (n < -1 or n > 1),
+    do: fc.(Value.complex(n, 0))
 
   defp bounded_inv(n, f, _fc, _name) when is_integer(n), do: f.(n * 1.0)
   defp bounded_inv(n, f, _fc, _name) when is_float(n), do: f.(n)
