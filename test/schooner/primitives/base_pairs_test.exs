@@ -89,6 +89,16 @@ defmodule Schooner.Primitives.BasePairsTest do
       e = assert_raise PError, fn -> run("(append (cons 1 2) '(3))") end
       assert match?({:improper_list, "append", _}, e.reason)
     end
+
+    test "appending a 100k-element list does not blow the stack" do
+      result =
+        run("""
+        (let ((xs (vector->list (make-vector 100000 0))))
+          (length (append xs '(a b c))))
+        """)
+
+      assert result == 100_003
+    end
   end
 
   describe "list-tail / list-ref" do
