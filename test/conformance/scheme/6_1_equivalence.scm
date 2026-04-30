@@ -17,11 +17,7 @@
 (test #t (eqv? 2 2))
 (test #t (eqv? '() '()))
 (test #t (eqv? 100000000 100000000))
-;; Skipped: `(eqv? (cons 1 2) (cons 1 2))` from upstream line 701.
-;; r7rs says eqv? on two distinct freshly-consed pairs is #f because
-;; they "denote different locations in the store". Schooner has no
-;; mutable cons cells, so it implements `eqv?` on pairs as
-;; structural `equal?`, returning #t here. Documented deviation.
+(test #f (eqv? (cons 1 2) (cons 1 2)))
 (test #f (eqv? (lambda () 1)
                (lambda () 2)))
 (test #f (eqv? #f 'nil))
@@ -31,10 +27,7 @@
       (eqv? x x)))
 
 (test #t (eq? 'a 'a))
-;; Skipped: `(eq? (list 'a) (list 'a))` from upstream line 731 —
-;; same deviation as the eqv? case above. Schooner's `eq?` reduces
-;; to structural equality on pairs because there is no mutable
-;; cell identity.
+(test #f (eq? (list 'a) (list 'a)))
 (test #t (eq? '() '()))
 (test #t
     (let ((x '(a)))

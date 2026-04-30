@@ -75,15 +75,11 @@ defmodule Schooner.Primitives.BaseVectorsTest do
   end
 
   describe "vector-copy" do
-    test "produces a structurally equal vector" do
-      # Schooner deliberately collapses `eq?` and `eqv?` to structural
-      # equality (see `Schooner.Value` moduledoc); without mutation there
-      # is no observable identity beyond contents, so two equal-content
-      # vectors are `eq?` here. r7rs explicitly permits this. The test
-      # therefore pins the structural-equality guarantee that callers can
-      # rely on.
+    test "produces a structurally equal but not identity-equal vector" do
       assert run("(equal? #(1 2 3) (vector-copy #(1 2 3)))") == Value.bool(true)
       assert run("(equal? #(1 2 3) (vector-copy #(4 5 6)))") == Value.bool(false)
+      assert run("(let ((v #(1 2 3))) (eq? v (vector-copy v)))") == Value.bool(false)
+      assert run("(let ((v #(1 2 3))) (eq? v v))") == Value.bool(true)
     end
 
     test "vector-copy with start / end" do

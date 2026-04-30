@@ -74,6 +74,15 @@ defmodule Schooner.Primitives.BaseStringsTest do
       assert run(~S|(string-copy "hello" 1 3)|) == Value.string("el")
     end
 
+    test "string-copy returns a fresh binary, not the source" do
+      # The no-range form must allocate so identity-aware `eq?` can
+      # tell the copy apart from its source. Without `:binary.copy/1`
+      # the BIF would alias the input and `eq?` would erroneously
+      # return `#t`.
+      assert run(~S|(let ((s "hello")) (eq? s (string-copy s)))|) == Value.bool(false)
+      assert run(~S|(let ((s "hello")) (equal? s (string-copy s)))|) == Value.bool(true)
+    end
+
     test "slicing at end-of-string boundary is allowed" do
       assert run(~S|(substring "abc" 3 3)|) == Value.string("")
       assert run(~S|(string-copy "abc" 3 3)|) == Value.string("")
