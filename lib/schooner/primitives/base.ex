@@ -9,10 +9,25 @@ defmodule Schooner.Primitives.Base do
 
   Exactness rules follow r7rs: exact inputs (integers and rationals)
   produce exact results where possible; any inexact (float) operand
-  contaminates the whole expression. Operations that would step outside
-  the rational tower — complex numbers, irrationals — raise
-  `Schooner.Primitive.Error` rather than silently widening, since
-  Schooner ships only the integer/rational/real layers.
+  contaminates the whole expression. Real operations that produce a
+  complex result lift into the complex layer (`(sqrt -1)` ⟹ `+i`).
+
+  ## `sqrt` exact-vs-inexact split
+
+  `sqrt` keeps results exact whenever it can: a perfect-square integer
+  or rational yields an exact integer/rational; a non-square exact value
+  widens to a float. Negative real inputs lift into the imaginary axis
+  (`(sqrt -1)` ⟹ `0+i`, `(sqrt -1.0)` ⟹ `0+1.0i`). The non-finite floats
+  follow IEEE-754 directly: `(sqrt +inf.0)` ⟹ `+inf.0`, `(sqrt -inf.0)`
+  and `(sqrt +nan.0)` ⟹ `+nan.0`.
+
+  ## `expt` zero / unit-base short-circuits
+
+  `expt` follows the IEEE-754-2008 / C99 `pow` boundary rules ahead of
+  the usual NaN-propagation: anything raised to an exact `0` or signed
+  `±0.0` is `1.0` (including `(expt +nan.0 0)` and `(expt +inf.0 0)`);
+  `1` or `1.0` raised to anything is `1.0`; `±1` raised to `±inf.0` is
+  `1.0`. Outside those carve-outs, NaN propagates.
   """
 
   alias Schooner.Eval
@@ -408,8 +423,9 @@ defmodule Schooner.Primitives.Base do
 
   defp complex_int_pow(b, e), do: complex_mul(b, complex_int_pow(b, e - 1))
 
-  # IEEE-754 pow: anything^0 is 1.0 (even NaN, even infinities); 1^anything
-  # is 1.0; NaN otherwise propagates. inf^positive → inf, inf^negative → 0.0,
+  # IEEE-754 pow: anything^0 is 1.0 (even NaN, even infinities); ±1^±inf is
+  # 1.0 by the IEEE-754-2008 boundary carve-out; 1^anything is 1.0; NaN
+  # otherwise propagates. inf^positive → inf, inf^negative → 0.0,
   # |b|>1 ^ +inf → inf, |b|<1 ^ +inf → 0.0, mirrored for -inf exponents.
   defp special_expt(_, 0), do: 1.0
   defp special_expt(_, +0.0), do: 1.0
@@ -440,18 +456,18 @@ defmodule Schooner.Primitives.Base do
   defp special_expt(base, {:float_special, :pos_inf}) do
     cond do
       is_special(base) -> {:float_special, :pos_inf}
+      abs(to_float(base)) == 1.0 -> 1.0
       abs(to_float(base)) > 1.0 -> {:float_special, :pos_inf}
-      abs(to_float(base)) < 1.0 -> 0.0
-      true -> {:float_special, :nan}
+      true -> 0.0
     end
   end
 
   defp special_expt(base, {:float_special, :neg_inf}) do
     cond do
       is_special(base) -> 0.0
+      abs(to_float(base)) == 1.0 -> 1.0
       abs(to_float(base)) > 1.0 -> 0.0
-      abs(to_float(base)) < 1.0 -> {:float_special, :pos_inf}
-      true -> {:float_special, :nan}
+      true -> {:float_special, :pos_inf}
     end
   end
 
