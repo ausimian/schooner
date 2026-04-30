@@ -339,6 +339,21 @@ defmodule Schooner.LexerTest do
       assert_in_delta i, 0.0, 1.0e-12
     end
 
+    test "#e prefix forces exact components on a complex literal" do
+      assert [{:complex, {:complex, 3, 4}, _}] = Lexer.tokenise("#e3+4i")
+      # `#e` truncates float components to their integer part
+      assert [{:complex, {:complex, 1, 2}, _}] = Lexer.tokenise("#e1.0+2.0i")
+    end
+
+    test "#i prefix widens exact components of a complex literal to floats" do
+      assert [{:complex, {:complex, 0.5, third}, _}] = Lexer.tokenise("#i1/2+1/3i")
+      assert_in_delta third, 1 / 3, 1.0e-12
+    end
+
+    test "non-decimal radix complex literals are rejected" do
+      assert_raise Error, fn -> Lexer.tokenise("#x3+4i") end
+    end
+
     defp clamp({:integer, n, _}) when n in -1..1, do: {:integer, n, nil}
     defp clamp(t), do: t
   end

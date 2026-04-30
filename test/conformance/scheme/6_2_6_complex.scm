@@ -88,4 +88,13 @@
 ;; Euler: exp(iπ) ≈ -1
 (test-complex -1 (exp (make-rectangular 0 3.141592653589793)))
 
+;; Prefixed-radix complex literals: #e forces exact components,
+;; #i widens them to inexact.
+(test #t (= 3+4i #e3+4i))
+(test #t (exact? (real-part #e3+4i)))
+(test #t (exact? (imag-part #e3+4i)))
+(test #t (inexact? (real-part #i1/2+1/3i)))
+(test #t (inexact? (imag-part #i1/2+1/3i)))
+(test-approx 0.5 (real-part #i1/2+1/3i))
+
 (test-end)
