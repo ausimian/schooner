@@ -2,9 +2,29 @@
 
 An embeddable, sandboxed Scheme interpreter for the BEAM, targeting the
 r7rs-small language minus its mutable operations. Schooner is intended as
-a scripting layer for Elixir applications: hosts hand a script source to
-`Schooner.run/1`, get back an Elixir term, and resource-bound the work
-with the standard process tools (`:max_heap_size`, `Task.shutdown/2`).
+a scripting layer for Elixir applications: hosts hand a script source
+to one of the entry points below, get back an Elixir term, and
+resource-bound the work with the standard process tools
+(`:max_heap_size`, `Task.shutdown/2`).
+
+## Choosing an entry point
+
+Schooner has two top-level evaluation entry points. **The trust posture
+differs — picking the wrong one for untrusted input is a sandbox-shaped
+hole.** The naming is the opposite of what reflex suggests: `run/1` is
+the lax convenience, `eval/2` is the strict embedding path.
+
+| Entry point        | Auto-imports                                                                              | Trust posture                                       | Use for                                                            |
+| ---                | ---                                                                                       | ---                                                 | ---                                                                |
+| `Schooner.run/1`   | injects `(import ...)` of every shipped standard library when the script declares none    | **Not sandbox-safe.** Every primitive is in scope.  | tests, REPL-style use, your own scripts where you control the source |
+| `Schooner.eval/2`  | none — bindings come exclusively from `env` and the script's own `(import ...)`           | **Sandbox-safe.** The embedder controls the surface.| embedding untrusted or semi-trusted scripts                        |
+
+The implicit-import behaviour of `run/1` is opt-in via
+`Schooner.eval(source, env, implicit_imports: :all)`; `run/1` is just
+that call with a fresh `Schooner.Env`. Use `eval/2` (no options) for
+anything you would not paste into your own REPL — a script that omits
+`(import ...)` cannot reach any primitive, so the host gets to set the
+surface deliberately.
 
 ## Installation
 

@@ -34,6 +34,21 @@ defmodule Schooner.ImportOnlyPathTest do
       end
     end
 
+    test "the strict default does not pull in (scheme base)" do
+      # Pin the sandbox guarantee that `eval/2` advertises in the
+      # moduledoc: no auto-import of any shipped library, including
+      # (scheme base). If this regresses, embedders relying on the
+      # strict surface for untrusted input would silently lose it.
+      # Names checked here are primitive procedure bindings — not
+      # special forms or bootstrap-supplied macros, which dispatch on
+      # the literal symbol regardless of imports.
+      for binding <- ~w(+ - * / car cdr cons list display) do
+        assert_raise EvalError, fn ->
+          Schooner.eval("(#{binding})", Env.new())
+        end
+      end
+    end
+
     test "explicit (only (scheme base) car) hides '+' from the script" do
       assert Schooner.eval(
                "(import (only (scheme base) car)) (car '(1 2 3))",
@@ -54,6 +69,56 @@ defmodule Schooner.ImportOnlyPathTest do
                "(import (scheme base) (scheme inexact)) (sin 0)",
                Env.new()
              ) == 0.0
+    end
+  end
+
+  describe "Schooner.eval/3 :implicit_imports option" do
+    test ":implicit_imports defaults to :none" do
+      assert_raise EvalError, fn ->
+        Schooner.eval("(+ 1 2)", Env.new(), [])
+      end
+    end
+
+    test ":implicit_imports: :none matches the eval/2 strict default" do
+      assert_raise EvalError, fn ->
+        Schooner.eval("(+ 1 2)", Env.new(), implicit_imports: :none)
+      end
+    end
+
+    test ":implicit_imports: :all auto-imports the standard libraries" do
+      assert Schooner.eval("(+ 1 2)", Env.new(), implicit_imports: :all) == 3
+      assert Schooner.eval("(sin 0)", Env.new(), implicit_imports: :all) == 0.0
+    end
+
+    test ":implicit_imports: :all is suppressed by an explicit import" do
+      # Same opt-in semantics run/1 has: a single explicit import
+      # disables the injection.
+      assert Schooner.eval(
+               "(import (only (scheme base) +)) (+ 1 2)",
+               Env.new(),
+               implicit_imports: :all
+             ) == 3
+
+      assert_raise EvalError, fn ->
+        Schooner.eval(
+          "(import (only (scheme base) +)) (sin 0)",
+          Env.new(),
+          implicit_imports: :all
+        )
+      end
+    end
+
+    test "run/1 is equivalent to eval/3 with implicit_imports: :all on a fresh env" do
+      for source <- ["(+ 1 2)", "(sin 0)", "(import (only (scheme base) +)) (+ 1 2)"] do
+        assert Schooner.run(source) ==
+                 Schooner.eval(source, Env.new(), implicit_imports: :all)
+      end
+    end
+
+    test "an unknown :implicit_imports value raises ArgumentError" do
+      assert_raise ArgumentError, ~r/:implicit_imports/, fn ->
+        Schooner.eval("(+ 1 2)", Env.new(), implicit_imports: :everything)
+      end
     end
   end
 end
