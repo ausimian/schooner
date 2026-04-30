@@ -456,18 +456,25 @@ defmodule Schooner.Lexer do
       raise Error, reason: :invalid_numeric_literal, position: {line, col}
     end
 
-    case parse_number(raw, radix, exactness) do
-      {:ok, n} when is_integer(n) ->
-        {{:integer, n, {line, col}}, rest, col + taken + atom_len}
+    token =
+      case parse_number(raw, radix, exactness) do
+        {:ok, n} when is_integer(n) -> {:integer, n, {line, col}}
+        {:ok, f} when is_float(f) -> {:float, f, {line, col}}
+        {:ok, {:rational, _, _} = r} -> {:rational, r, {line, col}}
+        :error when radix == 10 -> prefixed_complex_or_raise(raw, line, col, exactness)
+        :error -> raise Error, reason: {:invalid_numeric_literal, raw}, position: {line, col}
+      end
 
-      {:ok, f} when is_float(f) ->
-        {{:float, f, {line, col}}, rest, col + taken + atom_len}
+    {token, rest, col + taken + atom_len}
+  end
 
-      {:ok, {:rational, _, _} = r} ->
-        {{:rational, r, {line, col}}, rest, col + taken + atom_len}
-
-      :error ->
-        raise Error, reason: {:invalid_numeric_literal, raw}, position: {line, col}
+  # `parse_number/3` doesn't recognise complex literals; for decimal
+  # `#e` / `#i` prefixes fall through to the same complex-atom path the
+  # unprefixed scanner uses so `#e3+4i`, `#i1/2+1/3i` parse correctly.
+  defp prefixed_complex_or_raise(raw, line, col, exactness) do
+    case atom_kind(raw, false) do
+      {:complex_literal, parts} -> complex_token(raw, parts, line, col, exactness)
+      _ -> raise Error, reason: {:invalid_numeric_literal, raw}, position: {line, col}
     end
   end
 
