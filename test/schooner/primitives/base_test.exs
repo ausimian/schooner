@@ -645,15 +645,32 @@ defmodule Schooner.Primitives.BaseTest do
       assert run("(expt -inf.0 -3)") === 0.0
     end
 
-    test "expt — anything to the 0 is 1.0; 1 to anything is 1.0" do
+    test "expt — anything to the 0 is 1.0 (IEEE-754 anything^0 carve-out)" do
+      # IEEE-754-2008 / C99 pow: pow(NaN, 0) = pow(±inf, 0) = 1, ahead
+      # of NaN propagation. The exact-base sibling `(expt 0 0)` is exact 1.
       assert run("(expt +inf.0 0)") === 1.0
+      assert run("(expt -inf.0 0)") === 1.0
       assert run("(expt +nan.0 0)") === 1.0
+      assert run("(expt 0 0)") === 1
       assert run("(expt 1 +inf.0)") === 1.0
+    end
+
+    test "expt — anything to ±0.0 is 1.0 (signed-zero carve-out)" do
+      assert run("(expt +nan.0 0.0)") === 1.0
+      assert run("(expt +nan.0 (- 0.0))") === 1.0
+      assert run("(expt +inf.0 -0.0)") === 1.0
     end
 
     test "expt with NaN propagates (except the 0 / 1 short-circuits)" do
       assert run("(expt +nan.0 1)") == @nan
       assert run("(expt 2 +nan.0)") == @nan
+    end
+
+    test "sqrt of a negative inexact lifts into the imaginary axis (not NaN)" do
+      # `(sqrt -x)` returns `0 + sqrt(x)i` for any negative real, exact
+      # or inexact, since complex support landed.
+      assert run("(sqrt -1.0)") == {:complex, 0, 1.0}
+      assert run("(sqrt -4.0)") == {:complex, 0, 2.0}
     end
 
     test "exact->inexact is identity on specials" do
@@ -719,9 +736,20 @@ defmodule Schooner.Primitives.BaseTest do
       assert run("(expt -inf.0 +inf.0)") == @nan
     end
 
-    test "(expt -1.0 +inf.0) and (expt -1.0 -inf.0) — |base|==1 hits the NaN tail" do
-      assert run("(expt -1.0 +inf.0)") == @nan
-      assert run("(expt -1.0 -inf.0)") == @nan
+    test "(expt ±1 ±inf.0) — IEEE-754-2008 boundary: 1.0" do
+      # pow(±1, ±∞) = 1 is an explicit IEEE-754-2008 carve-out:
+      # |base| == 1 means every finite power is ±1, so the limit is well-defined.
+      assert run("(expt -1.0 +inf.0)") === 1.0
+      assert run("(expt -1.0 -inf.0)") === 1.0
+      assert run("(expt -1 +inf.0)") === 1.0
+      assert run("(expt -1 -inf.0)") === 1.0
+      assert run("(expt 1 -inf.0)") === 1.0
+      assert run("(expt 1.0 -inf.0)") === 1.0
+    end
+
+    test "(expt -1 +nan.0) propagates NaN — only ±1 raised to ±inf.0 is the carve-out" do
+      assert run("(expt -1 +nan.0)") == @nan
+      assert run("(expt -1.0 +nan.0)") == @nan
     end
 
     test "(expt -inf.0 odd-float) preserves the negative sign" do
