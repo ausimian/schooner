@@ -30,6 +30,7 @@ defmodule Schooner do
   alias Schooner.Eval
   alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.ExceptionState
+  alias Schooner.Eval.ParameterState
   alias Schooner.Expander
   alias Schooner.Library
   alias Schooner.Library.Import, as: LibImport
@@ -86,8 +87,10 @@ defmodule Schooner do
     # the next call in the same process.
     prev_handlers = ExceptionState.snapshot()
     prev_conts = ContinuationState.snapshot()
+    prev_params = ParameterState.snapshot()
     ExceptionState.reset()
     ContinuationState.reset()
+    ParameterState.reset()
 
     try do
       {import_specs, body} = LibImport.extract_program_imports(forms)
@@ -103,6 +106,7 @@ defmodule Schooner do
     after
       ExceptionState.restore(prev_handlers)
       ContinuationState.restore(prev_conts)
+      ParameterState.restore(prev_params)
     end
   end
 end

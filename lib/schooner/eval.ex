@@ -30,6 +30,7 @@ defmodule Schooner.Eval do
   alias Schooner.Env
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
+  alias Schooner.Eval.ParameterState
   alias Schooner.Expander.SyntaxRules
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
@@ -202,6 +203,14 @@ defmodule Schooner.Eval do
   def apply_proc({:primitive, name, arity, fun}, args) do
     check_primitive_arity!(arity, args, name)
     fun.(args)
+  end
+
+  def apply_proc({:parameter, id, init, _converter}, []) do
+    ParameterState.lookup(id, init)
+  end
+
+  def apply_proc({:parameter, _, _, _}, args) do
+    raise Error, reason: {:arity_mismatch, "parameter", {:exact, 0}, length(args)}
   end
 
   def apply_proc(other, _args), do: raise(Error, reason: {:not_a_procedure, other})

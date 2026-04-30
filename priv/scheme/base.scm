@@ -167,3 +167,19 @@
     ((let*-values ((b0 e0) binding ...) body0 body1 ...)
      (let-values ((b0 e0))
        (let*-values (binding ...) body0 body1 ...)))))
+
+;; -- parameterize ----------------------------------------------------------
+;;
+;; parameterize evaluates each parameter expression and value
+;; expression left-to-right, then runs the body with each parameter
+;; temporarily bound to its (converted) value. The runtime helper
+;; %parameterize-apply (in Schooner.Primitives.Parameters) collects
+;; the (parameter . value) pairs into a frame, applies each
+;; parameter's converter, pushes the frame onto the dynamic-binding
+;; stack, runs the thunk, and restores the stack on every exit path.
+
+(define-syntax parameterize
+  (syntax-rules ()
+    ((_ ((p v) ...) body1 body2 ...)
+     (%parameterize-apply (list (cons p v) ...)
+                          (lambda () body1 body2 ...)))))

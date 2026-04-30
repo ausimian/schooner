@@ -11,7 +11,8 @@ defmodule Schooner.Conformance.R7rsSection4Test do
   #   - `define-values`: not implemented (would need a non-mutating
   #     splice in the body desugarer)
   #   - delayed evaluation (delay, force, make-promise): phase 13
-  #   - dynamic bindings (parameterize, make-parameter): out of scope
+  #   - dynamic bindings (parameterize, make-parameter): exercised by the
+  #     Chibi r7rs §4.2 section file, not transcribed here
   #   - exception handling (guard, raise): phase 11
   #   - file ports / read-line: out of scope; `display`, `write`,
   #     `newline`, `write-string` are present in the string-port flavour
