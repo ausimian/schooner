@@ -602,11 +602,14 @@ defmodule Schooner.Primitives.Base do
   defp numerator_([n]) when is_integer(n), do: n
   defp numerator_([{:rational, n, _}]), do: n
   defp numerator_([f]) when is_float(f), do: elem(Float.ratio(f), 0) * 1.0
+  defp numerator_([{:float_special, _} = s]), do: s
   defp numerator_([other]), do: raise_rational_required("numerator", other)
 
   defp denominator_([n]) when is_integer(n), do: 1
   defp denominator_([{:rational, _, d}]), do: d
   defp denominator_([f]) when is_float(f), do: elem(Float.ratio(f), 1) * 1.0
+  defp denominator_([{:float_special, :nan} = s]), do: s
+  defp denominator_([{:float_special, _}]), do: 1.0
   defp denominator_([other]), do: raise_rational_required("denominator", other)
 
   defp raise_rational_required(op, other),
