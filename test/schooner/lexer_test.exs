@@ -311,6 +311,34 @@ defmodule Schooner.LexerTest do
       assert match?({:invalid_numeric_literal, "10abc"}, err.reason)
     end
 
+    test "rectangular complex literals" do
+      assert [{:complex, {:complex, 3, 4}, _}] = Lexer.tokenise("3+4i")
+      assert [{:complex, {:complex, 3, -4}, _}] = Lexer.tokenise("3-4i")
+      assert [{:complex, {:complex, -2.5, -1.0}, _}] = Lexer.tokenise("-2.5-1.0i")
+    end
+
+    test "unit-imaginary literals" do
+      assert [{:complex, {:complex, 0, 1}, _}] = Lexer.tokenise("+i")
+      assert [{:complex, {:complex, 0, -1}, _}] = Lexer.tokenise("-i")
+      assert [{:complex, {:complex, 5, 1}, _}] = Lexer.tokenise("5+i")
+      assert [{:complex, {:complex, 5, -1}, _}] = Lexer.tokenise("5-i")
+    end
+
+    test "complex with rational components" do
+      assert [{:complex, {:complex, {:rational, 1, 2}, {:rational, 3, 4}}, _}] =
+               Lexer.tokenise("1/2+3/4i")
+    end
+
+    test "exponent in real part not mistaken for imag-sign splitter" do
+      assert [{:complex, {:complex, 1.0e-3, 2}, _}] = Lexer.tokenise("1.0e-3+2i")
+    end
+
+    test "polar literal converts to rectangular floats" do
+      [{:complex, {:complex, r, i}, _}] = Lexer.tokenise("1@0")
+      assert_in_delta r, 1.0, 1.0e-12
+      assert_in_delta i, 0.0, 1.0e-12
+    end
+
     defp clamp({:integer, n, _}) when n in -1..1, do: {:integer, n, nil}
     defp clamp(t), do: t
   end

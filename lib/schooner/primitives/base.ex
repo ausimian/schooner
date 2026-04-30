@@ -17,6 +17,7 @@ defmodule Schooner.Primitives.Base do
 
   alias Schooner.Eval
   alias Schooner.Primitive.Error
+  alias Schooner.Primitives.Inexact
   alias Schooner.Value
 
   defguardp is_special(v)
@@ -25,7 +26,12 @@ defmodule Schooner.Primitives.Base do
   defguardp is_rational(v)
             when is_tuple(v) and tuple_size(v) == 3 and elem(v, 0) == :rational
 
+  defguardp is_complex(v)
+            when is_tuple(v) and tuple_size(v) == 3 and elem(v, 0) == :complex
+
   defguardp is_exact(v) when is_integer(v) or is_rational(v)
+
+  defguardp is_real_v(v) when is_integer(v) or is_float(v) or is_rational(v) or is_special(v)
 
   # ---------------------------------------------------------------------------
   # Public spec
@@ -112,16 +118,19 @@ defmodule Schooner.Primitives.Base do
 
   # ---- Specials-aware pairwise arithmetic ------------------------------------
 
+  defp add_pair(a, b) when is_complex(a) or is_complex(b), do: complex_add(a, b)
   defp add_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, b)
   defp add_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) + to_float(b)
   defp add_pair(a, b) when is_rational(a) or is_rational(b), do: rat_add(a, b)
   defp add_pair(a, b), do: a + b
 
+  defp sub_pair(a, b) when is_complex(a) or is_complex(b), do: complex_add(a, negate(b))
   defp sub_pair(a, b) when is_special(a) or is_special(b), do: special_add(a, negate(b))
   defp sub_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) - to_float(b)
   defp sub_pair(a, b) when is_rational(a) or is_rational(b), do: rat_add(a, negate(b))
   defp sub_pair(a, b), do: a - b
 
+  defp mul_pair(a, b) when is_complex(a) or is_complex(b), do: complex_mul(a, b)
   defp mul_pair(a, b) when is_special(a) or is_special(b), do: special_mul(a, b)
   defp mul_pair(a, b) when is_float(a) or is_float(b), do: to_float(a) * to_float(b)
   defp mul_pair(a, b) when is_rational(a) or is_rational(b), do: rat_mul(a, b)
@@ -131,7 +140,50 @@ defmodule Schooner.Primitives.Base do
   defp negate({:float_special, :neg_inf}), do: {:float_special, :pos_inf}
   defp negate({:float_special, :nan}), do: {:float_special, :nan}
   defp negate({:rational, n, d}), do: {:rational, -n, d}
+  defp negate({:complex, r, i}), do: Value.complex(negate(r), negate(i))
   defp negate(n), do: -n
+
+  # ---- Complex arithmetic ----------------------------------------------------
+  #
+  # Real operands lift to `{r, 0}` when paired with a complex via
+  # `complex_pair/1`; the result is reduced through `Value.complex/2`
+  # so real-valued outputs collapse back out of the complex tag (the
+  # split is total — no value is both real and complex).
+
+  defp complex_add(a, b) do
+    {ar, ai} = complex_pair(a)
+    {br, bi} = complex_pair(b)
+    Value.complex(add_pair(ar, br), add_pair(ai, bi))
+  end
+
+  defp complex_mul(a, b) do
+    {ar, ai} = complex_pair(a)
+    {br, bi} = complex_pair(b)
+    real = sub_pair(mul_pair(ar, br), mul_pair(ai, bi))
+    imag = add_pair(mul_pair(ar, bi), mul_pair(ai, br))
+    Value.complex(real, imag)
+  end
+
+  # (a+bi) / (c+di) = ((ac+bd) + (bc-ad)i) / (c^2 + d^2). Division by
+  # an exact zero complex (`0+0i`) is impossible — `0+0i` collapses to
+  # `0` on construction, so the divisor here always has a non-zero
+  # rectangular norm.
+  defp complex_div(a, b) do
+    {ar, ai} = complex_pair(a)
+    {br, bi} = complex_pair(b)
+    denom = add_pair(mul_pair(br, br), mul_pair(bi, bi))
+
+    if denom === 0 do
+      raise(Error, reason: {:division_by_zero, "/"})
+    end
+
+    real = divide_pair("/", add_pair(mul_pair(ar, br), mul_pair(ai, bi)), denom)
+    imag = divide_pair("/", sub_pair(mul_pair(ai, br), mul_pair(ar, bi)), denom)
+    Value.complex(real, imag)
+  end
+
+  defp complex_pair({:complex, r, i}), do: {r, i}
+  defp complex_pair(r) when is_real_v(r), do: {r, 0}
 
   # Exact rational arithmetic. Inputs may be integers or `{:rational, n, d}`;
   # Value.rational/2 normalises and collapses denom-1 results back to a bare
@@ -197,6 +249,8 @@ defmodule Schooner.Primitives.Base do
   defp scale_inf(:neg_inf, -1), do: {:float_special, :pos_inf}
 
   # ---- Division --------------------------------------------------------------
+
+  defp divide_pair(_op, a, b) when is_complex(a) or is_complex(b), do: complex_div(a, b)
 
   defp divide_pair(_op, a, b) when is_special(a) or is_special(b),
     do: special_divide(a, b)
@@ -265,7 +319,7 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp abs_([n]) do
-    require_number!("abs", n)
+    require_real!("abs", n)
     abs_special(n)
   end
 
@@ -275,19 +329,19 @@ defmodule Schooner.Primitives.Base do
   defp abs_special(n), do: abs(n)
 
   defp min_([first | rest]) do
-    require_number!("min", first)
+    require_real!("min", first)
 
     Enum.reduce(rest, first, fn b, a ->
-      require_number!("min", b)
+      require_real!("min", b)
       pick_min(a, b)
     end)
   end
 
   defp max_([first | rest]) do
-    require_number!("max", first)
+    require_real!("max", first)
 
     Enum.reduce(rest, first, fn b, a ->
-      require_number!("max", b)
+      require_real!("max", b)
       pick_max(a, b)
     end)
   end
@@ -328,10 +382,31 @@ defmodule Schooner.Primitives.Base do
   defp do_expt(base, exp) when is_exact(base) and is_integer(exp),
     do: rat_div(1, rat_int_pow(base, -exp))
 
+  # Integer exponent on a complex base: repeated multiplication so the
+  # result is exact whenever the components are. `(expt (1+i) 2)` ⟹ `2i`.
+  defp do_expt(base, exp) when is_complex(base) and is_integer(exp) and exp >= 0,
+    do: complex_int_pow(base, exp)
+
+  defp do_expt(base, exp) when is_complex(base) and is_integer(exp) and exp < 0,
+    do: complex_div(1, complex_int_pow(base, -exp))
+
+  defp do_expt(base, exp) when is_complex(base) or is_complex(exp),
+    do: Inexact.generic_expt(base, exp)
+
   defp do_expt(base, exp) when is_special(base) or is_special(exp),
     do: special_expt(base, exp)
 
   defp do_expt(base, exp), do: :math.pow(to_float(base), to_float(exp))
+
+  defp complex_int_pow(_b, 0), do: 1
+  defp complex_int_pow(b, 1), do: b
+
+  defp complex_int_pow(b, e) when rem(e, 2) == 0 do
+    half = complex_int_pow(b, div(e, 2))
+    complex_mul(half, half)
+  end
+
+  defp complex_int_pow(b, e), do: complex_mul(b, complex_int_pow(b, e - 1))
 
   # IEEE-754 pow: anything^0 is 1.0 (even NaN, even infinities); 1^anything
   # is 1.0; NaN otherwise propagates. inf^positive → inf, inf^negative → 0.0,
@@ -431,11 +506,35 @@ defmodule Schooner.Primitives.Base do
 
   defp do_sqrt({:float_special, :pos_inf}), do: {:float_special, :pos_inf}
   defp do_sqrt({:float_special, _}), do: {:float_special, :nan}
-  defp do_sqrt(n) when is_float(n) and n < 0.0, do: {:float_special, :nan}
+  defp do_sqrt(n) when is_float(n) and n < 0.0, do: complex_sqrt_real(n)
   defp do_sqrt(n) when is_float(n), do: :math.sqrt(n)
   defp do_sqrt(n) when is_integer(n) and n >= 0, do: exact_isqrt_or_raise(n)
-  defp do_sqrt({:rational, _, _} = r), do: rational_sqrt_or_raise(r)
+  defp do_sqrt(n) when is_integer(n), do: complex_sqrt_real(n)
+  defp do_sqrt({:rational, n, _} = r) when n >= 0, do: rational_sqrt_or_raise(r)
+  defp do_sqrt({:rational, _, _} = r), do: complex_sqrt_real(r)
+  defp do_sqrt({:complex, _, _} = z), do: complex_sqrt(z)
   defp do_sqrt(n), do: raise(Error, reason: {:irrational, "sqrt", n})
+
+  # `sqrt` of a negative real lifts into the imaginary axis. The
+  # magnitude becomes inexact (sqrt of a non-square exact still raises
+  # in the real-only path; the complex lift uses `:math.sqrt/1` so the
+  # imaginary component is a float).
+  defp complex_sqrt_real(n) do
+    Value.complex(0, :math.sqrt(-to_float(n)))
+  end
+
+  # Principal complex square root via the half-angle formula:
+  #   sqrt(z) = sqrt((|z|+a)/2) + sign(b) * sqrt((|z|-a)/2) * i
+  # for z = a + bi. Numerically stable for any rectangular complex.
+  defp complex_sqrt({:complex, r, i}) do
+    a = to_float(r)
+    b = to_float(i)
+    m = :math.sqrt(a * a + b * b)
+    re = :math.sqrt((m + a) / 2.0)
+    im_mag = :math.sqrt(max((m - a) / 2.0, 0.0))
+    im = if b < 0.0, do: -im_mag, else: im_mag
+    Value.complex(re, im)
+  end
 
   defp exact_isqrt_or_raise(n) do
     r = isqrt(n)
@@ -590,34 +689,45 @@ defmodule Schooner.Primitives.Base do
     ]
   end
 
-  defp cmp_eq(args), do: variadic_cmp("=", args, &num_eq/2)
-  defp cmp_lt(args), do: variadic_cmp("<", args, &num_lt/2)
-  defp cmp_gt(args), do: variadic_cmp(">", args, &num_gt/2)
-  defp cmp_le(args), do: variadic_cmp("<=", args, &num_le/2)
-  defp cmp_ge(args), do: variadic_cmp(">=", args, &num_ge/2)
+  defp cmp_eq(args), do: variadic_cmp("=", args, &num_eq/2, &require_number!/2)
+  defp cmp_lt(args), do: variadic_cmp("<", args, &num_lt/2, &require_real!/2)
+  defp cmp_gt(args), do: variadic_cmp(">", args, &num_gt/2, &require_real!/2)
+  defp cmp_le(args), do: variadic_cmp("<=", args, &num_le/2, &require_real!/2)
+  defp cmp_ge(args), do: variadic_cmp(">=", args, &num_ge/2, &require_real!/2)
 
-  defp variadic_cmp(op, [first | rest], pair) do
-    require_number!(op, first)
-    Value.bool(check_pairs(rest, first, op, pair))
+  defp variadic_cmp(op, [first | rest], pair, type_check) do
+    type_check.(op, first)
+    Value.bool(check_pairs(rest, first, op, pair, type_check))
   end
 
-  defp check_pairs([], _prev, _op, _pair), do: true
+  defp check_pairs([], _prev, _op, _pair, _type_check), do: true
 
-  defp check_pairs([b | rest], prev, op, pair) do
-    require_number!(op, b)
+  defp check_pairs([b | rest], prev, op, pair, type_check) do
+    type_check.(op, b)
     # IEEE-754: any comparison against NaN is "unordered" → false.
     cond do
       prev == {:float_special, :nan} -> false
       b == {:float_special, :nan} -> false
-      pair.(prev, b) -> check_pairs(rest, b, op, pair)
+      pair.(prev, b) -> check_pairs(rest, b, op, pair, type_check)
       true -> false
     end
   end
 
-  # `=` is numerical equality; `(= 1 1.0)` is true (only `eqv?` cares about exactness).
+  # `=` is numerical equality; `(= 1 1.0)` is true (only `eqv?` cares about
+  # exactness). Complex equality compares both rectangular components,
+  # falling back to numerical equality on each part — so `(= 1 1+0i)` is
+  # true (the rhs collapses to `1` on construction, but a hand-built
+  # `{:complex, 1, 0}` would still match).
+  defp num_eq(a, b) when is_complex(a) or is_complex(b), do: complex_eq(a, b)
   defp num_eq(a, b) when is_special(a) or is_special(b), do: special_cmp_eq(a, b)
   defp num_eq(a, b) when is_float(a) or is_float(b), do: to_float(a) == to_float(b)
   defp num_eq(a, b), do: rat_eq(a, b)
+
+  defp complex_eq(a, b) do
+    {ar, ai} = complex_pair(a)
+    {br, bi} = complex_pair(b)
+    num_eq(ar, br) and num_eq(ai, bi)
+  end
 
   defp num_lt(a, b) when is_special(a) or is_special(b), do: special_cmp(a, b) == :lt
   defp num_lt(a, b) when is_float(a) or is_float(b), do: to_float(a) < to_float(b)
@@ -669,6 +779,8 @@ defmodule Schooner.Primitives.Base do
   defp predicate_specs do
     [
       {"number?", 1, &number_p/1},
+      {"complex?", 1, &complex_p/1},
+      {"real?", 1, &real_p/1},
       {"integer?", 1, &integer_p/1},
       {"rational?", 1, &rational_p/1},
       {"exact?", 1, &exact_p/1},
@@ -696,6 +808,8 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp number_p([v]), do: Value.bool(Value.number?(v))
+  defp complex_p([v]), do: Value.bool(Value.complex?(v))
+  defp real_p([v]), do: Value.bool(Value.real?(v))
   defp integer_p([v]), do: Value.bool(Value.integer?(v))
   defp rational_p([v]), do: Value.bool(Value.rational?(v))
   defp exact_p([v]), do: Value.bool(Value.exact?(v))
@@ -718,15 +832,19 @@ defmodule Schooner.Primitives.Base do
 
   defp zero_p([n]) do
     require_number!("zero?", n)
-    Value.bool(not is_special(n) and n == 0)
+    Value.bool(numeric_zero?(n))
   end
+
+  defp numeric_zero?({:complex, r, i}), do: numeric_zero?(r) and numeric_zero?(i)
+  defp numeric_zero?(n) when is_special(n), do: false
+  defp numeric_zero?(n), do: n == 0
 
   defp positive_p([{:float_special, :pos_inf}]), do: Value.bool(true)
   defp positive_p([{:float_special, _}]), do: Value.bool(false)
   defp positive_p([{:rational, n, _}]), do: Value.bool(n > 0)
 
   defp positive_p([n]) do
-    require_number!("positive?", n)
+    require_real!("positive?", n)
     Value.bool(n > 0)
   end
 
@@ -735,7 +853,7 @@ defmodule Schooner.Primitives.Base do
   defp negative_p([{:rational, n, _}]), do: Value.bool(n < 0)
 
   defp negative_p([n]) do
-    require_number!("negative?", n)
+    require_real!("negative?", n)
     Value.bool(n < 0)
   end
 
@@ -1410,10 +1528,16 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp require_number!(_op, n) when is_integer(n) or is_float(n), do: :ok
-  defp require_number!(_op, n) when is_special(n) or is_rational(n), do: :ok
+  defp require_number!(_op, n) when is_special(n) or is_rational(n) or is_complex(n), do: :ok
 
   defp require_number!(op, other) do
     raise Error, reason: {:type_error, op, "number", other}
+  end
+
+  defp require_real!(_op, n) when is_real_v(n), do: :ok
+
+  defp require_real!(op, other) do
+    raise Error, reason: {:type_error, op, "real number", other}
   end
 
   defp require_integer!(_op, n) when is_integer(n), do: :ok

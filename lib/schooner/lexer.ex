@@ -43,6 +43,7 @@ defmodule Schooner.Lexer do
           | :integer
           | :rational
           | :float
+          | :complex
           | :string
           | :char
           | :bool
@@ -526,8 +527,74 @@ defmodule Schooner.Lexer do
       :empty -> raise Error, reason: :empty_atom, position: {line, col}
       :ident -> {:ident, raw, {line, col}}
       {:float_special, value} -> {:float, value, {line, col}}
+      {:complex_literal, parts} -> complex_token(raw, parts, line, col, exactness)
       :numeric -> numeric_token(raw, line, col, exactness)
       :invalid -> raise Error, reason: {:invalid_token, raw}, position: {line, col}
+    end
+  end
+
+  # Build a `:complex` token from a `complex_atom_parts/1` match. The
+  # raw string parts are re-parsed as full Scheme numerics so each
+  # half tracks the prevailing exactness flags consistently with the
+  # standalone-number path.
+  defp complex_token(raw, {real_raw, imag_raw}, line, col, exactness)
+       when is_binary(real_raw) and is_binary(imag_raw) do
+    real = parse_complex_part(real_raw, exactness, raw, line, col)
+    imag = parse_complex_part(imag_raw, exactness, raw, line, col)
+    {:complex, {:complex, real, imag}, {line, col}}
+  end
+
+  defp complex_token(raw, {real_part, imag_int}, line, col, exactness)
+       when is_integer(imag_int) do
+    real =
+      cond do
+        is_integer(real_part) -> lift_int(real_part, exactness)
+        is_binary(real_part) -> parse_complex_part(real_part, exactness, raw, line, col)
+      end
+
+    imag = lift_int(imag_int, exactness)
+    {:complex, {:complex, real, imag}, {line, col}}
+  end
+
+  # Polar literal `mag@ang` → rectangular floats. The trig step
+  # forces inexact components, mirroring `(make-polar mag ang)`.
+  defp complex_token(raw, {:polar, mag_raw, ang_raw}, line, col, _exactness) do
+    mag = parse_polar_part(mag_raw, raw, line, col)
+    ang = parse_polar_part(ang_raw, raw, line, col)
+    {:complex, {:complex, mag * :math.cos(ang), mag * :math.sin(ang)}, {line, col}}
+  end
+
+  defp parse_polar_part(raw, whole, line, col) do
+    case parse_number(raw, 10, :auto) do
+      {:ok, n} when is_integer(n) -> n * 1.0
+      {:ok, f} when is_float(f) -> f
+      {:ok, {:rational, n, d}} -> n / d
+      :error -> raise Error, reason: {:invalid_numeric_literal, whole}, position: {line, col}
+    end
+  end
+
+  defp lift_int(n, :inexact), do: n / 1
+  defp lift_int(n, _), do: n
+
+  defp parse_complex_part(raw, exactness, _whole, _line, _col) when is_integer(raw),
+    do: lift_int(raw, exactness)
+
+  defp parse_complex_part("+inf.0", _exactness, _whole, _line, _col),
+    do: {:float_special, :pos_inf}
+
+  defp parse_complex_part("-inf.0", _exactness, _whole, _line, _col),
+    do: {:float_special, :neg_inf}
+
+  defp parse_complex_part("+nan.0", _exactness, _whole, _line, _col),
+    do: {:float_special, :nan}
+
+  defp parse_complex_part("-nan.0", _exactness, _whole, _line, _col),
+    do: {:float_special, :nan}
+
+  defp parse_complex_part(raw, exactness, whole, line, col) do
+    case parse_number(raw, 10, exactness) do
+      {:ok, n} -> n
+      :error -> raise Error, reason: {:invalid_numeric_literal, whole}, position: {line, col}
     end
   end
 
@@ -538,10 +605,26 @@ defmodule Schooner.Lexer do
   defp atom_kind("-inf.0", _), do: {:float_special, special_float("-inf.0")}
   defp atom_kind("+nan.0", _), do: {:float_special, special_float("+nan.0")}
   defp atom_kind("-nan.0", _), do: {:float_special, special_float("-nan.0")}
+  defp atom_kind("+i", _), do: {:complex_literal, {0, 1}}
+  defp atom_kind("-i", _), do: {:complex_literal, {0, -1}}
 
   defp atom_kind(raw, _allow_sign?) do
+    if starts_with_arrow?(raw) do
+      :ident
+    else
+      classify_non_arrow_atom(raw)
+    end
+  end
+
+  defp classify_non_arrow_atom(raw) do
+    case complex_atom_parts(raw) do
+      :no_match -> classify_plain_atom(raw)
+      parts -> {:complex_literal, parts}
+    end
+  end
+
+  defp classify_plain_atom(raw) do
     cond do
-      starts_with_arrow?(raw) -> :ident
       numeric_lookalike?(raw) -> :numeric
       identifier?(raw) -> :ident
       true -> :invalid
@@ -568,6 +651,105 @@ defmodule Schooner.Lexer do
   defp numeric_lookalike?(<<s, ?., c, _::binary>>) when s in [?+, ?-] and c in ?0..?9, do: true
 
   defp numeric_lookalike?(_), do: false
+
+  # Try to recognise `<real>+<ureal>i`, `<real>-<ureal>i`, `<real>+i`,
+  # `<real>-i`, or `<real>@<real>`. Returns either:
+  #
+  #   * `{real_raw, imag_raw}` — both halves as raw decimal strings
+  #     ready to feed back through `parse_number/3`
+  #   * `{:polar, mag_raw, ang_raw}` — polar form, converted to
+  #     rectangular by the token-builder
+  #   * `:no_match` — atom is not a complex literal
+  #
+  # `+i` / `-i` are handled as integer-shortcuts at the `atom_kind/2`
+  # level so they don't need to round-trip through this scanner.
+  defp complex_atom_parts(raw) do
+    if String.ends_with?(raw, "i"), do: rectangular_split(raw), else: polar_split(raw)
+  end
+
+  # Split `<real><sign><imag>i` at the imaginary-half sign. We scan
+  # from the right so an interior sign in either half's exponent
+  # (e.g. `1.0e-3+2i`) does not get mis-identified as the splitter.
+  # `<real>+i` / `<real>-i` collapse to imag = ±1.
+  defp rectangular_split(raw) do
+    body = binary_part(raw, 0, byte_size(raw) - 1)
+
+    case find_imag_sign(body) do
+      :no_match -> :no_match
+      {real_raw, imag_raw} -> classify_rectangular_split(real_raw, imag_raw)
+    end
+  end
+
+  defp classify_rectangular_split(real_raw, imag_raw) when imag_raw in ["", "+", "-"],
+    do: wrap_unit_imag(real_raw, imag_raw)
+
+  defp classify_rectangular_split("", imag_raw) do
+    if numeric_part_valid?(imag_raw), do: {"0", imag_raw}, else: :no_match
+  end
+
+  defp classify_rectangular_split(real_raw, imag_raw) do
+    if numeric_part_valid?(real_raw) and numeric_part_valid?(imag_raw) do
+      {real_raw, imag_raw}
+    else
+      :no_match
+    end
+  end
+
+  defp wrap_unit_imag("", imag_raw), do: {0, unit_imag_sign(imag_raw)}
+
+  defp wrap_unit_imag(real_raw, imag_raw) do
+    if numeric_part_valid?(real_raw),
+      do: {real_raw, unit_imag_sign(imag_raw)},
+      else: :no_match
+  end
+
+  defp unit_imag_sign("-"), do: -1
+  defp unit_imag_sign(_), do: 1
+
+  # Walk `body` from the right, returning the position of the
+  # `+` / `-` that separates the real and imaginary halves. Skips a
+  # sign that immediately follows an exponent marker (`e` / `E`).
+  defp find_imag_sign(body), do: do_find_imag_sign(body, byte_size(body) - 1)
+
+  defp do_find_imag_sign(_body, idx) when idx <= 0, do: :no_match
+
+  defp do_find_imag_sign(body, idx) do
+    c = :binary.at(body, idx)
+    prev = :binary.at(body, idx - 1)
+
+    if c in [?+, ?-] and prev not in [?e, ?E] do
+      real_raw = binary_part(body, 0, idx)
+      imag_raw = binary_part(body, idx, byte_size(body) - idx)
+      {real_raw, imag_raw}
+    else
+      do_find_imag_sign(body, idx - 1)
+    end
+  end
+
+  defp polar_split(raw) do
+    case String.split(raw, "@", parts: 2) do
+      [mag_raw, ang_raw]
+      when mag_raw != "" and ang_raw != "" ->
+        if numeric_part_valid?(mag_raw) and numeric_part_valid?(ang_raw) do
+          {:polar, mag_raw, ang_raw}
+        else
+          :no_match
+        end
+
+      _ ->
+        :no_match
+    end
+  end
+
+  defp numeric_part_valid?(""), do: false
+  defp numeric_part_valid?(s) when s in ["+inf.0", "-inf.0", "+nan.0", "-nan.0"], do: true
+
+  defp numeric_part_valid?(s) do
+    case parse_number(s, 10, :auto) do
+      {:ok, _} -> true
+      :error -> false
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Dot

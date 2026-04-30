@@ -33,6 +33,12 @@ defmodule Schooner.Value do
       (BEAM floats cannot represent these; tagged forms carry IEEE-754
       semantics through arithmetic and comparison without smuggling
       forbidden bit patterns into Elixir floats.)
+    * Complex — `{:complex, real, imag}` where each component is any
+      non-complex number (integer, rational, float, or float_special).
+      `complex/2` collapses to the bare real component when `imag === 0`
+      so the real/complex split is total — any value with a complex tag
+      has a non-zero (or inexact) imaginary part. Polar literals are
+      converted to rectangular form on read.
     * Vector — `{:vector, tuple}`
     * Bytevector — `{:bytevector, binary}`
     * Closure — `{:closure, params, body, env, name_or_nil}`
@@ -66,6 +72,8 @@ defmodule Schooner.Value do
   @type record_type_id_v :: {:record_type, binary(), pos_integer()}
   @type rational_v :: {:rational, integer(), pos_integer()}
   @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
+  @type real_v :: integer() | rational_v() | float() | float_special_v()
+  @type complex_v :: {:complex, real_v(), real_v()}
   @type error_kind :: :user | :read | :file
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
   @type promise_v :: {:promise, :forced, t()} | {:promise, :lazy, term()}
@@ -82,6 +90,7 @@ defmodule Schooner.Value do
           | rational_v()
           | float()
           | float_special_v()
+          | complex_v()
           | vector_v()
           | bytevector_v()
           | closure_v()
@@ -132,6 +141,21 @@ defmodule Schooner.Value do
     {n, d} = if den > 0, do: {div(num, g), div(den, g)}, else: {-div(num, g), -div(den, g)}
     if d == 1, do: n, else: {:rational, n, d}
   end
+
+  @doc """
+  Build a rectangular complex value. `real` and `imag` must be
+  non-complex numbers (integers, rationals, floats, or `:float_special`
+  sentinels). When `imag` is the exact integer `0` the result collapses
+  to `real`, keeping the real / complex split total: a value tagged
+  `:complex` always carries a non-zero (or inexact) imaginary part.
+
+  Inexact zeros (`+0.0`, `-0.0`) do **not** collapse — `(make-rectangular
+  1.0 0.0)` is `1.0+0.0i`, distinct from `1.0`. Per r7rs §6.2.6 only an
+  exactly zero imaginary part makes the whole number `real?`.
+  """
+  @spec complex(real_v(), real_v()) :: real_v() | complex_v()
+  def complex(real, 0), do: real
+  def complex(real, imag), do: {:complex, real, imag}
 
   @spec vector([t()]) :: vector_v()
   def vector(items) when is_list(items), do: {:vector, List.to_tuple(items)}
@@ -279,7 +303,26 @@ defmodule Schooner.Value do
   def number?(n) when is_integer(n) or is_float(n), do: true
   def number?({:rational, _, _}), do: true
   def number?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
+  def number?({:complex, _, _}), do: true
   def number?(_), do: false
+
+  @doc """
+  Scheme `complex?`. Schooner ships the full numeric tower from
+  integers up through complex, so `complex?` and `number?` agree.
+  """
+  @spec complex?(term()) :: boolean()
+  def complex?(v), do: number?(v)
+
+  @doc """
+  Scheme `real?`. Real numbers are anything outside the `:complex` tag —
+  integers, rationals, finite floats, and the non-finite specials. A
+  complex value whose imaginary part is exact zero collapses to its
+  real part on construction, so a tagged complex always has a non-zero
+  (or inexact) imaginary part and is therefore not real.
+  """
+  @spec real?(term()) :: boolean()
+  def real?({:complex, _, _}), do: false
+  def real?(v), do: number?(v)
 
   @spec integer?(term()) :: boolean()
   def integer?(n) when is_integer(n), do: true
@@ -307,11 +350,13 @@ defmodule Schooner.Value do
   @spec exact?(term()) :: boolean()
   def exact?(n) when is_integer(n), do: true
   def exact?({:rational, _, _}), do: true
+  def exact?({:complex, r, i}), do: exact?(r) and exact?(i)
   def exact?(_), do: false
 
   @spec inexact?(term()) :: boolean()
   def inexact?(n) when is_float(n), do: true
   def inexact?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
+  def inexact?({:complex, r, i}), do: inexact?(r) or inexact?(i)
   def inexact?(_), do: false
 
   @spec float_special?(term()) :: boolean()
@@ -351,6 +396,7 @@ defmodule Schooner.Value do
   # IEEE-754: NaN is never equal to anything, including another NaN.
   def eqv?({:float_special, :nan}, _), do: false
   def eqv?(_, {:float_special, :nan}), do: false
+  def eqv?({:complex, r1, i1}, {:complex, r2, i2}), do: eqv?(r1, r2) and eqv?(i1, i2)
   def eqv?(a, b), do: a === b
 
   @doc """
@@ -431,6 +477,7 @@ defmodule Schooner.Value do
   defp render({:float_special, :neg_inf}, _), do: "-inf.0"
   defp render({:float_special, :nan}, _), do: "+nan.0"
   defp render({:rational, n, d}, _), do: [Integer.to_string(n), ?/, Integer.to_string(d)]
+  defp render({:complex, r, i}, mode), do: render_complex(r, i, mode)
   defp render(n, _) when is_integer(n), do: Integer.to_string(n)
   defp render(n, _) when is_float(n), do: render_float(n)
 
@@ -484,6 +531,28 @@ defmodule Schooner.Value do
   defp render_float(f) do
     s = :erlang.float_to_binary(f, [:short])
     if String.contains?(s, ".") or String.contains?(s, "e"), do: s, else: s <> ".0"
+  end
+
+  # Rectangular print form. The imaginary half always carries an
+  # explicit sign so the literal round-trips through the reader: unit
+  # imaginaries collapse to `+i` / `-i`, otherwise prepend `+` when the
+  # imag part's own rendering does not already start with one. An exact
+  # integer-zero real prints as just the imaginary half (Chibi style).
+  defp render_complex(0, 1, _mode), do: "+i"
+  defp render_complex(0, -1, _mode), do: "-i"
+  defp render_complex(0, i, mode), do: [render_signed_imag(i, mode), ?i]
+  defp render_complex(r, 1, mode), do: [render(r, mode), "+i"]
+  defp render_complex(r, -1, mode), do: [render(r, mode), "-i"]
+  defp render_complex(r, i, mode), do: [render(r, mode), render_signed_imag(i, mode), ?i]
+
+  defp render_signed_imag(i, mode) do
+    rendered = IO.iodata_to_binary(render(i, mode))
+
+    case rendered do
+      <<?+, _::binary>> -> rendered
+      <<?-, _::binary>> -> rendered
+      _ -> [?+, rendered]
+    end
   end
 
   # ---- string escaping --------------------------------------------------------
