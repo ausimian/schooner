@@ -337,4 +337,83 @@ defmodule Schooner.EvalTest do
              """) == 2
     end
   end
+
+  describe "foreign values — host-provided opaque payloads" do
+    # Build a base env with a single host-side binding `host` that
+    # holds a foreign-wrapped pid. Tests can also rely on every
+    # `(scheme base)` primitive without an explicit `(import ...)`.
+    defp run_with_foreign(source, term) do
+      env = base_env() |> Env.define("host", Value.foreign(term))
+      Schooner.eval(source, env)
+    end
+
+    test "self-evaluates: a bare reference returns the foreign unchanged" do
+      pid = self()
+      assert run_with_foreign("host", pid) == Value.foreign(pid)
+    end
+
+    test "round-trips through let, lambda, pair, vector without inspection" do
+      pid = self()
+
+      assert run_with_foreign("(let ((x host)) x)", pid) == Value.foreign(pid)
+
+      assert run_with_foreign("((lambda (x) x) host)", pid) == Value.foreign(pid)
+
+      # Inside an aggregate, the foreign element survives untouched.
+      result = run_with_foreign("(car (cons host 0))", pid)
+      assert result == Value.foreign(pid)
+      assert Value.foreign_ref(result) === pid
+
+      v = run_with_foreign("(vector-ref (vector 'a host 'c) 1)", pid)
+      assert v == Value.foreign(pid)
+    end
+
+    test "no other Scheme-level shape predicate matches a foreign value" do
+      pid = self()
+
+      for pred <- ~w[procedure? vector? pair? null? boolean? symbol? string?
+                     char? bytevector? number? integer? real? rational?
+                     complex? exact? inexact?] do
+        assert run_with_foreign("(#{pred} host)", pid) == false,
+               "(#{pred} host) should be #f"
+      end
+    end
+
+    test "(foreign? x) discriminates host-wrapped values from everything else" do
+      pid = self()
+
+      assert run_with_foreign("(foreign? host)", pid) == true
+
+      # Every other shape we can name in Scheme source must be #f.
+      assert run("(foreign? 1)") == false
+      assert run("(foreign? 1.5)") == false
+      assert run("(foreign? #t)") == false
+      assert run("(foreign? #f)") == false
+      assert run("(foreign? '())") == false
+      assert run("(foreign? 'sym)") == false
+      assert run(~S|(foreign? "hi")|) == false
+      assert run(~S|(foreign? #\a)|) == false
+      assert run("(foreign? '(1 2))") == false
+      assert run("(foreign? (cons 1 2))") == false
+      assert run("(foreign? (vector 1 2))") == false
+      assert run("(foreign? (lambda (x) x))") == false
+      assert run("(foreign? car)") == false
+    end
+
+    test "eq? / eqv? / equal? compare wrapped terms with === at the Scheme level" do
+      pid = self()
+      # Two foreigns that wrap the same pid live in distinct outer
+      # tuples but must still be eq?/eqv?/equal?.
+      assert run_with_foreign("(eq?    host (let ((x host)) x))", pid) == true
+      assert run_with_foreign("(eqv?   host (let ((x host)) x))", pid) == true
+      assert run_with_foreign("(equal? host (let ((x host)) x))", pid) == true
+    end
+
+    test "write redacts the wrapped term" do
+      assert run_with_foreign(
+               "(import (scheme write)) (write host)",
+               {:secret, [1, 2, 3]}
+             ) == Value.string("#<foreign>")
+    end
+  end
 end

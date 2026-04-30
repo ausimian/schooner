@@ -64,6 +64,17 @@ defmodule Schooner.Value do
       every value installed for the parameter (initial *or* via
       `parameterize`). Parameters are procedure values: calling one
       with zero arguments returns the current value.
+    * Foreign — `{:foreign, term}`. Opaque host payload: any Elixir
+      term wrapped so Scheme code can pass it around (bind, return,
+      stash in a pair/vector) but never inspect or forge it. Built by
+      the host via `foreign/1`; the wrapped term is read back from
+      Elixir with `foreign_ref/1`. Scheme code can ask `(foreign? x)`
+      to discriminate, but has no constructor and no accessor, and
+      `write` redacts the contents to `#<foreign>` — so the wrapped
+      term remains structurally invisible from Scheme. Identity
+      equality only: `eq?` / `eqv?` / `equal?` compare the wrapped
+      terms with `===`, so two foreigns that wrap structurally-equal-
+      but-distinct host values are not equal.
     * EOF — `:eof`
     * Unspecified — `:unspecified`
   """
@@ -87,6 +98,7 @@ defmodule Schooner.Value do
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
   @type promise_v :: {:promise, :forced, t()} | {:promise, :lazy, term()}
   @type parameter_v :: {:parameter, integer(), t(), t() | nil}
+  @type foreign_v :: {:foreign, term()}
   @type arity_spec ::
           non_neg_integer()
           | {:at_least, non_neg_integer()}
@@ -113,6 +125,7 @@ defmodule Schooner.Value do
           | error_obj_v()
           | promise_v()
           | parameter_v()
+          | foreign_v()
           | :eof
           | :unspecified
 
@@ -206,6 +219,29 @@ defmodule Schooner.Value do
   def parameter(init, converter) do
     {:parameter, :erlang.unique_integer([:monotonic]), init, converter}
   end
+
+  @doc """
+  Wrap an arbitrary Elixir term as an opaque foreign Scheme value.
+  Scheme code can bind, store, and pass the result through any
+  value-shaped position (variables, pairs, vectors, closures) but
+  cannot inspect, deconstruct, or forge it: there is no surface
+  syntax that constructs a foreign and `write` redacts the wrapped
+  term to `#<foreign>`. The host retrieves the wrapped term with
+  `foreign_ref/1`.
+  """
+  @spec foreign(term()) :: foreign_v()
+  def foreign(term), do: {:foreign, term}
+
+  @doc """
+  Unwrap a foreign value, returning the host term it wraps. Raises
+  `ArgumentError` for any non-foreign — this accessor is host-only
+  and assumes the caller has already established the value is one.
+  """
+  @spec foreign_ref(foreign_v()) :: term()
+  def foreign_ref({:foreign, term}), do: term
+
+  def foreign_ref(other),
+    do: raise(ArgumentError, "expected foreign value, got #{inspect(other)}")
 
   @doc """
   Wrap `value` as an already-forced (eager) promise. Forcing it
@@ -398,6 +434,10 @@ defmodule Schooner.Value do
   def promise?({:promise, kind, _}) when kind in [:forced, :lazy], do: true
   def promise?(_), do: false
 
+  @spec foreign?(term()) :: boolean()
+  def foreign?({:foreign, _}), do: true
+  def foreign?(_), do: false
+
   @doc """
   Scheme truthiness: only `false` is false; every other value is
   truthy, including `:null`, `0`, and the empty string.
@@ -442,6 +482,13 @@ defmodule Schooner.Value do
   def eqv?({:float_special, :nan}, _), do: false
   def eqv?(_, {:float_special, :nan}), do: false
   def eqv?({:complex, r1, i1}, {:complex, r2, i2}), do: eqv?(r1, r2) and eqv?(i1, i2)
+  # Foreign wrappers compare by `===` on the wrapped host term: pids,
+  # refs, and atoms have meaningful identity equality; structurally
+  # equal heap terms (tuples, maps) also collapse, which is the price
+  # of not walking a Scheme-opaque payload. Bypasses the
+  # `:erts_debug.same/2` aggregate path so two foreigns that wrap the
+  # same pid (but live in distinct outer tuples) still compare equal.
+  def eqv?({:foreign, a}, {:foreign, b}), do: a === b
   def eqv?(a, b), do: :erts_debug.same(a, b) or (atomic?(a) and a === b)
 
   # Values for which r7rs requires `eqv?` (and therefore `eq?`) to compare
@@ -533,6 +580,8 @@ defmodule Schooner.Value do
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
   defp render({:promise, _, _}, _), do: "#<promise>"
   defp render({:parameter, _, _, _}, _), do: "#<parameter>"
+  # Redacted: never inspect or include the wrapped term in output.
+  defp render({:foreign, _}, _), do: "#<foreign>"
 
   defp render({:error_obj, kind, message, irritants}, mode),
     do: render_error(kind, message, irritants, mode)
