@@ -32,6 +32,7 @@ defmodule Schooner.Primitives.Base do
 
   alias Schooner.Eval
   alias Schooner.Primitive.Error
+  alias Schooner.Primitives.Compare
   alias Schooner.Primitives.Inexact
   alias Schooner.Value
 
@@ -709,21 +710,18 @@ defmodule Schooner.Primitives.Base do
   defp cmp_le(args), do: variadic_cmp("<=", args, &num_le/2, &require_real!/2)
   defp cmp_ge(args), do: variadic_cmp(">=", args, &num_ge/2, &require_real!/2)
 
-  defp variadic_cmp(op, [first | rest], pair, type_check) do
-    type_check.(op, first)
-    Value.bool(check_pairs(rest, first, op, pair, type_check))
+  defp variadic_cmp(op, args, pair, type_check) do
+    Enum.each(args, &type_check.(op, &1))
+    Value.bool(Compare.variadic_pairwise(args, nan_aware(pair), & &1))
   end
 
-  defp check_pairs([], _prev, _op, _pair, _type_check), do: true
-
-  defp check_pairs([b | rest], prev, op, pair, type_check) do
-    type_check.(op, b)
-    # IEEE-754: any comparison against NaN is "unordered" → false.
-    cond do
-      prev == {:float_special, :nan} -> false
-      b == {:float_special, :nan} -> false
-      pair.(prev, b) -> check_pairs(rest, b, op, pair, type_check)
-      true -> false
+  # IEEE-754: any comparison against NaN is "unordered" → false. Wrapping
+  # the per-pair callback keeps the shared loop NaN-agnostic.
+  defp nan_aware(pair) do
+    fn
+      {:float_special, :nan}, _ -> false
+      _, {:float_special, :nan} -> false
+      a, b -> pair.(a, b)
     end
   end
 
@@ -775,7 +773,7 @@ defmodule Schooner.Primitives.Base do
   end
 
   # Equality and ordering between specials and finite reals (NaN handled
-  # in `check_pairs/4`; not reached here for the generic comparison ops).
+  # by `nan_aware/1`; not reached here for the generic comparison ops).
   defp special_cmp_eq({:float_special, k}, {:float_special, k}), do: true
   defp special_cmp_eq(_, _), do: false
 
@@ -1385,15 +1383,9 @@ defmodule Schooner.Primitives.Base do
   defp string_gt(args), do: variadic_string_cmp("string>?", args, &(&1 > &2))
   defp string_ge(args), do: variadic_string_cmp("string>=?", args, &(&1 >= &2))
 
-  defp variadic_string_cmp(op, [first | rest] = args, pair) do
+  defp variadic_string_cmp(op, args, pair) do
     Enum.each(args, &require_string!(op, &1))
-    Value.bool(check_string_pairs(rest, first, pair))
-  end
-
-  defp check_string_pairs([], _prev, _pair), do: true
-
-  defp check_string_pairs([s | rest], prev, pair) when is_binary(s) and is_binary(prev) do
-    if pair.(prev, s), do: check_string_pairs(rest, s, pair), else: false
+    Value.bool(Compare.variadic_pairwise(args, pair, & &1))
   end
 
   defp string_to_list([v]), do: string_to_list_range(v, nil, nil)

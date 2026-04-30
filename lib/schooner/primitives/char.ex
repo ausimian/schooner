@@ -12,6 +12,7 @@ defmodule Schooner.Primitives.Char do
   """
 
   alias Schooner.Primitive.Error
+  alias Schooner.Primitives.Compare
   alias Schooner.Value
 
   @alpha_re ~r/^\p{L}$/u
@@ -94,17 +95,9 @@ defmodule Schooner.Primitives.Char do
   defp char_ci_gt(args), do: variadic_char_cmp("char-ci>?", args, &fold/1, &(&1 > &2))
   defp char_ci_ge(args), do: variadic_char_cmp("char-ci>=?", args, &fold/1, &(&1 >= &2))
 
-  defp variadic_char_cmp(op, [first | rest] = args, key_fn, pair) do
+  defp variadic_char_cmp(op, args, key_fn, pair) do
     Enum.each(args, &require_char!(op, &1))
-    {:char, h} = first
-    Value.bool(walk_chars(rest, key_fn.(h), key_fn, pair))
-  end
-
-  defp walk_chars([], _prev, _key_fn, _pair), do: true
-
-  defp walk_chars([{:char, cp} | rest], prev, key_fn, pair) do
-    k = key_fn.(cp)
-    if pair.(prev, k), do: walk_chars(rest, k, key_fn, pair), else: false
+    Value.bool(Compare.variadic_pairwise(args, pair, fn {:char, cp} -> key_fn.(cp) end))
   end
 
   defp fold(cp) do
