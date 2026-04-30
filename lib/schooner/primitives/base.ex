@@ -973,15 +973,21 @@ defmodule Schooner.Primitives.Base do
 
   defp append_(args) do
     {fronts, [last]} = Enum.split(args, length(args) - 1)
-    Enum.each(fronts, &require_proper_list!("append", &1))
-    do_append(fronts, last)
+    do_append(Enum.reverse(fronts), last)
   end
 
   defp do_append([], tail), do: tail
-  defp do_append([list | rest], tail), do: append_pair(list, do_append(rest, tail))
 
-  defp append_pair([], tail), do: tail
-  defp append_pair([h | t], tail), do: [h | append_pair(t, tail)]
+  defp do_append([list | rest], tail) do
+    do_append(rest, prepend_reversed(reverse_proper(list, []), tail))
+  end
+
+  defp reverse_proper([], acc), do: acc
+  defp reverse_proper([h | t], acc), do: reverse_proper(t, [h | acc])
+  defp reverse_proper(other, _acc), do: raise(Error, reason: {:improper_list, "append", other})
+
+  defp prepend_reversed([], tail), do: tail
+  defp prepend_reversed([h | t], tail), do: prepend_reversed(t, [h | tail])
 
   defp list_tail([list, k]) do
     require_integer!("list-tail", k)
