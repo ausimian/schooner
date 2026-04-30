@@ -176,6 +176,26 @@ defmodule Schooner.EvalTest do
     test "redefining a name overwrites it" do
       assert run("(define x 1) (define x 2) x") == 2
     end
+
+    # Regression for issue #79: globals previously lived in an `:ets`
+    # table, which copies terms on lookup. Two consecutive resolutions
+    # of the same name therefore returned distinct heap aggregates and
+    # `(eq? x x)` answered #f. Backing globals with a process-dict
+    # Map slot keeps consecutive lookups identity-preserving.
+    test "global aggregates are eq? to themselves" do
+      assert run("(define v (vector 1 2 3)) (eq? v v)") == Value.bool(true)
+      assert run("(define p (cons 1 2)) (eq? p p)") == Value.bool(true)
+      assert run("(define s (string-copy \"hi\")) (eq? s s)") == Value.bool(true)
+      assert run("(define b (bytevector 1 2 3)) (eq? b b)") == Value.bool(true)
+      assert run("(define q (make-parameter 1)) (eq? q q)") == Value.bool(true)
+
+      assert run(~S|
+               (define-record-type point
+                 (make-point x y) point?
+                 (x point-x) (y point-y))
+               (define pt (make-point 1 2))
+               (eq? pt pt)|) == Value.bool(true)
+    end
   end
 
   describe "begin" do
