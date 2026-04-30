@@ -6,11 +6,11 @@ defmodule Schooner.Library.Standard do
 
   `(scheme base)` is assembled from the union of `Primitives.Base`,
   `Primitives.Record`, `Primitives.Exceptions`,
-  `Primitives.Continuations`, plus the `newline` and `write-string`
-  output primitives in `Primitives.Write.base_io_specs/0`, plus the
-  syntax-rules macros defined in `priv/scheme/base.scm` (`when`,
-  `unless`, `and`, `or`, `let`, `let*`, `letrec`, `cond`, `case`,
-  `do`). The other libraries map one-to-one to a single primitive
+  `Primitives.Continuations`, `Primitives.Parameters`, plus the
+  `newline` and `write-string` output primitives in
+  `Primitives.Write.base_io_specs/0`, plus the syntax-rules macros
+  defined in `priv/scheme/base.scm` (`when`, `unless`, `and`, `or`,
+  `let`, `let*`, `letrec`, `cond`, `case`, `do`, `parameterize`). The other libraries map one-to-one to a single primitive
   module:
 
     * `(scheme cxr)` → `Primitives.Cxr`
@@ -78,6 +78,7 @@ defmodule Schooner.Library.Standard do
             Primitives.Record.specs(),
             Primitives.Exceptions.specs(),
             Primitives.Continuations.specs(),
+            Primitives.Parameters.specs(),
             Primitives.Write.base_io_specs()
           ]),
           macros_from_priv("base.scm")

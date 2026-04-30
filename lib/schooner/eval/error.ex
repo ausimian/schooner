@@ -45,6 +45,10 @@ defmodule Schooner.Eval.Error do
     "arity mismatch in #{name_str(name)}: expected at least #{expected}, got #{got}"
   end
 
+  defp format({:arity_mismatch, name, {:at_most, expected}, got}) do
+    "arity mismatch in #{name_str(name)}: expected at most #{expected}, got #{got}"
+  end
+
   defp name_str(nil), do: "anonymous procedure"
   defp name_str(name) when is_binary(name), do: "`#{name}`"
 end

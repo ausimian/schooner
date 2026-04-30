@@ -15,8 +15,11 @@
 ;;     mutator. The pure `do` summing example at 258-261 is kept.
 ;;   - `(set! count ...)`/`(set! x 10)` inside delay at 307-316:
 ;;     mutation; the surrounding promise? / make-promise tests are kept.
-;;   - `make-parameter` / `parameterize` cluster at 331-342:
-;;     parameter objects are out of scope (PLAN.md).
+;;   - `make-parameter` / `parameterize` cluster: transcribed below.
+;;     The upstream `radix` example uses `number->string` with an
+;;     explicit base, which Schooner does not implement — substituted
+;;     with arithmetic that exercises the same dynamic-binding
+;;     semantics.
 ;;   - `square` references in quasiquote vector test at 347-348:
 ;;     `square` is not a Schooner primitive; the test is rewritten
 ;;     to use an inline `(lambda (x) (* x x))` invocation.
@@ -226,5 +229,28 @@
 (test 'many (dead-clause 1))
 (test 'many (dead-clause 1 2))
 (test 'many (dead-clause 1 2 3))
+
+;; --- §4.2.6 dynamic bindings ---------------------------------------------
+;;
+;; r7rs `radix` example, adapted: Schooner has no `number->string` with a
+;; base argument, so the converter is exercised directly and `(f n)`
+;; multiplies its input by the current radix to make the active binding
+;; observable.
+
+(define radix
+  (make-parameter
+    10
+    (lambda (x)
+      (if (and (integer? x) (>= x 2) (<= x 16))
+          x
+          (error "invalid radix" x)))))
+
+(define (f n) (* n (radix)))
+
+(test 120 (f 12))
+(test 24 (parameterize ((radix 2)) (f 12)))
+(test 120 (f 12))
+
+(test-error (parameterize ((radix 17)) (f 12)))
 
 (test-end)

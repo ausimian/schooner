@@ -55,6 +55,15 @@ defmodule Schooner.Value do
       (rendered as a Scheme list by the accessor). Constructed by
       `(error msg irritant ...)` and reachable via `error?`,
       `error-object?`, `read-error?`, `file-error?`.
+    * Parameter — `{:parameter, id, init, converter}`. `id` is a
+      process-monotonic unique integer used as the lookup key in the
+      `Schooner.Eval.ParameterState` dynamic-binding stack. `init` is
+      the post-converter initial value (returned when no
+      `parameterize` is currently shadowing the parameter).
+      `converter` is either `nil` or a Scheme procedure applied to
+      every value installed for the parameter (initial *or* via
+      `parameterize`). Parameters are procedure values: calling one
+      with zero arguments returns the current value.
     * EOF — `:eof`
     * Unspecified — `:unspecified`
   """
@@ -77,6 +86,7 @@ defmodule Schooner.Value do
   @type error_kind :: :user | :read | :file
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
   @type promise_v :: {:promise, :forced, t()} | {:promise, :lazy, term()}
+  @type parameter_v :: {:parameter, integer(), t(), t() | nil}
   @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
 
   @type t ::
@@ -99,6 +109,7 @@ defmodule Schooner.Value do
           | record_type_id_v()
           | error_obj_v()
           | promise_v()
+          | parameter_v()
           | :eof
           | :unspecified
 
@@ -179,6 +190,18 @@ defmodule Schooner.Value do
   def error_object(kind, message, irritants)
       when kind in [:user, :read, :file] and is_list(irritants) do
     {:error_obj, kind, message, irritants}
+  end
+
+  @doc """
+  Build a parameter value with a fresh id. `init` is the
+  already-converted initial value. `converter` is either `nil` (when
+  `make-parameter` was called without one) or a Scheme procedure
+  applied to every value installed for the parameter via
+  `parameterize`.
+  """
+  @spec parameter(t(), t() | nil) :: parameter_v()
+  def parameter(init, converter) do
+    {:parameter, :erlang.unique_integer([:monotonic]), init, converter}
   end
 
   @doc """
@@ -268,7 +291,12 @@ defmodule Schooner.Value do
   @spec procedure?(term()) :: boolean()
   def procedure?({:closure, _, _, _, _}), do: true
   def procedure?({:primitive, _, _, _}), do: true
+  def procedure?({:parameter, _, _, _}), do: true
   def procedure?(_), do: false
+
+  @spec parameter?(term()) :: boolean()
+  def parameter?({:parameter, _, _, _}), do: true
+  def parameter?(_), do: false
 
   @spec record?(term()) :: boolean()
   def record?({:record, _, _}), do: true
@@ -469,6 +497,7 @@ defmodule Schooner.Value do
   defp render({:record, {:record_type, name, _}, _}, _), do: ["#<record ", name, ">"]
   defp render({:record, type_id, _}, _), do: ["#<record ", inspect(type_id), ">"]
   defp render({:promise, _, _}, _), do: "#<promise>"
+  defp render({:parameter, _, _, _}, _), do: "#<parameter>"
 
   defp render({:error_obj, kind, message, irritants}, mode),
     do: render_error(kind, message, irritants, mode)
