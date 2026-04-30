@@ -25,6 +25,7 @@ defmodule Schooner.Lexer do
   """
 
   alias Schooner.Lexer.Error
+  alias Schooner.Value
 
   @type position :: {pos_integer(), pos_integer()}
 
@@ -40,6 +41,7 @@ defmodule Schooner.Lexer do
           | :dot
           | :ident
           | :integer
+          | :rational
           | :float
           | :string
           | :char
@@ -460,6 +462,9 @@ defmodule Schooner.Lexer do
       {:ok, f} when is_float(f) ->
         {{:float, f, {line, col}}, rest, col + taken + atom_len}
 
+      {:ok, {:rational, _, _} = r} ->
+        {{:rational, r, {line, col}}, rest, col + taken + atom_len}
+
       :error ->
         raise Error, reason: {:invalid_numeric_literal, raw}, position: {line, col}
     end
@@ -547,6 +552,7 @@ defmodule Schooner.Lexer do
     case parse_number(raw, 10, exactness) do
       {:ok, n} when is_integer(n) -> {:integer, n, {line, col}}
       {:ok, f} when is_float(f) -> {:float, f, {line, col}}
+      {:ok, {:rational, _, _} = r} -> {:rational, r, {line, col}}
       :error -> raise Error, reason: {:invalid_numeric_literal, raw}, position: {line, col}
     end
   end
@@ -599,7 +605,7 @@ defmodule Schooner.Lexer do
 
     case body == "" or classify_body(body, radix) do
       true -> :error
-      :rational -> :error
+      :rational -> parse_rational_literal(sign, body, radix, exactness)
       :real when radix != 10 -> :error
       :real -> parse_float_literal(sign, body, exactness)
       :integer -> parse_integer_literal(sign, body, radix, exactness)
@@ -630,6 +636,28 @@ defmodule Schooner.Lexer do
       :error
     end
   end
+
+  defp parse_rational_literal(sign, body, radix, exactness) do
+    case String.split(body, "/", parts: 2) do
+      [num_str, den_str]
+      when num_str != "" and den_str != "" ->
+        with true <- digits_in_radix?(num_str, radix),
+             true <- digits_in_radix?(den_str, radix),
+             den when den > 0 <- String.to_integer(den_str, radix) do
+          num = sign * String.to_integer(num_str, radix)
+          to_rational_token(num, den, exactness)
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp to_rational_token(num, den, :inexact), do: {:ok, num / den}
+
+  defp to_rational_token(num, den, _), do: {:ok, Value.rational(num, den)}
 
   defp parse_float_literal(sign, body, exactness) do
     body =

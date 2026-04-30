@@ -61,4 +61,49 @@ defmodule Schooner.Primitives.BasePropertyTest do
       assert run("(- #{a} #{b})") === run("(+ #{a} (- #{b}))")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Rational-tower invariants
+  # ---------------------------------------------------------------------------
+
+  defp non_zero, do: filter(small_int(), &(&1 != 0))
+
+  property "(/ a b) is the multiplicative inverse: (* (/ a b) b) = a" do
+    check all(a <- small_int(), b <- non_zero()) do
+      assert run("(= (* (/ #{a} #{b}) #{b}) #{a})") == true
+    end
+  end
+
+  property "rationals are reduced: gcd of numerator and denominator is 1" do
+    check all(a <- non_zero(), b <- non_zero()) do
+      case run("(/ #{a} #{b})") do
+        n when is_integer(n) -> assert is_integer(n)
+        {:rational, n, d} -> assert Integer.gcd(abs(n), d) == 1
+      end
+    end
+  end
+
+  property "rational arithmetic distributes: a*(b+c) = a*b + a*c" do
+    check all(
+            a <- small_int(),
+            b <- small_int(),
+            c <- small_int(),
+            d <- non_zero()
+          ) do
+      assert run("(= (* #{a} (+ (/ #{b} #{d}) #{c})) (+ (* #{a} (/ #{b} #{d})) (* #{a} #{c})))") ==
+               true
+    end
+  end
+
+  property "(numerator x) / (denominator x) = x for any exact rational" do
+    check all(a <- small_int(), b <- non_zero()) do
+      r = run("(/ #{a} #{b})")
+
+      assert run("(= (/ (numerator #{render(r)}) (denominator #{render(r)})) #{render(r)})") ==
+               true
+    end
+  end
+
+  defp render({:rational, n, d}), do: "#{n}/#{d}"
+  defp render(n) when is_integer(n), do: Integer.to_string(n)
 end

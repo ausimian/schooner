@@ -131,6 +131,7 @@ defmodule Schooner.Reader do
   defp skip_datum_comments(tokens), do: tokens
 
   defp read_datum([{:integer, n, _} | rest]), do: {n, rest}
+  defp read_datum([{:rational, r, _} | rest]), do: {r, rest}
   defp read_datum([{:float, f, _} | rest]), do: {f, rest}
   defp read_datum([{:bool, b, _} | rest]), do: {Value.bool(b), rest}
   defp read_datum([{:string, s, _} | rest]), do: {Value.string(s), rest}
@@ -289,6 +290,7 @@ defmodule Schooner.Reader do
   end
 
   defp read_datum_pos([{:integer, n, pos} | rest]), do: {n, {:atom, pos}, rest}
+  defp read_datum_pos([{:rational, r, pos} | rest]), do: {r, {:atom, pos}, rest}
   defp read_datum_pos([{:float, f, pos} | rest]), do: {f, {:atom, pos}, rest}
   defp read_datum_pos([{:bool, b, pos} | rest]), do: {Value.bool(b), {:atom, pos}, rest}
   defp read_datum_pos([{:string, s, pos} | rest]), do: {Value.string(s), {:atom, pos}, rest}

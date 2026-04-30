@@ -22,6 +22,12 @@ defmodule Schooner.Value do
       because those remain tagged.
     * Character — `{:char, codepoint}`
     * Exact integer — bare Elixir integer
+    * Exact rational — `{:rational, numerator, denominator}`. Always
+      reduced (`gcd(num, denom) == 1`), denominator strictly greater
+      than 1, sign carried on the numerator. A rational whose
+      denominator would reduce to 1 is collapsed to its bare integer
+      form by `rational/2`, so the integer/rational split is total —
+      no Schooner value is both.
     * Inexact real — bare Elixir float
     * Non-finite inexact — `{:float_special, :pos_inf | :neg_inf | :nan}`
       (BEAM floats cannot represent these; tagged forms carry IEEE-754
@@ -58,6 +64,7 @@ defmodule Schooner.Value do
   @type primitive_v :: {:primitive, binary(), arity_spec(), (list() -> t())}
   @type record_v :: {:record, term(), tuple()}
   @type record_type_id_v :: {:record_type, binary(), pos_integer()}
+  @type rational_v :: {:rational, integer(), pos_integer()}
   @type float_special_v :: {:float_special, :pos_inf | :neg_inf | :nan}
   @type error_kind :: :user | :read | :file
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
@@ -72,6 +79,7 @@ defmodule Schooner.Value do
           | string_v()
           | char_v()
           | integer()
+          | rational_v()
           | float()
           | float_special_v()
           | vector_v()
@@ -104,6 +112,26 @@ defmodule Schooner.Value do
 
   @spec char(non_neg_integer()) :: char_v()
   def char(cp) when is_integer(cp) and cp >= 0, do: {:char, cp}
+
+  @doc """
+  Build a normalised exact rational. Result is always reduced (numerator
+  and denominator share no common factor), the sign is carried on the
+  numerator, and a denominator of 1 collapses to a bare integer so
+  integer-valued rationals are never tagged.
+
+  Raises `ArithmeticError` on a zero denominator — callers in primitive
+  paths should detect division-by-zero earlier and surface a structured
+  Scheme-level error instead.
+  """
+  @spec rational(integer(), integer()) :: integer() | rational_v()
+  def rational(_num, 0), do: raise(ArithmeticError, "zero denominator in rational")
+  def rational(0, _den), do: 0
+
+  def rational(num, den) when is_integer(num) and is_integer(den) do
+    g = Integer.gcd(num, den)
+    {n, d} = if den > 0, do: {div(num, g), div(den, g)}, else: {-div(num, g), -div(den, g)}
+    if d == 1, do: n, else: {:rational, n, d}
+  end
 
   @spec vector([t()]) :: vector_v()
   def vector(items) when is_list(items), do: {:vector, List.to_tuple(items)}
@@ -249,6 +277,7 @@ defmodule Schooner.Value do
 
   @spec number?(term()) :: boolean()
   def number?(n) when is_integer(n) or is_float(n), do: true
+  def number?({:rational, _, _}), do: true
   def number?({:float_special, k}) when k in [:pos_inf, :neg_inf, :nan], do: true
   def number?(_), do: false
 
@@ -263,8 +292,21 @@ defmodule Schooner.Value do
     ArgumentError -> false
   end
 
+  @doc """
+  Scheme `rational?`. True for exact integers, exact rationals, and any
+  finite inexact real (since every finite IEEE-754 double has an exact
+  rational representation). False for the non-finite specials
+  (`+inf.0`, `-inf.0`, `+nan.0`) and non-numeric values.
+  """
+  @spec rational?(term()) :: boolean()
+  def rational?(n) when is_integer(n), do: true
+  def rational?({:rational, _, _}), do: true
+  def rational?(n) when is_float(n), do: true
+  def rational?(_), do: false
+
   @spec exact?(term()) :: boolean()
   def exact?(n) when is_integer(n), do: true
+  def exact?({:rational, _, _}), do: true
   def exact?(_), do: false
 
   @spec inexact?(term()) :: boolean()
@@ -388,6 +430,7 @@ defmodule Schooner.Value do
   defp render({:float_special, :pos_inf}, _), do: "+inf.0"
   defp render({:float_special, :neg_inf}, _), do: "-inf.0"
   defp render({:float_special, :nan}, _), do: "+nan.0"
+  defp render({:rational, n, d}, _), do: [Integer.to_string(n), ?/, Integer.to_string(d)]
   defp render(n, _) when is_integer(n), do: Integer.to_string(n)
   defp render(n, _) when is_float(n), do: render_float(n)
 

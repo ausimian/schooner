@@ -1,8 +1,8 @@
 defmodule Schooner.Primitive.Error do
   @moduledoc """
   Exception raised by built-in primitives for domain-specific failures —
-  type errors, division by zero, and the family of "would require rationals
-  or complex" cases that Schooner explicitly does not implement.
+  type errors, division by zero, and the "would require complex /
+  irrational" cases that Schooner does not implement.
 
   Kept distinct from `Schooner.Eval.Error` because primitives report a
   different vocabulary of failures than the evaluator. Tests can pattern
@@ -23,14 +23,6 @@ defmodule Schooner.Primitive.Error do
 
   defp format({:division_by_zero, op}) do
     "division by zero in `#{op}`"
-  end
-
-  defp format({:exact_division_not_integer, num, den}) do
-    "exact division `(/ #{num} #{den})` would yield a rational; Schooner has no rational tower"
-  end
-
-  defp format({:negative_exponent, base, exp}) do
-    "`(expt #{inspect(base)} #{inspect(exp)})` would yield a rational; Schooner has no rational tower"
   end
 
   defp format({:irrational, op, arg}) do

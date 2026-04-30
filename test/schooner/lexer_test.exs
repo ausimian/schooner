@@ -248,8 +248,40 @@ defmodule Schooner.LexerTest do
       assert match?({:duplicate_number_prefix, _}, err.reason)
     end
 
-    test "rationals raise" do
-      assert_raise Error, fn -> Lexer.tokenise("1/2") end
+    test "rationals tokenise to {:rational, _, _}" do
+      assert [{:rational, {:rational, 1, 2}, _}] = Lexer.tokenise("1/2")
+      assert [{:rational, {:rational, -3, 4}, _}] = Lexer.tokenise("-3/4")
+      assert [{:rational, {:rational, 1, 2}, _}] = Lexer.tokenise("3/6")
+    end
+
+    test "rational with denominator 1 collapses to integer token" do
+      assert [{:integer, 5, _}] = Lexer.tokenise("5/1")
+      assert [{:integer, -5, _}] = Lexer.tokenise("-10/2")
+    end
+
+    test "#i on a rational widens to float" do
+      assert [{:float, 0.5, _}] = Lexer.tokenise("#i1/2")
+    end
+
+    test "#e on a rational stays exact" do
+      assert [{:rational, {:rational, 1, 2}, _}] = Lexer.tokenise("#e1/2")
+    end
+
+    test "rational under non-decimal radix" do
+      assert [{:rational, {:rational, 1, 10}, _}] = Lexer.tokenise("#x1/a")
+      assert [{:rational, {:rational, 5, 6}, _}] = Lexer.tokenise("#b101/110")
+    end
+
+    test "rational with zero denominator is invalid" do
+      err = assert_raise Error, fn -> Lexer.tokenise("1/0") end
+      assert match?({:invalid_numeric_literal, _}, err.reason)
+    end
+
+    test "malformed rational shapes are invalid numeric literals" do
+      assert_raise Error, fn -> Lexer.tokenise("1/") end
+      assert_raise Error, fn -> Lexer.tokenise("1/2/3") end
+      assert_raise Error, fn -> Lexer.tokenise("1.5/2") end
+      assert_raise Error, fn -> Lexer.tokenise("1/-2") end
     end
 
     test "non-decimal radix forbids fractional point" do
@@ -375,11 +407,6 @@ defmodule Schooner.LexerTest do
     test "leading dot followed by garbage is an invalid token" do
       err = assert_raise Error, fn -> Lexer.tokenise(".+@") end
       assert match?({:invalid_token, _}, err.reason)
-    end
-
-    test "Lexer.Error message describes :rationals_unsupported" do
-      err = Error.exception(reason: :rationals_unsupported, position: {7, 3})
-      assert err.message == "rationals are not supported at line 7, column 3"
     end
 
     test "Lexer.Error message describes :empty_atom" do

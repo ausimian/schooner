@@ -33,7 +33,6 @@ defmodule Schooner.Lexer.Error do
   defp describe(:empty_hex_escape), do: "empty hex escape `\\x;`"
   defp describe(:invalid_numeric_literal), do: "invalid numeric literal"
   defp describe(:empty_atom), do: "empty token"
-  defp describe(:rationals_unsupported), do: "rationals are not supported"
   defp describe({:invalid_numeric_literal, raw}), do: "invalid numeric literal #{inspect(raw)}"
   defp describe({:invalid_token, raw}), do: "invalid token #{inspect(raw)}"
   defp describe({:invalid_identifier, raw}), do: "invalid identifier #{inspect(raw)}"

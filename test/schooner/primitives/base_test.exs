@@ -249,16 +249,16 @@ defmodule Schooner.Primitives.BaseTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Documented "would require rationals/complex" errors
+  # Rational tower interactions and remaining "would require complex/irrational"
+  # errors
   # ---------------------------------------------------------------------------
 
-  describe "raises on rationals/complex" do
-    test "(/ 1 3) with exact operands raises exact_division_not_integer" do
-      e = assert_raise PError, fn -> run("(/ 1 3)") end
-      assert match?({:exact_division_not_integer, 1, 3}, e.reason)
+  describe "exact division and rationals" do
+    test "(/ 1 3) yields an exact rational" do
+      assert run("(/ 1 3)") == {:rational, 1, 3}
     end
 
-    test "(/ 6 3) with exact operands stays exact" do
+    test "(/ 6 3) with exact operands stays exact integer" do
       assert run("(/ 6 3)") === 2
     end
 
@@ -284,9 +284,8 @@ defmodule Schooner.Primitives.BaseTest do
       assert match?({:irrational, "sqrt", -1}, e.reason)
     end
 
-    test "(expt 2 -3) on integers raises negative_exponent" do
-      e = assert_raise PError, fn -> run("(expt 2 -3)") end
-      assert match?({:negative_exponent, 2, -3}, e.reason)
+    test "(expt 2 -3) on integers yields the exact rational 1/8" do
+      assert run("(expt 2 -3)") == {:rational, 1, 8}
     end
 
     test "(expt 1 -3) returns 1 (no rational needed)" do
@@ -299,6 +298,11 @@ defmodule Schooner.Primitives.BaseTest do
 
     test "(expt 2.0 -3) returns float" do
       assert run("(expt 2.0 -3)") == 0.125
+    end
+
+    test "(expt 0 -1) raises division-by-zero" do
+      e = assert_raise PError, fn -> run("(expt 0 -1)") end
+      assert e.reason == {:division_by_zero, "expt"}
     end
   end
 
@@ -355,8 +359,15 @@ defmodule Schooner.Primitives.BaseTest do
       assert run("(inexact->exact 3.0)") === 3
     end
 
-    test "inexact->exact on non-integer float raises" do
-      e = assert_raise PError, fn -> run("(inexact->exact 1.5)") end
+    test "inexact->exact on non-integer float yields exact rational" do
+      assert run("(inexact->exact 0.5)") == {:rational, 1, 2}
+      assert run("(inexact->exact 1.5)") == {:rational, 3, 2}
+    end
+
+    test "inexact->exact on +inf.0 / +nan.0 raises" do
+      e = assert_raise PError, fn -> run("(inexact->exact +inf.0)") end
+      assert match?({:not_representable_exact, _}, e.reason)
+      e = assert_raise PError, fn -> run("(inexact->exact +nan.0)") end
       assert match?({:not_representable_exact, _}, e.reason)
     end
 
@@ -393,9 +404,10 @@ defmodule Schooner.Primitives.BaseTest do
       assert run("(- 5.0)") === -5.0
     end
 
-    test "(/ n) reciprocates only when exact-divisible" do
+    test "(/ n) reciprocates" do
       assert run("(/ 1.0)") === 1.0
-      assert_raise PError, fn -> run("(/ 3)") end
+      assert run("(/ 3)") == {:rational, 1, 3}
+      assert run("(/ 1)") === 1
     end
 
     test "(gcd) is 0; (lcm) is 1" do
