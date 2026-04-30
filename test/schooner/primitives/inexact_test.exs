@@ -123,14 +123,14 @@ defmodule Schooner.Primitives.InexactTest do
       assert run("(acos +inf.0)") == {:float_special, :nan}
     end
 
-    test "asin out of [-1,1] raises" do
-      e = assert_raise PError, fn -> run("(asin 2)") end
-      assert match?({:irrational, "asin", _}, e.reason)
+    test "asin out of [-1,1] lifts into the complex plane" do
+      assert run("(asin 2)") == run("(asin (make-rectangular 2 0))")
+      assert run("(asin -1.5)") == run("(asin (make-rectangular -1.5 0))")
     end
 
-    test "acos out of [-1,1] raises" do
-      e = assert_raise PError, fn -> run("(acos -2.5)") end
-      assert match?({:irrational, "acos", _}, e.reason)
+    test "acos out of [-1,1] lifts into the complex plane" do
+      assert run("(acos -2.5)") == run("(acos (make-rectangular -2.5 0))")
+      assert run("(acos 2)") == run("(acos (make-rectangular 2 0))")
     end
 
     test "asin/acos on non-number raises type error" do
