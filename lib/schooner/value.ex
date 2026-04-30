@@ -87,7 +87,10 @@ defmodule Schooner.Value do
   @type error_obj_v :: {:error_obj, error_kind(), t(), [t()]}
   @type promise_v :: {:promise, :forced, t()} | {:promise, :lazy, term()}
   @type parameter_v :: {:parameter, integer(), t(), t() | nil}
-  @type arity_spec :: non_neg_integer() | {:at_least, non_neg_integer()}
+  @type arity_spec ::
+          non_neg_integer()
+          | {:at_least, non_neg_integer()}
+          | {:between, non_neg_integer(), non_neg_integer()}
 
   @type t ::
           bool_v()

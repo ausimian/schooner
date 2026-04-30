@@ -251,6 +251,14 @@ defmodule Schooner.Eval do
     end
   end
 
+  defp check_primitive_arity!({:between, lo, hi}, args, name) do
+    got = length(args)
+
+    if got < lo or got > hi do
+      raise(Error, reason: {:arity_mismatch, name, {:between, lo, hi}, got})
+    end
+  end
+
   # `letrec*` is the workhorse for both user-facing recursive bindings
   # (the `let`, `let*`, `letrec`, `letrec*`, named-`let` bootstrap
   # macros all expand to it eventually) and for internal-define

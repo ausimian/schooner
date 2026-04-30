@@ -1,6 +1,7 @@
 defmodule Schooner.Primitives.InexactTest do
   use ExUnit.Case, async: true
 
+  alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
@@ -183,9 +184,10 @@ defmodule Schooner.Primitives.InexactTest do
       assert match?({:type_error, "atan", "number", _}, e.reason)
     end
 
-    test "atan with too many arguments raises an arity-shaped type error" do
-      e = assert_raise PError, fn -> run("(atan 1 2 3)") end
-      assert e.reason == {:type_error, "atan", "1 or 2 arguments", :too_many}
+    test "atan with too many arguments raises an arity_mismatch with got count" do
+      e = assert_raise EvalError, fn -> run("(atan 1 2 3)") end
+      assert e.reason == {:arity_mismatch, "atan", {:between, 1, 2}, 3}
+      assert e.message =~ "expected between 1 and 2, got 3"
     end
   end
 

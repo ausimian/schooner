@@ -57,7 +57,7 @@ defmodule Schooner.Primitives.Base do
   `Schooner.Library.Standard` consumes this to assemble the
   `(scheme base)` library entry.
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     arithmetic_specs() ++
       comparison_specs() ++
@@ -1103,14 +1103,14 @@ defmodule Schooner.Primitives.Base do
   defp vector_specs do
     [
       {"vector", {:at_least, 0}, &vector_ctor/1},
-      {"make-vector", {:at_least, 1}, &make_vector/1},
+      {"make-vector", {:between, 1, 2}, &make_vector/1},
       {"vector-length", 1, &vector_length/1},
       {"vector-ref", 2, &vector_ref/1},
-      {"vector->list", {:at_least, 1}, &vector_to_list/1},
+      {"vector->list", {:between, 1, 3}, &vector_to_list/1},
       {"list->vector", 1, &list_to_vector/1},
       {"vector-map", {:at_least, 2}, &vector_map/1},
       {"vector-for-each", {:at_least, 2}, &vector_for_each/1},
-      {"vector-copy", {:at_least, 1}, &vector_copy/1},
+      {"vector-copy", {:between, 1, 3}, &vector_copy/1},
       {"vector-append", {:at_least, 0}, &vector_append/1}
     ]
   end
@@ -1122,10 +1122,6 @@ defmodule Schooner.Primitives.Base do
   defp make_vector([k, fill]) do
     n = require_size!("make-vector", k)
     Value.vector(List.duplicate(fill, n))
-  end
-
-  defp make_vector([_, _ | _]) do
-    raise(Error, reason: {:type_error, "make-vector", "1 or 2 arguments", :too_many})
   end
 
   defp vector_length([{:vector, t}]), do: tuple_size(t)
@@ -1196,10 +1192,6 @@ defmodule Schooner.Primitives.Base do
   defp vector_copy([v, start]), do: vector_copy_range(v, start, nil)
   defp vector_copy([v, start, end_]), do: vector_copy_range(v, start, end_)
 
-  defp vector_copy([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "vector-copy", "1 to 3 arguments", :too_many})
-  end
-
   defp vector_copy_range({:vector, t}, start, end_) do
     n = tuple_size(t)
     s = if start == nil, do: 0, else: require_bound!("vector-copy", start, 0, n)
@@ -1227,13 +1219,13 @@ defmodule Schooner.Primitives.Base do
   defp bytevector_specs do
     [
       {"bytevector", {:at_least, 0}, &bytevector_ctor/1},
-      {"make-bytevector", {:at_least, 1}, &make_bytevector/1},
+      {"make-bytevector", {:between, 1, 2}, &make_bytevector/1},
       {"bytevector-length", 1, &bytevector_length/1},
       {"bytevector-u8-ref", 2, &bytevector_u8_ref/1},
-      {"bytevector-copy", {:at_least, 1}, &bytevector_copy/1},
+      {"bytevector-copy", {:between, 1, 3}, &bytevector_copy/1},
       {"bytevector-append", {:at_least, 0}, &bytevector_append/1},
-      {"utf8->string", {:at_least, 1}, &utf8_to_string/1},
-      {"string->utf8", {:at_least, 1}, &string_to_utf8/1}
+      {"utf8->string", {:between, 1, 3}, &utf8_to_string/1},
+      {"string->utf8", {:between, 1, 3}, &string_to_utf8/1}
     ]
   end
 
@@ -1248,10 +1240,6 @@ defmodule Schooner.Primitives.Base do
     n = require_size!("make-bytevector", k)
     b = require_byte!("make-bytevector", fill)
     Value.bytevector(:binary.copy(<<b>>, n))
-  end
-
-  defp make_bytevector([_, _ | _]) do
-    raise(Error, reason: {:type_error, "make-bytevector", "1 or 2 arguments", :too_many})
   end
 
   defp bytevector_length([{:bytevector, b}]), do: byte_size(b)
@@ -1270,10 +1258,6 @@ defmodule Schooner.Primitives.Base do
   defp bytevector_copy([v]), do: bytevector_copy_range(v, nil, nil)
   defp bytevector_copy([v, start]), do: bytevector_copy_range(v, start, nil)
   defp bytevector_copy([v, start, end_]), do: bytevector_copy_range(v, start, end_)
-
-  defp bytevector_copy([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "bytevector-copy", "1 to 3 arguments", :too_many})
-  end
 
   defp bytevector_copy_range({:bytevector, b}, start, end_) do
     n = byte_size(b)
@@ -1295,10 +1279,6 @@ defmodule Schooner.Primitives.Base do
   defp utf8_to_string([v, start]), do: utf8_to_string_range(v, start, nil)
   defp utf8_to_string([v, start, end_]), do: utf8_to_string_range(v, start, end_)
 
-  defp utf8_to_string([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "utf8->string", "1 to 3 arguments", :too_many})
-  end
-
   defp utf8_to_string_range({:bytevector, b}, start, end_) do
     n = byte_size(b)
     s = if start == nil, do: 0, else: require_bound!("utf8->string", start, 0, n)
@@ -1317,10 +1297,6 @@ defmodule Schooner.Primitives.Base do
   defp string_to_utf8([v, start]), do: string_to_utf8_range(v, start, nil)
   defp string_to_utf8([v, start, end_]), do: string_to_utf8_range(v, start, end_)
 
-  defp string_to_utf8([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "string->utf8", "1 to 3 arguments", :too_many})
-  end
-
   defp string_to_utf8_range(s, start, end_) when is_binary(s) do
     {sbyte, slen} = string_byte_slice(s, start || 0, end_, "string->utf8")
     Value.bytevector(:binary.part(s, sbyte, slen))
@@ -1336,7 +1312,7 @@ defmodule Schooner.Primitives.Base do
   defp string_specs do
     [
       {"string", {:at_least, 0}, &string_ctor/1},
-      {"make-string", {:at_least, 1}, &make_string/1},
+      {"make-string", {:between, 1, 2}, &make_string/1},
       {"string-length", 1, &string_length/1},
       {"string-ref", 2, &string_ref/1},
       {"string-append", {:at_least, 0}, &string_append/1},
@@ -1346,11 +1322,11 @@ defmodule Schooner.Primitives.Base do
       {"string<=?", {:at_least, 2}, &string_le/1},
       {"string>?", {:at_least, 2}, &string_gt/1},
       {"string>=?", {:at_least, 2}, &string_ge/1},
-      {"string->list", {:at_least, 1}, &string_to_list/1},
+      {"string->list", {:between, 1, 3}, &string_to_list/1},
       {"list->string", 1, &list_to_string/1},
       {"string-upcase", 1, &string_upcase/1},
       {"string-downcase", 1, &string_downcase/1},
-      {"string-copy", {:at_least, 1}, &string_copy/1}
+      {"string-copy", {:between, 1, 3}, &string_copy/1}
     ]
   end
 
@@ -1369,10 +1345,6 @@ defmodule Schooner.Primitives.Base do
     n = require_size!("make-string", k)
     cp = require_char!("make-string", char)
     Value.string(:binary.copy(codepoint_to_utf8(cp), n))
-  end
-
-  defp make_string([_, _ | _]) do
-    raise(Error, reason: {:type_error, "make-string", "1 or 2 arguments", :too_many})
   end
 
   defp string_length([s]) when is_binary(s), do: string_codepoint_length(s)
@@ -1428,10 +1400,6 @@ defmodule Schooner.Primitives.Base do
   defp string_to_list([v, start]), do: string_to_list_range(v, start, nil)
   defp string_to_list([v, start, end_]), do: string_to_list_range(v, start, end_)
 
-  defp string_to_list([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "string->list", "1 to 3 arguments", :too_many})
-  end
-
   defp string_to_list_range(s, start, end_) when is_binary(s) do
     cps = slice_codepoints(s, start || 0, end_, "string->list")
     Value.list(Enum.map(cps, &Value.char/1))
@@ -1463,10 +1431,6 @@ defmodule Schooner.Primitives.Base do
   defp string_copy([v]), do: string_copy_range(v, nil, nil)
   defp string_copy([v, start]), do: string_copy_range(v, start, nil)
   defp string_copy([v, start, end_]), do: string_copy_range(v, start, end_)
-
-  defp string_copy([_, _, _, _ | _]) do
-    raise(Error, reason: {:type_error, "string-copy", "1 to 3 arguments", :too_many})
-  end
 
   defp string_copy_range(s, nil, nil) when is_binary(s), do: Value.string(s)
 

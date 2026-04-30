@@ -26,7 +26,7 @@ defmodule Schooner.Primitives.Char do
   tuple. Used by `Schooner.Library.Standard` to assemble
   `(scheme char)`.
   """
-  @spec specs() :: [{binary(), non_neg_integer() | {:at_least, non_neg_integer()}, fun()}]
+  @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
       {"char->integer", 1, &char_to_integer/1},
