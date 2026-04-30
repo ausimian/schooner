@@ -438,4 +438,105 @@ defmodule Schooner.ValueTest do
       assert Value.display(@nan) == "+nan.0"
     end
   end
+
+  describe "foreign values" do
+    test "constructor / predicate / accessor round-trip arbitrary host terms" do
+      for term <- [self(), make_ref(), :some_atom, {:user, 5}, %{a: 1}, "raw bin"] do
+        f = Value.foreign(term)
+        assert f == {:foreign, term}
+        assert Value.foreign?(f)
+        assert Value.foreign_ref(f) === term
+      end
+    end
+
+    test "foreign? rejects every other shape" do
+      refute Value.foreign?(false)
+      refute Value.foreign?([])
+      refute Value.foreign?(1)
+      refute Value.foreign?({:sym, "x"})
+      refute Value.foreign?(Value.vector([1]))
+      refute Value.foreign?({:closure, [], [], %{}, nil})
+      refute Value.foreign?({:primitive, "p", 0, fn _ -> :unspecified end})
+    end
+
+    test "foreign_ref/1 raises on non-foreign" do
+      assert_raise ArgumentError, fn -> Value.foreign_ref(:not_foreign) end
+    end
+
+    test "no built-in shape predicate matches a foreign value" do
+      f = Value.foreign(self())
+
+      refute Value.boolean?(f)
+      refute Value.null?(f)
+      refute Value.pair?(f)
+      refute Value.symbol?(f)
+      refute Value.string?(f)
+      refute Value.char?(f)
+      refute Value.vector?(f)
+      refute Value.bytevector?(f)
+      refute Value.procedure?(f)
+      refute Value.parameter?(f)
+      refute Value.record?(f)
+      refute Value.error_object?(f)
+      refute Value.eof?(f)
+      refute Value.unspecified?(f)
+      refute Value.number?(f)
+      refute Value.integer?(f)
+      refute Value.rational?(f)
+      refute Value.real?(f)
+      refute Value.complex?(f)
+      refute Value.exact?(f)
+      refute Value.inexact?(f)
+      refute Value.float_special?(f)
+      refute Value.promise?(f)
+      refute Value.list?(f)
+    end
+
+    test "write / display redact the wrapped term to #<foreign>" do
+      # Wrap a term whose own rendering would be loud; the redaction
+      # must hide it entirely and not depend on the term's shape.
+      f = Value.foreign({:secret, "shh", [1, 2, 3]})
+      assert Value.write(f) == "#<foreign>"
+      assert Value.display(f) == "#<foreign>"
+
+      # And inside an aggregate, the redaction still wins per element.
+      assert Value.write(Value.list([Value.foreign(:p), 1])) == "(#<foreign> 1)"
+      assert Value.write(Value.vector([Value.foreign(:p)])) == "#(#<foreign>)"
+    end
+
+    test "eq? / eqv? compare wrapped terms with === (identity for pids/refs)" do
+      pid = self()
+      f1 = Value.foreign(pid)
+      f2 = Value.foreign(pid)
+      assert Value.eq?(f1, f2)
+      assert Value.eqv?(f1, f2)
+
+      # Different host pids — distinct identity, never equal.
+      other = spawn(fn -> :ok end)
+      refute Value.eq?(f1, Value.foreign(other))
+
+      # Refs are unique identities even when "fresh".
+      r = make_ref()
+      assert Value.eqv?(Value.foreign(r), Value.foreign(r))
+      refute Value.eqv?(Value.foreign(make_ref()), Value.foreign(make_ref()))
+    end
+
+    test "equal? agrees with eqv? — no structural recursion into the payload" do
+      pid = self()
+      assert Value.equal?(Value.foreign(pid), Value.foreign(pid))
+      refute Value.equal?(Value.foreign(make_ref()), Value.foreign(make_ref()))
+
+      # NaN is never equal to anything, even when wrapped — `===`
+      # propagates IEEE-754 semantics through the foreign tuple.
+      nan = :nan
+      assert Value.equal?(Value.foreign(nan), Value.foreign(nan))
+    end
+
+    test "foreign vs non-foreign is never equal" do
+      f = Value.foreign(:x)
+      refute Value.eq?(f, Value.symbol("x"))
+      refute Value.eqv?(f, :x)
+      refute Value.equal?(f, Value.symbol("x"))
+    end
+  end
 end

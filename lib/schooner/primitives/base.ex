@@ -812,6 +812,7 @@ defmodule Schooner.Primitives.Base do
       {"vector?", 1, &vector_p/1},
       {"bytevector?", 1, &bytevector_p/1},
       {"procedure?", 1, &procedure_p/1},
+      {"foreign?", 1, &foreign_p/1},
       {"eof-object?", 1, &eof_p/1},
       {"eq?", 2, &eq_p/1},
       {"eqv?", 2, &eqv_p/1},
@@ -836,6 +837,7 @@ defmodule Schooner.Primitives.Base do
   defp vector_p([v]), do: Value.bool(Value.vector?(v))
   defp bytevector_p([v]), do: Value.bool(Value.bytevector?(v))
   defp procedure_p([v]), do: Value.bool(Value.procedure?(v))
+  defp foreign_p([v]), do: Value.bool(Value.foreign?(v))
   defp eof_p([v]), do: Value.bool(Value.eof?(v))
 
   defp eq_p([a, b]), do: Value.bool(Value.eq?(a, b))
