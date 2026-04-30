@@ -238,4 +238,24 @@ defmodule Schooner.Primitives.ExceptionsTest do
       assert heap < 5_000_000, "heap grew to #{heap} words — TCO likely broken"
     end
   end
+
+  describe "with-exception-handler argument validation" do
+    test "non-procedure handler raises a type error" do
+      e =
+        assert_raise Schooner.Primitive.Error, fn ->
+          run("(with-exception-handler 42 (lambda () 1))")
+        end
+
+      assert match?({:type_error, "with-exception-handler", "procedure", _}, e.reason)
+    end
+
+    test "non-procedure thunk raises a type error" do
+      e =
+        assert_raise Schooner.Primitive.Error, fn ->
+          run("(with-exception-handler (lambda (c) c) 42)")
+        end
+
+      assert match?({:type_error, "with-exception-handler", "procedure", _}, e.reason)
+    end
+  end
 end

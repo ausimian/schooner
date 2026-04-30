@@ -81,4 +81,20 @@ defmodule Schooner.Primitives.RecordTest do
       run("(%record-ref id1 'not-a-record 0)", env)
     end
   end
+
+  test "%record-ref raises with an inspected name when the type-id isn't a record-type tuple" do
+    # `%record-instance` accepts any first argument as a type id, so it's
+    # possible to construct a record whose id is a bare symbol. The error
+    # path falls through to `inspect/1` for the type name.
+    env = env()
+    real = {:record_type, "real", 1}
+    Env.define(env, "real", real)
+
+    e =
+      assert_raise PError, fn ->
+        run("(%record-ref 'junk (%record-instance real 0) 0)", env)
+      end
+
+    assert match?({:wrong_record_type, "%record-ref", _}, e.reason)
+  end
 end

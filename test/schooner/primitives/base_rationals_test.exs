@@ -288,6 +288,9 @@ defmodule Schooner.Primitives.BaseRationalsTest do
     test "numerator / denominator type-check non-numbers" do
       e = assert_raise PError, fn -> run(~S|(numerator "foo")|) end
       assert match?({:type_error, "numerator", _, _}, e.reason)
+
+      e = assert_raise PError, fn -> run(~S|(denominator "foo")|) end
+      assert match?({:type_error, "denominator", _, _}, e.reason)
     end
   end
 
@@ -311,6 +314,19 @@ defmodule Schooner.Primitives.BaseRationalsTest do
       assert match?({:rational, _, _}, r)
       back = run("(exact->inexact (inexact->exact 0.1))")
       assert back === 0.1
+    end
+
+    test "exact / inexact->exact is identity on rationals" do
+      assert run("(exact 1/2)") == {:rational, 1, 2}
+      assert run("(inexact->exact 22/7)") == {:rational, 22, 7}
+    end
+
+    test "exact 0.0 yields exact integer 0 (signed-zero short-circuit)" do
+      # `Float.ratio(-0.0)` returns the giant subnormal pair, so the
+      # signed-zero case is handled ahead of the general float path.
+      assert run("(exact 0.0)") === 0
+      assert run("(exact (- 0.0))") === 0
+      assert run("(inexact->exact 0.0)") === 0
     end
 
     test "round-trip (exact->inexact (inexact->exact f)) is the identity for finite floats" do
@@ -361,6 +377,11 @@ defmodule Schooner.Primitives.BaseRationalsTest do
     test "rationalize with infinite tolerance yields 0.0" do
       assert run("(rationalize 1/3 +inf.0)") === 0.0
       assert run("(rationalize 100 -inf.0)") === 0.0
+    end
+
+    test "rationalize with infinite x yields x" do
+      assert run("(rationalize +inf.0 1)") == {:float_special, :pos_inf}
+      assert run("(rationalize -inf.0 1/10)") == {:float_special, :neg_inf}
     end
   end
 

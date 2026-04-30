@@ -156,5 +156,13 @@ defmodule Schooner.Primitives.ParametersTest do
                  (let ((q (make-parameter 7)))
                    (q)))|) == 7
     end
+
+    test "%parameterize-apply rejects a non-list bindings argument" do
+      # `parameterize` macro always builds a proper list, but the runtime
+      # primitive is exposed and must reject callers that hand it junk.
+      assert_raise Schooner.Primitive.Error, ~r/list of \(parameter . value\) pairs/, fn ->
+        run("(%parameterize-apply 'not-a-list (lambda () 1))")
+      end
+    end
   end
 end

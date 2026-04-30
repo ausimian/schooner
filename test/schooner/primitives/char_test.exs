@@ -79,8 +79,16 @@ defmodule Schooner.Primitives.CharTest do
     end
 
     test "char-foldcase on a multi-codepoint fold leaves the original char unchanged" do
-      # ß folds to "ss" — two codepoints — so char-foldcase keeps ß.
-      assert run(~s|(char-foldcase #\\ß)|) == Value.char(0x00DF)
+      # Turkish capital letter I with dot above (U+0130) downcases under the
+      # `:default` Unicode mapping to "i̇" (two codepoints), so
+      # char-foldcase falls through to the cp-unchanged branch and returns İ.
+      assert run(~s|(char-foldcase #\\İ)|) == Value.char(0x0130)
+    end
+
+    test "char-ci=? on a multi-codepoint-fold char compares the unfolded codepoint" do
+      # Same multi-codepoint fold path, exercised through the comparator.
+      assert run(~s|(char-ci=? #\\İ #\\İ)|) == Value.bool(true)
+      assert run(~s|(char-ci=? #\\İ #\\I)|) == Value.bool(false)
     end
   end
 
