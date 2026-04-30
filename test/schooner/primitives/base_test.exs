@@ -324,6 +324,18 @@ defmodule Schooner.Primitives.BaseTest do
       assert e.reason == {:division_by_zero, "/"}
     end
 
+    test "(/ +i 0) raises division_by_zero on the complex-divide path" do
+      e = assert_raise PError, fn -> run("(/ +i 0)") end
+      assert e.reason == {:division_by_zero, "/"}
+    end
+
+    test "(/ ±0.0 ±0.0) on every signed-zero combination yields +nan.0" do
+      assert run("(/ +0.0 +0.0)") == {:float_special, :nan}
+      assert run("(/ +0.0 (- 0.0))") == {:float_special, :nan}
+      assert run("(/ (- 0.0) +0.0)") == {:float_special, :nan}
+      assert run("(/ (- 0.0) (- 0.0))") == {:float_special, :nan}
+    end
+
     test "(modulo 5 0) raises division_by_zero" do
       e = assert_raise PError, fn -> run("(modulo 5 0)") end
       assert e.reason == {:division_by_zero, "modulo"}
@@ -615,6 +627,9 @@ defmodule Schooner.Primitives.BaseTest do
     test "min/max with NaN propagate NaN" do
       assert run("(min +nan.0 1 2)") == @nan
       assert run("(max 1 +nan.0 2)") == @nan
+      # NaN as the second argument hits the right-side pick_min/pick_max clause.
+      assert run("(min 1 +nan.0)") == @nan
+      assert run("(max 1 +nan.0)") == @nan
     end
 
     test "min/max with infinities" do
@@ -763,6 +778,11 @@ defmodule Schooner.Primitives.BaseTest do
 
     test "(expt 5 0) — int_pow base case" do
       assert run("(expt 5 0)") === 1
+    end
+
+    test "(expt 1+i 3) — complex int_pow odd-exponent recursion" do
+      # (1+i)^3 = (1+i) * (1+i)^2 = (1+i) * 2i = -2 + 2i
+      assert run("(expt 1+i 3)") == {:complex, -2, 2}
     end
   end
 
