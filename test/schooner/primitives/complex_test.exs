@@ -201,6 +201,20 @@ defmodule Schooner.Primitives.ComplexTest do
     test "non-finite operand rejected" do
       e = assert_raise PError, fn -> run("(make-polar +inf.0 0)") end
       assert match?({:type_error, "make-polar", _, _}, e.reason)
+
+      e = assert_raise PError, fn -> run("(make-polar 1 +nan.0)") end
+      assert match?({:type_error, "make-polar", _, _}, e.reason)
+    end
+
+    test "rational magnitude/angle flow through the rational coercion" do
+      {:complex, r, i} = run("(make-polar 1/2 0)")
+      assert_in_delta r, 0.5, 1.0e-12
+      assert_in_delta i, 0.0, 1.0e-12
+    end
+
+    test "non-number operand rejected with type-error" do
+      e = assert_raise PError, fn -> run(~s|(make-polar "x" 0)|) end
+      assert match?({:type_error, "make-polar", _, _}, e.reason)
     end
   end
 
@@ -227,9 +241,18 @@ defmodule Schooner.Primitives.ComplexTest do
       assert run("(imag-part 1/2)") === 0
     end
 
+    test "imag-part on a non-finite real is inexact zero" do
+      assert run("(imag-part +inf.0)") === 0.0
+      assert run("(imag-part -inf.0)") === 0.0
+      assert run("(imag-part +nan.0)") === 0.0
+    end
+
     test "selectors reject non-numbers" do
       e = assert_raise PError, fn -> run("(real-part 'foo)") end
       assert match?({:type_error, "real-part", _, _}, e.reason)
+
+      e = assert_raise PError, fn -> run("(imag-part 'foo)") end
+      assert match?({:type_error, "imag-part", _, _}, e.reason)
     end
   end
 
@@ -242,15 +265,35 @@ defmodule Schooner.Primitives.ComplexTest do
       assert run("(magnitude 1+i)") == :math.sqrt(2.0)
     end
 
+    test "|float complex| flows through float-component path" do
+      assert_in_delta run("(magnitude 1.5+2.5i)"), :math.sqrt(1.5 * 1.5 + 2.5 * 2.5), 1.0e-12
+    end
+
+    test "|rational complex| flows through rational-component path" do
+      # |1/2 + 1/2 i| = sqrt(1/2)
+      assert_in_delta run("(magnitude 1/2+1/2i)"), :math.sqrt(0.5), 1.0e-12
+    end
+
     test "magnitude of a real is its absolute value" do
       assert run("(magnitude -7)") === 7
       assert run("(magnitude 1/2)") == {:rational, 1, 2}
       assert run("(magnitude -1/2)") == {:rational, 1, 2}
       assert run("(magnitude -inf.0)") == {:float_special, :pos_inf}
+      assert run("(magnitude +inf.0)") == {:float_special, :pos_inf}
+      assert run("(magnitude +nan.0)") == {:float_special, :nan}
     end
 
     test "magnitude with infinite component is +inf" do
       assert run("(magnitude (make-rectangular +inf.0 5))") == {:float_special, :pos_inf}
+    end
+
+    test "magnitude with NaN component propagates NaN" do
+      assert run("(magnitude (make-rectangular +nan.0 5))") == {:float_special, :nan}
+    end
+
+    test "magnitude rejects non-numbers" do
+      e = assert_raise PError, fn -> run("(magnitude 'foo)") end
+      assert match?({:type_error, "magnitude", _, _}, e.reason)
     end
   end
 
@@ -263,6 +306,17 @@ defmodule Schooner.Primitives.ComplexTest do
     test "angle of a negative real is π" do
       assert run("(angle -5)") == pi()
       assert run("(angle -1.5)") == pi()
+    end
+
+    test "angle of a positive rational is 0; negative rational is π" do
+      assert run("(angle 1/2)") === 0
+      assert run("(angle -1/2)") == pi()
+    end
+
+    test "angle of non-finite reals" do
+      assert run("(angle +inf.0)") === 0.0
+      assert run("(angle -inf.0)") == pi()
+      assert run("(angle +nan.0)") == {:float_special, :nan}
     end
 
     test "angle of +i is π/2" do
@@ -279,6 +333,46 @@ defmodule Schooner.Primitives.ComplexTest do
 
     test "angle of -1-i is -3π/4" do
       assert_in_delta run("(angle -1-i)"), -3.0 * pi() / 4.0, 1.0e-12
+    end
+
+    test "angle with NaN component propagates NaN" do
+      assert run("(angle (make-rectangular +nan.0 1))") == {:float_special, :nan}
+      assert run("(angle (make-rectangular 1 +nan.0))") == {:float_special, :nan}
+    end
+
+    test "angle of (±inf, ±inf) — IEEE-754 atan2 quadrant boundaries" do
+      assert_in_delta run("(angle (make-rectangular +inf.0 +inf.0))"), pi() / 4.0, 1.0e-12
+
+      assert_in_delta run("(angle (make-rectangular -inf.0 +inf.0))"),
+                      3.0 * pi() / 4.0,
+                      1.0e-12
+
+      assert_in_delta run("(angle (make-rectangular +inf.0 -inf.0))"), -pi() / 4.0, 1.0e-12
+
+      assert_in_delta run("(angle (make-rectangular -inf.0 -inf.0))"),
+                      -3.0 * pi() / 4.0,
+                      1.0e-12
+    end
+
+    test "angle with infinite imag, finite real → ±π/2" do
+      assert_in_delta run("(angle (make-rectangular 5 +inf.0))"), pi() / 2.0, 1.0e-12
+      assert_in_delta run("(angle (make-rectangular 5 -inf.0))"), -pi() / 2.0, 1.0e-12
+    end
+
+    test "angle with infinite real, finite imag → 0 / π with sign-of-imag" do
+      assert run("(angle (make-rectangular +inf.0 5))") === 0.0
+      assert run("(angle (make-rectangular +inf.0 -5))") === -0.0
+      assert_in_delta run("(angle (make-rectangular -inf.0 5))"), pi(), 1.0e-12
+      assert_in_delta run("(angle (make-rectangular -inf.0 -5))"), -pi(), 1.0e-12
+      # rational imag exercises real_negative? for {:rational, ...}
+      assert run("(angle (make-rectangular +inf.0 -1/2))") === -0.0
+      # float imag exercises real_negative? for is_float
+      assert run("(angle (make-rectangular +inf.0 -1.5))") === -0.0
+    end
+
+    test "angle rejects non-numbers" do
+      e = assert_raise PError, fn -> run("(angle 'foo)") end
+      assert match?({:type_error, "angle", _, _}, e.reason)
     end
   end
 

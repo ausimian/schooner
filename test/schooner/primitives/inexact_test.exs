@@ -228,4 +228,84 @@ defmodule Schooner.Primitives.InexactTest do
       assert_in_delta run("(exp 1.5)"), :math.exp(1.5), 1.0e-12
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Rational inputs — every transcendental coerces a rational to its float
+  # value and runs through the float path. Pin those branches.
+  # ---------------------------------------------------------------------------
+
+  describe "transcendentals on rational inputs" do
+    test "exp / log / sin / cos / tan / atan accept rationals" do
+      assert_in_delta run("(exp 1/2)"), :math.exp(0.5), 1.0e-12
+      assert_in_delta run("(log 1/2)"), :math.log(0.5), 1.0e-12
+      assert_in_delta run("(sin 1/2)"), :math.sin(0.5), 1.0e-12
+      assert_in_delta run("(cos 1/2)"), :math.cos(0.5), 1.0e-12
+      assert_in_delta run("(tan 1/2)"), :math.tan(0.5), 1.0e-12
+      assert_in_delta run("(atan 1/2)"), :math.atan(0.5), 1.0e-12
+    end
+
+    test "asin / acos accept in-range rationals" do
+      assert_in_delta run("(asin 1/2)"), :math.asin(0.5), 1.0e-12
+      assert_in_delta run("(acos 1/2)"), :math.acos(0.5), 1.0e-12
+    end
+
+    test "log of a negative rational lifts to complex" do
+      assert run("(log -1/2)") == {:complex, :math.log(0.5), :math.pi()}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Complex inputs that bypass the lift-on-out-of-range branch — pin the
+  # `is_complex` clauses on asin/acos and the generic_expt path.
+  # ---------------------------------------------------------------------------
+
+  describe "transcendentals on direct complex inputs" do
+    test "asin / acos on a complex literal go through the complex clause" do
+      {:complex, r, i} = run("(asin 0+i)")
+      # asin(i) = i * asinh(1)
+      assert_in_delta r, 0.0, 1.0e-12
+      assert_in_delta i, :math.log(1.0 + :math.sqrt(2.0)), 1.0e-12
+
+      {:complex, r, i} = run("(acos 0+i)")
+      assert_in_delta r, :math.pi() / 2.0, 1.0e-12
+      assert_in_delta i, -:math.log(1.0 + :math.sqrt(2.0)), 1.0e-12
+    end
+
+    test "log of a complex with rational components flows through real_to_float" do
+      {:complex, r, i} = run("(log 1/2+1/2i)")
+      # |1/2 + 1/2 i| = sqrt(1/2); arg = π/4
+      assert_in_delta r, :math.log(:math.sqrt(0.5)), 1.0e-12
+      assert_in_delta i, :math.pi() / 4.0, 1.0e-12
+    end
+
+    test "two-arg log with a complex operand exits via the complex quotient path" do
+      # log_2(1+i) = log(1+i) / log(2)
+      {:complex, r, i} = run("(log 1+i 2)")
+      ln2 = :math.log(2.0)
+      assert_in_delta r, :math.log(:math.sqrt(2.0)) / ln2, 1.0e-12
+      assert_in_delta i, :math.pi() / 4.0 / ln2, 1.0e-12
+    end
+
+    test "expt with a complex exponent dispatches to generic_expt" do
+      # (expt 2 i) = exp(i * log 2) = cos(ln 2) + i sin(ln 2)
+      {:complex, r, i} = run("(expt 2 +i)")
+      ln2 = :math.log(2.0)
+      assert_in_delta r, :math.cos(ln2), 1.0e-12
+      assert_in_delta i, :math.sin(ln2), 1.0e-12
+    end
+
+    test "expt with both operands complex dispatches to generic_expt" do
+      {:complex, r, i} = run("(expt 1+i 1+i)")
+      # (1+i)^(1+i) = exp((1+i) * log(1+i))
+      # log(1+i) = ln(sqrt 2) + i*π/4
+      lr = :math.log(:math.sqrt(2.0))
+      li = :math.pi() / 4.0
+      # (1+i)*(lr + li i) = (lr - li) + (lr + li)i
+      pr = lr - li
+      pi_ = lr + li
+      ea = :math.exp(pr)
+      assert_in_delta r, ea * :math.cos(pi_), 1.0e-12
+      assert_in_delta i, ea * :math.sin(pi_), 1.0e-12
+    end
+  end
 end
