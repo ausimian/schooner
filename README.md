@@ -7,20 +7,6 @@ to one of the entry points below, get back an Elixir term, and
 resource-bound the work with the standard process tools
 (`:max_heap_size`, `Task.shutdown/2`).
 
-## Installation
-
-Add `schooner` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:schooner, "~> 0.1.0"}
-  ]
-end
-```
-
-Documentation is published at <https://hexdocs.pm/schooner>.
-
 ## Quick example
 
 ```iex
@@ -53,6 +39,20 @@ What's happening:
 - `Schooner.apply/2` invokes any Scheme procedure value (closure, primitive, or parameter) from Elixir.
 
 See the [Embedding](https://hexdocs.pm/schooner/embedding.html) and [Host Functions](https://hexdocs.pm/schooner/host-functions.html) guides for the full story.
+
+## Installation
+
+Add `schooner` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:schooner, "~> 0.1.0"}
+  ]
+end
+```
+
+Documentation is published at <https://hexdocs.pm/schooner>.
 
 ## Choosing an entry point
 
