@@ -1,5 +1,34 @@
 # Schooner — Embeddable Scheme Interpreter
 
+## Status
+
+All 15 phases of the original plan are shipped. The MVP language surface
+and embedding API are complete; the project is at a usable v0.1.
+
+| Phase | Subject | Status |
+| --- | --- | --- |
+| 1 | Project skeleton & value model | shipped |
+| 2 | Lexer | shipped |
+| 3 | Reader | shipped |
+| 4 | Core evaluator MVP | shipped |
+| 5 | Arithmetic & predicates | shipped |
+| 6 | Pairs, lists, vectors, strings, chars, symbols | shipped |
+| 7 | Built-in derived forms (temporary) | shipped (replaced by phase 9) |
+| 8 | Internal defines & body splicing | shipped |
+| 9 | Hygienic `syntax-rules` expander | shipped |
+| 10 | Records | shipped |
+| 11 | Exception system | shipped |
+| 12 | Escape continuations & dynamic-wind | shipped |
+| 13 | Library system & standard library packaging | shipped |
+| 14 | Conformance subset & docs | shipped |
+| 15 | Embedding API & host injection | shipped |
+
+The phase-by-phase plan below remains as the historical specification.
+Phase 15's actual API shape diverged from the sketch — see the
+"Phase 15 as shipped" subsection at the end of phase 15 for the
+final surface, and the [`guides/`](guides/) directory for narrative
+documentation.
+
 ## Context
 
 `schooner` is a fresh `mix new` project intended to host an embeddable, sandboxed Scheme interpreter for the BEAM, targeting r7rs-small minus the mutable operations (`set!`, `set-car!`, `set-cdr!`, `string-set!`, `vector-set!`, `bytevector-u8-set!`, record mutators). The intended use is running untrusted or semi-trusted Scheme scripts inside an Elixir application — configuration, rules, user-supplied logic — with the host injecting any procedures the script is allowed to call.
@@ -322,6 +351,65 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 - Unit: a script calling an unregistered procedure errors with "unbound variable: name" pointing at the source position.
 - Integration: `Task.async/Task.await` running `Schooner.eval/2` with a low `:max_heap_size` is killed cleanly when a runaway script allocates beyond the budget — host process is unaffected.
 - Integration: a script that loops forever is killed by `Task.shutdown/2` with a timeout — host process is unaffected.
+
+### Phase 15 as shipped
+
+The phase-15 sketch above predated the design conversation that
+produced the actual surface. Recording what landed, since it
+diverged in several places worth pinning:
+
+**Sub-phase order (5 PRs, all merged):**
+
+- 15.1 — `Schooner.Host` conversion helpers + `Schooner.Host.TypeError`
+- 15.2 — `Schooner.Host.library/1` builder + relaxed `Library.validate_name!/1` to accept `[]`
+- 15.3 — `%Schooner.Environment{}` opaque struct + bang/tagged-tuple split for `eval`/`run`
+- 15.4 — `Schooner.apply/2`, `compile/2`, `run_compiled/2`, `%Schooner.Compiled{}`
+- 15.5 — ExDoc + four guides under `guides/`
+
+**Final API shape:**
+
+- **No auto-marshalling.** Host functions retain the primitive ABI —
+  `fn ([Schooner.Value.t()]) -> Schooner.Value.t()`. Conversion is
+  explicit via `Schooner.Host.to_*!/2` (asserting, raise
+  `TypeError`) and `to_*/1` (total, return `{:ok, _} | :error`).
+  The named accessors are the seam future representation changes
+  pivot on.
+- **Library injection unified on `Schooner.Library`.** A host
+  library built via `Schooner.Host.library/1` is the same shape
+  as a standard library. **Named** libraries (e.g. `["myapp",
+  "log"]`) join the registry; the script must `(import ...)` to
+  reach them. **Anonymous** libraries (`name: []`) bypass the
+  registry and have their bindings auto-applied to the runtime
+  env. There is no separate `:host_functions` / `:inject` option.
+- **`%Schooner.Environment{}`** opaque struct bundles env +
+  syntax env + registry. `Environment.new/1` options:
+  `:standard_libraries` (`:default | :none | list`),
+  `:libraries`, `:pre_imports`.
+- **Bang/tagged-tuple split** following Elixir convention.
+  `Schooner.eval/2,3` and `Schooner.run/1` return `{:ok, _} |
+  {:error, exception}`; `eval!/2,3` and `run!/1` raise. Same
+  pattern for `apply/2`, `compile/1,2`, `run_compiled/2`.
+  `ArgumentError` on bad options propagates — that's an embedder
+  bug, not a script-level failure.
+- **`compile/2` Option A** — macros are expanded at compile time
+  against the supplied environment's syntax env; runtime variable
+  bindings the imports resolved to are pre-resolved and baked
+  into the `%Compiled{}` artifact. Same artifact runs against
+  any compatible `Environment` — host primitives can vary
+  between runs without recompilation.
+- **Continuation barrier docs-only.** Phase 12's existing
+  expired-continuation guard already raises a structured error
+  for the host-boundary case; the rule is documented in
+  `guides/host-functions.md` and `guides/sandbox.md`, no extra
+  enforcement code in v1.
+
+**Documentation:** `guides/embedding.md` (5-minute getting
+started + value model + entry-point chooser),
+`guides/host-functions.md` (host library authoring, conversion
+helpers, foreign payloads, callback patterns, error mapping),
+`guides/sandbox.md` (trust posture, resource limits, what
+crosses the boundary), `guides/deviations.md` (every gap from
+r7rs-small with runnable examples).
 
 ## Critical invariants (call out at top of relevant files)
 
