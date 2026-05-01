@@ -302,7 +302,8 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 
 - `define-library`, `import`, `export`, `cond-expand`, `include`, `include-library-declarations`.
 - Ship: `(scheme base)`, `(scheme cxr)`, `(scheme char)`, `(scheme inexact)`, `(scheme case-lambda)`, `(scheme lazy)` (delay/force/make-promise), `(scheme write)`, `(scheme read)` (string-port flavour only).
-- Explicitly omitted: `(scheme file)`, `(scheme load)`, `(scheme repl)`, `(scheme process-context)`, `(scheme time)` (host-injectable instead), `(scheme eval)`, `(scheme complex)`, `(scheme r5rs)`.
+- Explicitly omitted from the standard registry: `(scheme file)`, `(scheme load)`, `(scheme repl)`, `(scheme process-context)`, `(scheme eval)`, `(scheme complex)`, `(scheme r5rs)`.
+- Shipped as an opt-in host library (not in the default registry — embedder lists it on `Schooner.Environment.new/1`): `(scheme time)` via `Schooner.Time` (worked example of the embeddable-library pattern documented in `guides/host-functions.md`).
 
 **Tests:**
 
@@ -445,6 +446,6 @@ Items intentionally not in v1 but planned as a future major-version change. v1 d
 
 - `/adopt-build-conventions` to wire `mix.exs`, CI, RELEASE.md, CHANGELOG.md to the org build conventions.
 - Performance pass: bind-time variable resolution (de Bruijn indices or precomputed lookup paths), primitive inlining, constant folding during expansion.
-- Optional: a minimal `(scheme time)` and `(scheme eval)` exposed only when the host opts in.
+- Optional: `(scheme eval)` exposed only when the host opts in. (`(scheme time)` already shipped this way — see `Schooner.Time`.)
 - Optional: source-mapped error traces from `eval` back to original reader positions.
 - **v2.0: full first-class `call/cc`.** Evaluator rewrite to CPS or explicit-continuation-frame trampoline; multi-shot continuations; `dynamic-wind` re-entry firing `before` thunks on re-entry; host-boundary barrier enforcement (turn the v1 documentation-only rule into a runtime check); new test surface — generators, `amb`, yin-yang puzzle, captured-continuation-loop OOM regression, captured-continuation interaction with `with-exception-handler`. Re-run all phase 4 TCO regressions under the new evaluator shape.
