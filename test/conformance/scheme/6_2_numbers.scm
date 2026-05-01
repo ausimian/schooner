@@ -9,8 +9,6 @@
 ;;     subset and is not exposed yet — covered indirectly by `rational?`.
 ;;   - `#e1e10` / `#e3.0` literal syntax: Schooner's `#e` only recognises
 ;;     integer / rational source bodies.
-;;   - `exact-integer?`, `floor/`, `truncate/`, `round`, `floor`, `ceiling`,
-;;     `truncate`, `square`, `exact-integer-sqrt`: not implemented.
 ;;   - `make-rectangular` / `make-polar` / `real-part` / `imag-part` /
 ;;     `magnitude` / `angle`: complex tower.
 ;;   - The `(- 3/2+i)` line: complex literal.
@@ -25,7 +23,6 @@
 ;;     non-square exact inputs (documented deviation in README) — kept
 ;;     out of this section; the inexact form `(sqrt 2.0)` is exercised
 ;;     in the Schooner-side primitives test suite.
-;;   - `string->number`: not yet implemented in Schooner.
 
 (test-begin "6.2 Numbers")
 
@@ -175,5 +172,94 @@
 (test #t (exact? (exact 1.0)))
 (test 1/2 (exact 0.5))
 (test 0.5 (inexact 1/2))
+
+;; --- Issue #88 — exact-integer? / exact-rational? -------------------------
+
+(test #t (exact-integer? 32))
+(test #f (exact-integer? 32.0))
+(test #f (exact-integer? 32/5))
+(test #t (exact-rational? 1/2))
+(test #t (exact-rational? 32))
+(test #f (exact-rational? 1.5))
+
+;; --- Issue #88 — square / exact-integer-sqrt ------------------------------
+
+(test 1764 (square 42))
+(test 4 (square 2))
+(test 4.0 (square 2.0))
+
+(test-assert
+ (call-with-values (lambda () (exact-integer-sqrt 4)) (lambda (s r) (and (= s 2) (= r 0)))))
+(test-assert
+ (call-with-values (lambda () (exact-integer-sqrt 5)) (lambda (s r) (and (= s 2) (= r 1)))))
+
+;; --- Issue #86 — floor / ceiling / truncate / round -----------------------
+
+(test -5.0 (floor -4.3))
+(test -4.0 (ceiling -4.3))
+(test -4.0 (truncate -4.3))
+(test -4.0 (round -4.3))
+
+(test 3.0 (floor 3.5))
+(test 4.0 (ceiling 3.5))
+(test 3.0 (truncate 3.5))
+(test 4.0 (round 3.5)) ;; ties to even (4 is even)
+
+(test 4 (round 7/2)) ;; ties to even
+(test 7 (round 7))
+
+(test -2 (floor -3/2))
+(test 1 (ceiling 1/2))
+(test 0 (truncate 1/2))
+(test 0 (round 1/2)) ;; ties to even
+
+;; --- Issue #87 — division families ----------------------------------------
+
+(test-assert
+ (call-with-values (lambda () (truncate/ 5 2)) (lambda (q r) (and (= q 2) (= r 1)))))
+(test-assert
+ (call-with-values (lambda () (truncate/ -5 2)) (lambda (q r) (and (= q -2) (= r -1)))))
+(test-assert
+ (call-with-values (lambda () (truncate/ 5 -2)) (lambda (q r) (and (= q -2) (= r 1)))))
+(test-assert
+ (call-with-values (lambda () (truncate/ -5 -2)) (lambda (q r) (and (= q 2) (= r -1)))))
+
+(test 2 (truncate-quotient 5 2))
+(test 1 (truncate-remainder 5 2))
+
+(test-assert
+ (call-with-values (lambda () (floor/ 5 2)) (lambda (q r) (and (= q 2) (= r 1)))))
+(test-assert
+ (call-with-values (lambda () (floor/ -5 2)) (lambda (q r) (and (= q -3) (= r 1)))))
+(test-assert
+ (call-with-values (lambda () (floor/ 5 -2)) (lambda (q r) (and (= q -3) (= r -1)))))
+(test-assert
+ (call-with-values (lambda () (floor/ -5 -2)) (lambda (q r) (and (= q 2) (= r -1)))))
+
+(test 2 (floor-quotient 5 2))
+(test 1 (floor-remainder 5 2))
+
+;; --- Issue #89 — number->string / string->number --------------------------
+
+(test "100" (number->string 100))
+(test "100" (number->string 256 16))
+(test "ff" (number->string 255 16))
+(test "1/2" (number->string 1/2))
+(test "+inf.0" (number->string +inf.0))
+
+(test 100 (string->number "100"))
+(test 256 (string->number "100" 16))
+(test 1/2 (string->number "1/2"))
+(test 100.0 (string->number "1e2"))
+(test #f (string->number ""))
+(test #f (string->number "."))
+(test #f (string->number "d"))
+(test #f (string->number "D"))
+(test #f (string->number "i"))
+(test #f (string->number "I"))
+(test #f (string->number "3i"))
+(test #f (string->number "3.4.5"))
+(test #f (string->number "9" 8))
+(test 8 (string->number "10" 8))
 
 (test-end)

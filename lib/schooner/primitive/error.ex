@@ -68,4 +68,12 @@ defmodule Schooner.Primitive.Error do
   defp format({:wrong_value_count, got, expected}) do
     "wrong number of values: expected #{expected}, got #{got}"
   end
+
+  defp format({:invalid_radix, op, radix}) do
+    "`#{op}`: #{inspect(radix)} is not a supported radix (must be 2, 8, 10, or 16)"
+  end
+
+  defp format({:invalid_radix_for_inexact, op}) do
+    "`#{op}`: only radix 10 is supported for inexact numbers"
+  end
 end
