@@ -213,6 +213,18 @@ defmodule Schooner.Primitives.ExceptionsTest do
                   (guard (c ((number? c) c))
                     (raise 5)))|) == 105
     end
+
+    test "clauses see guard's dynamic environment, not raise's (R7RS §6.11)" do
+      # Per R7RS §6.11, the guard's cond clauses run with the
+      # continuation and dynamic environment of the guard expression,
+      # not the raise's. The parameter must read its outer (1) value,
+      # not the parameterize'd (99) value still in scope at the raise.
+      assert run(~S|
+               (define p (make-parameter 1))
+               (guard (c (#t (p)))
+                 (parameterize ((p 99))
+                   (error "x")))|) == 1
+    end
   end
 
   describe "TCO + exceptions" do

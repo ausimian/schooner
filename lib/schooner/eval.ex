@@ -532,7 +532,7 @@ defmodule Schooner.Eval do
   defp eval_guard([[{:sym, var} | clauses_form] | body], env)
        when is_binary(var) and body != [] do
     tag = make_ref()
-    handler = build_guard_handler(var, clauses_form, env, tag)
+    handler = build_guard_handler(tag)
     # Snapshot/restore the whole stack rather than `pop`ing once in
     # the after-clause: by the time we exit (matched-and-thrown,
     # re-raised, or normal-return) the handler may already have been
@@ -544,7 +544,18 @@ defmodule Schooner.Eval do
     try do
       eval_body(body, env)
     catch
-      :throw, {:schooner_guard, ^tag, value} -> value
+      # R7RS §6.11: cond clauses run in the guard form's dynamic
+      # extent, so the handler only escapes back here with the raw
+      # raised value; the clauses are evaluated *after* control has
+      # unwound past any parameterize/handler frames between the raise
+      # site and this guard.
+      :throw, {:schooner_guard, ^tag, raised} ->
+        handler_env = Env.extend(env, [{var, raised}])
+
+        case eval_guard_clauses(clauses_form, handler_env) do
+          {:matched, value} -> value
+          :no_match -> ExceptionState.raise_value(raised)
+        end
     after
       ExceptionState.restore(prev)
     end
@@ -552,14 +563,9 @@ defmodule Schooner.Eval do
 
   defp eval_guard(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp build_guard_handler(var, clauses_form, env, tag) do
+  defp build_guard_handler(tag) do
     Value.primitive("%guard-handler", 1, fn [raised] ->
-      handler_env = Env.extend(env, [{var, raised}])
-
-      case eval_guard_clauses(clauses_form, handler_env) do
-        {:matched, value} -> throw({:schooner_guard, tag, value})
-        :no_match -> ExceptionState.raise_value(raised)
-      end
+      throw({:schooner_guard, tag, raised})
     end)
   end
 
