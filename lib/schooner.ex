@@ -3,12 +3,11 @@ defmodule Schooner do
   An embeddable, sandboxed Scheme interpreter for the BEAM, targeting
   the r7rs-small language minus its mutable operations.
 
-  The pipeline is `Schooner.Lexer` → `Schooner.Reader` →
-  `Schooner.Expander` → `Schooner.Eval`, with `Schooner.Value` providing
-  the tagged-term value model and `Schooner.Env` the
-  immutable-with-mutable-globals runtime environment. Macro bindings
-  live in a separate `Schooner.Expander.SyntaxEnv` threaded through
-  expansion only.
+  The pipeline is Lexer → Reader → Expander → Eval. The
+  `Schooner.Value` module provides the tagged-term value model and
+  `Schooner.Env` the immutable-with-mutable-globals runtime
+  environment. Macro bindings live in a separate expansion-time
+  syntax env threaded through expansion only.
 
   ## Choosing an entry point
 
@@ -234,7 +233,7 @@ defmodule Schooner do
 
   `proc` may be any procedure value — a closure (returned by
   evaluating a `lambda` or a `define` form), a primitive, or a
-  parameter. `args` is a list of `Schooner.Value.t/0` arguments.
+  parameter. `args` is a list of `t:Schooner.Value.t/0` arguments.
 
   This is the host-side hook for callback patterns: pass a Scheme
   procedure into a host function, capture it, and invoke it later

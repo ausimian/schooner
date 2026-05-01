@@ -41,8 +41,8 @@ defmodule Schooner.Compiled do
   @enforce_keys [:program, :var_bindings]
   defstruct [:program, :var_bindings]
 
-  @type t :: %__MODULE__{
-          program: [Value.t()],
-          var_bindings: %{binary() => Library.export()}
-        }
+  @opaque t :: %__MODULE__{
+            program: [Value.t()],
+            var_bindings: %{binary() => Library.export()}
+          }
 end

@@ -4,8 +4,8 @@ defmodule Schooner.Host do
 
   Schooner does not auto-marshal across the host boundary. A host
   function has the same shape as a built-in primitive — it consumes a
-  list of `Schooner.Value.t/0` arguments and returns a
-  `Schooner.Value.t/0` — and uses the helpers in this module to move
+  list of `t:Schooner.Value.t/0` arguments and returns a
+  `t:Schooner.Value.t/0` — and uses the helpers in this module to move
   between Scheme values and idiomatic Elixir terms. The named
   constructors and accessors form the seam that future
   representation changes pivot on; even when the underlying impl is
@@ -25,10 +25,11 @@ defmodule Schooner.Host do
 
   ## Recommended use pattern
 
-  Several accessor names — `to_string/1`, `to_string!/2` — collide
-  with `Kernel.to_string/1`. **Don't `import Schooner.Host`.** Use
-  `alias Schooner.Host` and call the accessors as `Host.to_string!`
-  etc.; the alias is one line and the call sites stay explicit.
+  Several accessor names — `Schooner.Host.to_string/1` and
+  `Schooner.Host.to_string!/2` — collide with `Kernel.to_string/1`.
+  **Don't `import Schooner.Host`.** Use `alias Schooner.Host` and
+  call the accessors as `Host.to_string!` etc.; the alias is one
+  line and the call sites stay explicit.
 
   ## Worked example
 
@@ -120,7 +121,7 @@ defmodule Schooner.Host do
       underlying primitive ABI.
 
     * `:values` — list of `{name, value}` pairs for arbitrary
-      `Schooner.Value.t/0` bindings (constants, foreign-wrapped
+      `t:Schooner.Value.t/0` bindings (constants, foreign-wrapped
       service handles, pre-built closures). Useful when the host
       wants to expose data, not just procedures.
 

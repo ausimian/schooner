@@ -1,7 +1,7 @@
 defmodule Schooner.Expander.Error do
   @moduledoc """
-  Exception raised by `Schooner.Expander` for malformed macro forms,
-  failed pattern matches, and other expansion-time failures.
+  Exception raised by the expander for malformed macro forms, failed
+  pattern matches, and other expansion-time failures.
   """
 
   defexception [:reason, :message]

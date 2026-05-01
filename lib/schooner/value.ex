@@ -56,8 +56,8 @@ defmodule Schooner.Value do
       `(error msg irritant ...)` and reachable via `error?`,
       `error-object?`, `read-error?`, `file-error?`.
     * Parameter — `{:parameter, id, init, converter}`. `id` is a
-      process-monotonic unique integer used as the lookup key in the
-      `Schooner.Eval.ParameterState` dynamic-binding stack. `init` is
+      process-monotonic unique integer used as the lookup key in
+      the per-process dynamic-binding stack. `init` is
       the post-converter initial value (returned when no
       `parameterize` is currently shadowing the parameter).
       `converter` is either `nil` or a Scheme procedure applied to
@@ -464,13 +464,13 @@ defmodule Schooner.Value do
   `()`, `:eof`, `:unspecified`) compare by content, with exactness preserved
   for numbers — `(eqv? 1 1.0)` is `#f`. Aggregates (pairs, vectors, strings,
   bytevectors, records, procedures, promises, parameters, error objects)
-  compare by physical identity via `:erts_debug.same/2` — two
+  compare by physical identity via `erts_debug.same/2` — two
   structurally-equal aggregates built independently are *not* `eqv?`. This
   is r7rs's "denote different locations in the store" semantics, recovered
   for an immutable value model by leaning on the BEAM's heap layout instead
   of explicit identity tags.
 
-  `:erts_debug.same/2` is an unofficial OTP BIF; it has been stable across
+  `erts_debug.same/2` is an unofficial OTP BIF; it has been stable across
   many releases and is used by the Erlang/OTP test suite. Compiler / loader
   literal sharing means two source-level literals like `'(1 2)` written in
   the same module *may* be deduplicated and report `same` — r7rs explicitly
@@ -486,14 +486,14 @@ defmodule Schooner.Value do
   # refs, and atoms have meaningful identity equality; structurally
   # equal heap terms (tuples, maps) also collapse, which is the price
   # of not walking a Scheme-opaque payload. Bypasses the
-  # `:erts_debug.same/2` aggregate path so two foreigns that wrap the
+  # `erts_debug.same/2` aggregate path so two foreigns that wrap the
   # same pid (but live in distinct outer tuples) still compare equal.
   def eqv?({:foreign, a}, {:foreign, b}), do: a === b
   def eqv?(a, b), do: :erts_debug.same(a, b) or (atomic?(a) and a === b)
 
   # Values for which r7rs requires `eqv?` (and therefore `eq?`) to compare
   # by content rather than by location. Bare integers / floats / atoms are
-  # immediates on the BEAM and already collapse under `:erts_debug.same/2`,
+  # immediates on the BEAM and already collapse under `erts_debug.same/2`,
   # but listing them here keeps the predicate self-contained against future
   # boxing changes and means callers can rely on it independently.
   defp atomic?(n) when is_integer(n) or is_float(n), do: true

@@ -14,7 +14,7 @@ defmodule Schooner.Env do
 
   Globals are stored as a Map on the process heap, not in `:ets`, so
   consecutive lookups of the same name return the *same* heap term.
-  This preserves `:erts_debug.same/2` identity for aggregates bound
+  This preserves `erts_debug.same/2` identity for aggregates bound
   at top level — `(eq? x x)` answers `#t` for vectors, pairs,
   parameters, and other aggregates, matching the lexical case.
 

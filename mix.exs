@@ -54,9 +54,55 @@ defmodule Schooner.MixProject do
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
+      ],
+      filter_modules: &public_module?/2,
+      groups_for_modules: [
+        "Embedding API": [
+          Schooner,
+          Schooner.Environment,
+          Schooner.Compiled,
+          Schooner.Host,
+          Schooner.Value,
+          Schooner.Env,
+          Schooner.Library
+        ],
+        Errors: [
+          Schooner.Error,
+          Schooner.Eval.Error,
+          Schooner.Primitive.Error,
+          Schooner.Host.TypeError,
+          Schooner.Library.NotFoundError,
+          Schooner.Lexer.Error,
+          Schooner.Reader.Error,
+          Schooner.Expander.Error
+        ]
       ]
     ]
   end
+
+  # Modules that should appear in the API Reference. Anything else is
+  # an implementation detail — evaluator internals, primitive backing
+  # modules, expander helpers, library plumbing — and is hidden from
+  # the generated docs even when its individual @moduledoc is set.
+  @public_modules MapSet.new([
+                    Schooner,
+                    Schooner.Environment,
+                    Schooner.Compiled,
+                    Schooner.Host,
+                    Schooner.Host.TypeError,
+                    Schooner.Value,
+                    Schooner.Env,
+                    Schooner.Library,
+                    Schooner.Library.NotFoundError,
+                    Schooner.Error,
+                    Schooner.Eval.Error,
+                    Schooner.Primitive.Error,
+                    Schooner.Lexer.Error,
+                    Schooner.Reader.Error,
+                    Schooner.Expander.Error
+                  ])
+
+  defp public_module?(module, _metadata), do: MapSet.member?(@public_modules, module)
 
   defp aliases do
     [

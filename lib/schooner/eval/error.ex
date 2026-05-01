@@ -1,6 +1,6 @@
 defmodule Schooner.Eval.Error do
   @moduledoc """
-  Exception raised by `Schooner.Eval` for runtime and syntactic failures.
+  Exception raised by the evaluator for runtime and syntactic failures.
 
   The `:reason` field is a structured term — atom or tagged tuple — meant
   to be machine-matchable in tests. The pretty `:message` is generated
