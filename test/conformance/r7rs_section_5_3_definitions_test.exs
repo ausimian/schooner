@@ -12,7 +12,7 @@ defmodule Schooner.Conformance.R7rsSection53DefinitionsTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "§5.3.2 define-values" do
     # Spec example:

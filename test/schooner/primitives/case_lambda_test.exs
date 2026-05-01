@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
   alias Schooner.Env
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "clause shapes" do
     test "empty fixed-arity formals" do
@@ -143,7 +143,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
   describe "library surface" do
     test "case-lambda is unavailable in strict eval/2 without the import" do
       assert_raise Schooner.Eval.Error, fn ->
-        Schooner.eval(
+        Schooner.eval!(
           "(define f (case-lambda ((x) x))) (f 1)",
           Env.new()
         )
@@ -157,7 +157,7 @@ defmodule Schooner.Primitives.CaseLambdaTest do
       (list (f 4) (f 4 5))
       """
 
-      assert Schooner.eval(source, Env.new()) == Value.list([12, 9])
+      assert Schooner.eval!(source, Env.new()) == Value.list([12, 9])
     end
   end
 end

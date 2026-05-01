@@ -12,7 +12,7 @@ defmodule Schooner.Expander.RecordTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "constructor / predicate / accessors" do
     test "the constructor returns a record; the predicate is #t for own type and #f otherwise" do
@@ -151,7 +151,7 @@ defmodule Schooner.Expander.RecordTest do
       env = Env.new()
 
       _ =
-        Schooner.eval(
+        Schooner.eval!(
           """
           (import (scheme base))
           (define-record-type pt (mk-pt x y) pt? (x pt-x) (y pt-y))
@@ -160,7 +160,7 @@ defmodule Schooner.Expander.RecordTest do
           env
         )
 
-      record = Schooner.eval("p", env)
+      record = Schooner.eval!("p", env)
       assert is_tuple(record) and elem(record, 0) == :record
       assert Value.write(record) == "#<record pt>"
     end

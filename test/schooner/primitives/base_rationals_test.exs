@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.BaseRationalsTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # ---------------------------------------------------------------------------
   # Reader / writer for the n/d external representation

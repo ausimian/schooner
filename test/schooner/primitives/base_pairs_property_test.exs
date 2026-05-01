@@ -15,7 +15,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
     check all(xs <- small_int_list()) do
       src = render_int_list(xs)
 
-      assert Schooner.run("(list->vector (vector->list (list->vector #{src})))") ==
+      assert Schooner.run!("(list->vector (vector->list (list->vector #{src})))") ==
                Value.vector(xs)
     end
   end
@@ -23,7 +23,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
   property "vector->list ∘ list->vector ≡ identity (on lists)" do
     check all(xs <- small_int_list()) do
       src = render_int_list(xs)
-      assert Schooner.run("(vector->list (list->vector #{src}))") == Value.list(xs)
+      assert Schooner.run!("(vector->list (list->vector #{src}))") == Value.list(xs)
     end
   end
 
@@ -31,7 +31,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
     check all(s <- ascii_string()) do
       lit = "\"" <> s <> "\""
 
-      assert Schooner.run("(list->string (string->list #{lit}))") ==
+      assert Schooner.run!("(list->string (string->list #{lit}))") ==
                Value.string(s)
     end
   end
@@ -39,7 +39,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
   property "(length (reverse xs)) == (length xs)" do
     check all(xs <- small_int_list()) do
       src = render_int_list(xs)
-      assert Schooner.run("(length (reverse #{src}))") === length(xs)
+      assert Schooner.run!("(length (reverse #{src}))") === length(xs)
     end
   end
 
@@ -47,7 +47,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
     check all(xs <- small_int_list()) do
       src = render_int_list(xs)
 
-      assert Schooner.run("(length (map (lambda (x) (* x x)) #{src}))") ===
+      assert Schooner.run!("(length (map (lambda (x) (* x x)) #{src}))") ===
                length(xs)
     end
   end
@@ -55,7 +55,7 @@ defmodule Schooner.Primitives.BasePairsPropertyTest do
   property "reverse is its own inverse" do
     check all(xs <- small_int_list()) do
       src = render_int_list(xs)
-      assert Schooner.run("(reverse (reverse #{src}))") == Value.list(xs)
+      assert Schooner.run!("(reverse (reverse #{src}))") == Value.list(xs)
     end
   end
 end

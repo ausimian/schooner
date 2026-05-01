@@ -13,7 +13,7 @@ defmodule Schooner.EvalInternalDefinesTest do
   alias Schooner.Eval.Error
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   defp assert_no_slot_leak(fun) do
     before = count_rec_slots()
@@ -256,19 +256,19 @@ defmodule Schooner.EvalInternalDefinesTest do
   describe "rec-frame slot lifecycle" do
     test "letrec* releases its process-dictionary slot when the body returns" do
       assert_no_slot_leak(fn ->
-        assert Schooner.run("(letrec* ((x 1) (y 2)) (+ x y))") == 3
+        assert Schooner.run!("(letrec* ((x 1) (y 2)) (+ x y))") == 3
       end)
     end
 
     test "letrec* releases its slot even when the body raises" do
       assert_no_slot_leak(fn ->
-        assert_raise Error, fn -> Schooner.run("(letrec* ((x 1)) (undefined-name))") end
+        assert_raise Error, fn -> Schooner.run!("(letrec* ((x 1)) (undefined-name))") end
       end)
     end
 
     test "named let releases its slot when the body returns" do
       assert_no_slot_leak(fn ->
-        assert Schooner.run("""
+        assert Schooner.run!("""
                (let loop ((n 5) (acc 1))
                  (if (= n 0) acc (loop (- n 1) (* acc n))))
                """) == 120
@@ -278,7 +278,7 @@ defmodule Schooner.EvalInternalDefinesTest do
     test "many sequential letrec*s do not leak slots" do
       assert_no_slot_leak(fn ->
         for _ <- 1..50 do
-          Schooner.run("(letrec* ((x 1) (y 2)) (+ x y))")
+          Schooner.run!("(letrec* ((x 1) (y 2)) (+ x y))")
         end
       end)
     end
@@ -302,7 +302,7 @@ defmodule Schooner.EvalInternalDefinesTest do
        100000)
       """
 
-      assert Schooner.eval(source, env) == Value.bool(true)
+      assert Schooner.eval!(source, env) == Value.bool(true)
       {:total_heap_size, heap} = Process.info(self(), :total_heap_size)
       assert heap < 5_000_000
     end
@@ -329,7 +329,7 @@ defmodule Schooner.EvalInternalDefinesTest do
       (loop 100000)
       """
 
-      assert Schooner.eval(source, env) == Value.symbol("done")
+      assert Schooner.eval!(source, env) == Value.symbol("done")
       {:stack_size, stack} = Process.info(self(), :stack_size)
       # 100k frames stacked unoptimised would push tens of thousands of
       # words; a healthy TCO leaves stack_size in low triple digits.
@@ -356,7 +356,7 @@ defmodule Schooner.EvalInternalDefinesTest do
     test "closure escape leaves exactly one rec slot per escaping letrec" do
       before = count_rec_slots()
 
-      Schooner.run("""
+      Schooner.run!("""
       (define escaped
         (letrec ((helper (lambda () 42))
                  (caller (lambda () (helper))))
@@ -371,7 +371,7 @@ defmodule Schooner.EvalInternalDefinesTest do
       before = count_rec_slots()
 
       for _ <- 1..50 do
-        Schooner.run("(letrec ((x 1)) x)")
+        Schooner.run!("(letrec ((x 1)) x)")
       end
 
       assert count_rec_slots() == before, "non-escaping letrecs should not leak"
@@ -379,7 +379,7 @@ defmodule Schooner.EvalInternalDefinesTest do
       base = count_rec_slots()
 
       for _ <- 1..50 do
-        Schooner.run("(letrec ((f (lambda () 1))) f)")
+        Schooner.run!("(letrec ((f (lambda () 1))) f)")
       end
 
       assert count_rec_slots() == base + 50, "each escaping letrec leaves one slot"

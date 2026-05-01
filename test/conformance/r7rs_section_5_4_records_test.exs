@@ -15,7 +15,7 @@ defmodule Schooner.Conformance.R7rsSection54RecordsTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "§5.4 the canonical kons example" do
     # Spec example:

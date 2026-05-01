@@ -8,7 +8,7 @@ defmodule Schooner.EvalTest do
   alias Schooner.Library.Import, as: LibImport
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # Build an env populated with every variable export from
   # `(scheme base)`. Used by tests that synthesise malformed AST
@@ -158,13 +158,13 @@ defmodule Schooner.EvalTest do
   describe "define" do
     test "simple define returns :unspecified and binds globally" do
       env = Env.new()
-      assert Schooner.eval("(define x 7)", env) == :unspecified
+      assert Schooner.eval!("(define x 7)", env) == :unspecified
       assert Env.lookup(env, "x") == {:ok, 7}
     end
 
     test "function-form define binds a named closure" do
       env = Env.new()
-      Schooner.eval("(define (f x) x)", env)
+      Schooner.eval!("(define (f x) x)", env)
       assert {:ok, {:closure, {:fixed, 1, ["x"]}, _, _, "f"}} = Env.lookup(env, "f")
     end
 
@@ -215,7 +215,7 @@ defmodule Schooner.EvalTest do
   describe "application" do
     test "primitive procedure" do
       env = Env.new() |> Env.define("inc", primitive_inc())
-      assert Schooner.eval("(inc 41)", env) == 42
+      assert Schooner.eval!("(inc 41)", env) == 42
     end
 
     test "calling a non-procedure raises" do
@@ -225,7 +225,7 @@ defmodule Schooner.EvalTest do
 
     test "primitive arity mismatch raises" do
       env = Env.new() |> Env.define("inc", primitive_inc())
-      e = assert_raise Error, fn -> Schooner.eval("(inc 1 2)", env) end
+      e = assert_raise Error, fn -> Schooner.eval!("(inc 1 2)", env) end
       assert match?({:arity_mismatch, "inc", {:exact, 1}, 2}, e.reason)
     end
 
@@ -304,7 +304,7 @@ defmodule Schooner.EvalTest do
       )
       |> Env.define("sub1", Value.primitive("sub1", 1, fn [n] -> n - 1 end))
 
-    Schooner.eval(source, env)
+    Schooner.eval!(source, env)
   end
 
   describe "primitive arity_mismatch surfaces on under-supply to {:at_least, n}" do
@@ -344,7 +344,7 @@ defmodule Schooner.EvalTest do
     # `(scheme base)` primitive without an explicit `(import ...)`.
     defp run_with_foreign(source, term) do
       env = base_env() |> Env.define("host", Value.foreign(term))
-      Schooner.eval(source, env)
+      Schooner.eval!(source, env)
     end
 
     test "self-evaluates: a bare reference returns the foreign unchanged" do

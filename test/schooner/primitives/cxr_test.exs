@@ -5,7 +5,7 @@ defmodule Schooner.Primitives.CxrTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "depth-2 accessors" do
     test "caar / cadr / cdar / cddr" do

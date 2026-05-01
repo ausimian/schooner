@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.BaseVectorsTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "constructors" do
     test "(vector ...) builds a vector" do

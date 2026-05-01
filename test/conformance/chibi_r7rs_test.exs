@@ -47,7 +47,7 @@ defmodule Schooner.Conformance.ChibiR7rsTest do
 
     test "Chibi r7rs subset — #{section_name}" do
       source = unquote(@harness_source) <> "\n" <> File.read!(unquote(path))
-      Schooner.run(source)
+      Schooner.run!(source)
     end
   end
 end

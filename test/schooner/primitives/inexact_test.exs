@@ -5,7 +5,7 @@ defmodule Schooner.Primitives.InexactTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "exp" do
     test "exp 0 = 1.0" do

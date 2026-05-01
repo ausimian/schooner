@@ -2,7 +2,7 @@ defmodule Schooner.Primitives.BasePropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   defp small_int, do: integer(-100..100)
 

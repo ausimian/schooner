@@ -21,7 +21,7 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
   alias Schooner.Eval.Error
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # ---------------------------------------------------------------------------
   # §4.3.1 — Binding constructs for syntactic keywords

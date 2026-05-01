@@ -19,7 +19,7 @@ defmodule Schooner.Conformance.R7rsSection4Test do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # --- §4.1.2 — Literal expressions -----------------------------------------
 
