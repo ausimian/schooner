@@ -30,20 +30,17 @@ defmodule Schooner.Env do
   keyed by `make_ref/0`, so closures captured during init evaluation
   see later bindings via frame identity.
 
-  Each such frame must be released by `release_rec/1` once the body of
-  the binding form finishes evaluating. Closures that escape the body
-  retain access to their rec bindings via a walk-and-rewrite step in
-  the evaluator: at letrec exit the frame map is snapshotted into an
-  immutable Elixir map and any closure in the body's return value
-  whose env still names this frame is rebuilt to carry the snapshot
-  directly, so subsequent applications resolve rec names without the
-  released slot. Closures stored *inside* the snapshot keep their
-  original `{:rec, ref}` env, so a chain of escape-then-apply that
-  lands inside one of those snapshot-resident closures and from there
-  references another rec binding will fall through to surrounding
-  scope (e.g. globals) — i.e. mutually-recursive escape works only
-  when each rec binding's referents are reachable from the snapshot's
-  shape, not via the snapshot's own closures.
+  Each such frame is released by `release_rec/1` when the body
+  finishes — *unless* the body's return value carries a closure whose
+  env still names the frame. In that case the evaluator detects the
+  escape and leaves the slot alive holding the now-finalised
+  snapshot, so the escaped closure (and any closures it reaches via
+  rec lookups, including mutually-recursive bindings) can resolve
+  rec names through the slot for the rest of the process lifetime.
+  Slot leakage is therefore bounded to *actual* closure escapes — a
+  letrec form whose body returns a non-closure value (the dominant
+  case in typical Scheme code, including all named-let recursion
+  whose body is `(tag val ...)`) releases its slot as usual.
   """
 
   alias Schooner.Value

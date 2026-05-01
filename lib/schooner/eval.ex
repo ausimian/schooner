@@ -268,13 +268,15 @@ defmodule Schooner.Eval do
   # knot without any after-the-fact mutation of the closures
   # themselves.
   #
-  # On normal body return, `finalize_letrec_star/2` snapshots the
-  # rec-frame map, releases the process-dictionary slot, and walks
-  # the body's return value rebuilding any closure whose env still
-  # references the now-released `{:rec, ref}` so it instead carries
-  # the immutable snapshot map directly. Closures that escape the
-  # body therefore continue to resolve their rec bindings without
-  # the slot. See the `rewrite_rec/3` family below.
+  # On normal body return, `finalize_letrec_star/3` walks the result
+  # value: if any closure's env still names the rec frame's
+  # process-dictionary slot, the slot is *kept alive* with its now-
+  # finalised snapshot so escaped closures (and any inner closures
+  # they reach via rec lookups, including mutually-recursive
+  # bindings) can resolve their rec names through it. If no closure
+  # in the result references the slot, it is released as usual. The
+  # slot becomes immutable after letrec exit — the evaluator never
+  # writes to a freed-but-kept slot.
   defp eval_letrec_star([bindings_form | body], env) when body != [] do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
@@ -301,9 +303,12 @@ defmodule Schooner.Eval do
   defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
   defp finalize_letrec_star(result, ref, rec_env) do
-    {:rec_frame, snapshot} = Process.get(ref)
-    Env.release_rec(rec_env)
-    rewrite_rec(result, ref, snapshot)
+    if escapes_rec?(result, ref) do
+      result
+    else
+      Env.release_rec(rec_env)
+      result
+    end
   end
 
   defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [], [])
@@ -377,82 +382,55 @@ defmodule Schooner.Eval do
   # creation time so per-application cost stays at zero.
   defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
 
-  # Walk `value` and rebuild any closure whose env still references
-  # `{:rec, ref}` so it carries the immutable `snapshot` map in that
-  # frame's place. The walk recurses into every aggregate value tag
-  # that can carry a closure — pairs, vectors, records, multi-values,
-  # promises, parameters, error objects — and is tagged-default
-  # identity for atomic / opaque tags. A missed aggregate tag would
-  # silently leave a stale `{:rec, ref}` behind that surfaces as a
-  # delayed lookup failure when the closure is later applied, so
-  # extending the value model means extending this walk.
+  # Walk `value` returning true iff any closure in the tree references
+  # `{:rec, ref}` in its captured env. The walk recurses into every
+  # aggregate value tag that can carry a closure — pairs, vectors,
+  # records, multi-values, promises, parameters, error objects — and
+  # is identity-false for atomic / opaque tags. A missed aggregate
+  # tag would prematurely release a slot a captured closure still
+  # depends on, surfacing as a delayed lookup failure, so extending
+  # the value model means extending this walk.
   #
-  # Closures stored *inside* `snapshot` keep their original
-  # `{:rec, ref}` env: a second-level lookup through them after the
-  # slot has been released falls through. Direct escape (the
-  # canonical issue-25 pattern) works; mutually-recursive escape
-  # where the inner closure also references rec bindings is a known
-  # narrower limitation tracked separately.
-  @spec rewrite_rec(Value.t() | {:values, [Value.t()]}, reference(), map()) ::
-          Value.t() | {:values, [Value.t()]}
-  defp rewrite_rec({:closure, params, body, %Env{lex: lex} = env, name}, ref, snapshot) do
-    {:closure, params, body, %{env | lex: rewrite_lex(lex, ref, snapshot)}, name}
+  # Detection of `{:rec, ref}` in a closure's env directly is
+  # sufficient: every closure constructed during the body's
+  # evaluation captures the rec frame in its env at construction
+  # time, so any closure that depends on the slot has the rec marker
+  # somewhere in its lex chain. Closures captured *before* the
+  # letrec entered have envs that don't name this ref — even if they
+  # later end up in the result tree by reference, they don't depend
+  # on the slot.
+  @spec escapes_rec?(Value.t() | {:values, [Value.t()]}, reference()) :: boolean()
+  defp escapes_rec?({:closure, _params, _body, %Env{lex: lex}, _name}, ref) do
+    lex_has_rec?(lex, ref)
   end
 
-  defp rewrite_rec([h | t], ref, snapshot) do
-    [rewrite_rec(h, ref, snapshot) | rewrite_rec(t, ref, snapshot)]
+  defp escapes_rec?([h | t], ref), do: escapes_rec?(h, ref) or escapes_rec?(t, ref)
+
+  defp escapes_rec?({:vector, tup}, ref), do: tuple_has_escape?(tup, ref)
+  defp escapes_rec?({:record, _type_id, fields}, ref), do: tuple_has_escape?(fields, ref)
+
+  defp escapes_rec?({:values, vs}, ref) when is_list(vs) do
+    Enum.any?(vs, &escapes_rec?(&1, ref))
   end
 
-  defp rewrite_rec({:vector, tup}, ref, snapshot) do
-    {:vector, rewrite_tuple(tup, ref, snapshot)}
+  defp escapes_rec?({:promise, _kind, v}, ref), do: escapes_rec?(v, ref)
+
+  defp escapes_rec?({:parameter, _id, init, conv}, ref) do
+    escapes_rec?(init, ref) or escapes_rec?(conv, ref)
   end
 
-  defp rewrite_rec({:record, type_id, fields}, ref, snapshot) do
-    {:record, type_id, rewrite_tuple(fields, ref, snapshot)}
+  defp escapes_rec?({:error_obj, _kind, msg, irritants}, ref) do
+    escapes_rec?(msg, ref) or Enum.any?(irritants, &escapes_rec?(&1, ref))
   end
 
-  defp rewrite_rec({:values, vs}, ref, snapshot) when is_list(vs) do
-    {:values, Enum.map(vs, &rewrite_rec(&1, ref, snapshot))}
-  end
+  defp escapes_rec?(_other, _ref), do: false
 
-  defp rewrite_rec({:promise, :forced, v}, ref, snapshot) do
-    {:promise, :forced, rewrite_rec(v, ref, snapshot)}
-  end
+  defp lex_has_rec?([], _ref), do: false
+  defp lex_has_rec?([{:rec, this_ref} | _rest], ref) when this_ref === ref, do: true
+  defp lex_has_rec?([_frame | rest], ref), do: lex_has_rec?(rest, ref)
 
-  defp rewrite_rec({:promise, :lazy, thunk}, ref, snapshot) do
-    {:promise, :lazy, rewrite_rec(thunk, ref, snapshot)}
-  end
-
-  defp rewrite_rec({:parameter, id, init, conv}, ref, snapshot) do
-    {:parameter, id, rewrite_rec(init, ref, snapshot), rewrite_rec(conv, ref, snapshot)}
-  end
-
-  defp rewrite_rec({:error_obj, kind, msg, irritants}, ref, snapshot) do
-    {:error_obj, kind, rewrite_rec(msg, ref, snapshot),
-     Enum.map(irritants, &rewrite_rec(&1, ref, snapshot))}
-  end
-
-  defp rewrite_rec(other, _ref, _snapshot), do: other
-
-  defp rewrite_lex([], _ref, _snapshot), do: []
-
-  defp rewrite_lex([{:rec, this_ref} | rest], ref, snapshot) when this_ref === ref do
-    [snapshot | rewrite_lex(rest, ref, snapshot)]
-  end
-
-  defp rewrite_lex([{:rec, _other} = frame | rest], ref, snapshot) do
-    [frame | rewrite_lex(rest, ref, snapshot)]
-  end
-
-  defp rewrite_lex([frame | rest], ref, snapshot) when is_map(frame) do
-    [frame | rewrite_lex(rest, ref, snapshot)]
-  end
-
-  defp rewrite_tuple(tup, ref, snapshot) do
-    tup
-    |> Tuple.to_list()
-    |> Enum.map(&rewrite_rec(&1, ref, snapshot))
-    |> List.to_tuple()
+  defp tuple_has_escape?(tup, ref) do
+    Enum.any?(0..(tuple_size(tup) - 1)//1, &escapes_rec?(elem(tup, &1), ref))
   end
 
   # r7rs §5.3.3 lets a body begin with a sequence of `define` forms

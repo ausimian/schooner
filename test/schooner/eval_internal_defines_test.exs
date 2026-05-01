@@ -348,16 +348,41 @@ defmodule Schooner.EvalInternalDefinesTest do
              """) == 42
     end
 
-    test "closure escape leaves no rec slot behind" do
-      assert_no_slot_leak(fn ->
-        Schooner.run("""
-        (define escaped
-          (letrec ((helper (lambda () 42))
-                   (caller (lambda () (helper))))
-            caller))
-        (escaped)
-        """)
-      end)
+    # Escape keeps the rec slot alive on purpose: the snapshot lives
+    # in the slot so escaped closures (and any closures they reach via
+    # rec lookups, including mutually-recursive ones) can resolve rec
+    # names. Leakage is therefore bounded to actual closure escapes,
+    # not letrec-form count.
+    test "closure escape leaves exactly one rec slot per escaping letrec" do
+      before = count_rec_slots()
+
+      Schooner.run("""
+      (define escaped
+        (letrec ((helper (lambda () 42))
+                 (caller (lambda () (helper))))
+          caller))
+      (escaped)
+      """)
+
+      assert count_rec_slots() == before + 1
+    end
+
+    test "many non-escaping letrecs do not leak; many escaping ones leak per escape" do
+      before = count_rec_slots()
+
+      for _ <- 1..50 do
+        Schooner.run("(letrec ((x 1)) x)")
+      end
+
+      assert count_rec_slots() == before, "non-escaping letrecs should not leak"
+
+      base = count_rec_slots()
+
+      for _ <- 1..50 do
+        Schooner.run("(letrec ((f (lambda () 1))) f)")
+      end
+
+      assert count_rec_slots() == base + 50, "each escaping letrec leaves one slot"
     end
 
     test "closure escape via cons; both car and cdr resolve" do
@@ -422,22 +447,35 @@ defmodule Schooner.EvalInternalDefinesTest do
              """) == 1
     end
 
-    # Documents the known limitation: closures stored *inside* the
-    # snapshot keep their original {:rec, ref} env, so mutually-
-    # recursive escape where the inner closure references another rec
-    # binding by name (and that name has no out-of-letrec resolution)
-    # will fall through to surrounding scope. With non-stdlib names
-    # there is no fallback and the lookup raises.
-    test "mutually-recursive escape with non-stdlib names is a known limitation" do
-      assert_raise Error, ~r/unbound variable: my-even\?/, fn ->
-        Schooner.run("""
-        (define ev
-          (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
-                   (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
-            my-even?))
-        (ev 4)
-        """)
-      end
+    test "mutually-recursive escape resolves both directions" do
+      assert run("""
+             (define ev
+               (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
+                        (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
+                 my-even?))
+             (cons (ev 4) (ev 5))
+             """) == [true | false]
+    end
+
+    test "mutually-recursive escape works through pair-wrapped pair of closures" do
+      assert run("""
+             (define pair-of
+               (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
+                        (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
+                 (cons my-even? my-odd?)))
+             (cons ((car pair-of) 6) ((cdr pair-of) 7))
+             """) == [true | true]
+    end
+
+    test "deeper mutually-recursive escape: triadic mutual recursion" do
+      assert run("""
+             (define f
+               (letrec ((a (lambda (n) (if (= n 0) 'a (b (- n 1)))))
+                        (b (lambda (n) (if (= n 0) 'b (c (- n 1)))))
+                        (c (lambda (n) (if (= n 0) 'c (a (- n 1))))))
+                 a))
+             (list (f 0) (f 1) (f 2) (f 3))
+             """) == [Value.symbol("a"), Value.symbol("b"), Value.symbol("c"), Value.symbol("a")]
     end
   end
 end
