@@ -60,10 +60,12 @@ defmodule Schooner do
   `Schooner.Environment.new/1` and pass it to `eval/2`.
   """
 
+  alias Schooner.Compiled
   alias Schooner.Env
   alias Schooner.Environment
   alias Schooner.Eval
   alias Schooner.Eval.ContinuationState
+  alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
   alias Schooner.Expander
@@ -222,6 +224,148 @@ defmodule Schooner do
         raise ArgumentError,
               "invalid value for :implicit_imports — expected :none or :all, got: " <>
                 inspect(other)
+    end
+  end
+
+  @doc """
+  Invoke a Scheme procedure value from Elixir. Returns
+  `{:ok, value}` on success, `{:error, exception}` for any
+  script-level failure. Use `apply!/2` for the raising variant.
+
+  `proc` may be any procedure value — a closure (returned by
+  evaluating a `lambda` or a `define` form), a primitive, or a
+  parameter. `args` is a list of `Schooner.Value.t/0` arguments.
+
+  This is the host-side hook for callback patterns: pass a Scheme
+  procedure into a host function, capture it, and invoke it later
+  via `apply/2`.
+  """
+  @spec apply(Value.t(), [Value.t()]) :: {:ok, Value.t()} | {:error, Exception.t()}
+  def apply(proc, args) when is_list(args) do
+    {:ok, apply!(proc, args)}
+  rescue
+    e -> rescue_script_error(e, __STACKTRACE__)
+  end
+
+  @doc """
+  Bang form of `apply/2` — raises on script-level failure. See
+  `apply/2` for arguments.
+  """
+  @spec apply!(Value.t(), [Value.t()]) :: Value.t()
+  def apply!(proc, args) when is_list(args) do
+    if Value.procedure?(proc) do
+      proc |> Eval.apply_proc(args) |> Eval.single_value!()
+    else
+      raise EvalError, reason: {:not_a_procedure, proc}
+    end
+  end
+
+  @doc """
+  Read, expand, and pre-resolve `source` against `env_struct`'s
+  registry. Returns `{:ok, %Schooner.Compiled{}}` on success,
+  `{:error, exception}` on any source-level failure. Use
+  `compile!/1,2` for the raising variant.
+
+  The compiled artifact can be passed to `run_compiled/2`
+  repeatedly against any compatible environment. Macros are
+  expanded at compile time; variable bindings from `(import ...)`
+  declarations are pre-resolved and baked into the artifact.
+
+  When called without an environment, defaults to a fresh
+  `Schooner.Environment.new/0` (every shipped standard library
+  available).
+  """
+  @spec compile(binary(), Environment.t()) ::
+          {:ok, Compiled.t()} | {:error, Exception.t()}
+  def compile(source, %Environment{} = env_struct) when is_binary(source) do
+    {:ok, compile!(source, env_struct)}
+  rescue
+    e -> rescue_script_error(e, __STACKTRACE__)
+  end
+
+  @spec compile(binary()) :: {:ok, Compiled.t()} | {:error, Exception.t()}
+  def compile(source) when is_binary(source) do
+    compile(source, Environment.new())
+  end
+
+  @doc """
+  Bang form of `compile/2` — raises on source-level failure.
+  """
+  @spec compile!(binary(), Environment.t()) :: Compiled.t()
+  def compile!(source, %Environment{} = env_struct) when is_binary(source) do
+    forms = Reader.read_string(source)
+    {import_specs, body} = LibImport.extract_program_imports(forms)
+    bindings = LibImport.resolve(import_specs, env_struct.registry)
+
+    {_compile_env, compile_syntax_env} =
+      LibImport.apply_bindings(bindings, env_struct.env, env_struct.syntax_env)
+
+    expanded = Expander.expand_program(body, compile_syntax_env)
+
+    var_bindings =
+      Enum.reduce(bindings, %{}, fn
+        {name, {:var, _} = binding}, acc -> Map.put(acc, name, binding)
+        _, acc -> acc
+      end)
+
+    %Compiled{program: expanded, var_bindings: var_bindings}
+  end
+
+  @spec compile!(binary()) :: Compiled.t()
+  def compile!(source) when is_binary(source) do
+    compile!(source, Environment.new())
+  end
+
+  @doc """
+  Evaluate a `%Schooner.Compiled{}` against `env_struct`. Returns
+  `{:ok, value}` on success, `{:error, exception}` for any
+  script-level failure. Use `run_compiled!/2` for the raising
+  variant.
+
+  The compiled program's pre-resolved variable bindings are
+  re-applied to `env_struct.env` on every call, so the
+  `(import ...)` surface the program was compiled against is
+  always in scope regardless of `env_struct`'s registry. Macros
+  are not re-expanded — the program's macro shape is frozen at
+  compile time.
+  """
+  @spec run_compiled(Compiled.t(), Environment.t()) ::
+          {:ok, Value.t()} | {:error, Exception.t()}
+  def run_compiled(%Compiled{} = compiled, %Environment{} = env_struct) do
+    {:ok, run_compiled!(compiled, env_struct)}
+  rescue
+    e -> rescue_script_error(e, __STACKTRACE__)
+  end
+
+  @doc """
+  Bang form of `run_compiled/2` — raises on script-level failure.
+  """
+  @spec run_compiled!(Compiled.t(), Environment.t()) :: Value.t()
+  def run_compiled!(%Compiled{program: program, var_bindings: bindings}, %Environment{
+        env: env,
+        syntax_env: syntax_env
+      }) do
+    do_run_program(program, bindings, env, syntax_env)
+  end
+
+  defp do_run_program(program, var_bindings, env, syntax_env) do
+    prev_handlers = ExceptionState.snapshot()
+    prev_conts = ContinuationState.snapshot()
+    prev_params = ParameterState.snapshot()
+    ExceptionState.reset()
+    ContinuationState.reset()
+    ParameterState.reset()
+
+    try do
+      {env, _syntax_env} = LibImport.apply_bindings(var_bindings, env, syntax_env)
+
+      program
+      |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
+      |> Eval.single_value!()
+    after
+      ExceptionState.restore(prev_handlers)
+      ContinuationState.restore(prev_conts)
+      ParameterState.restore(prev_params)
     end
   end
 
