@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.BaseSymbolsTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "symbol identity" do
     test "two string->symbol calls on the same string are eq?" do

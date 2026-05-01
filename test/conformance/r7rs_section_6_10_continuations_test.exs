@@ -35,7 +35,7 @@ defmodule Schooner.Conformance.R7rsSection610ContinuationsTest do
   @recorder_key {__MODULE__, :record}
   @imports "(import (scheme base) (scheme cxr) (scheme char))\n"
 
-  defp run(source), do: Schooner.eval(@imports <> source, recording_env())
+  defp run(source), do: Schooner.eval!(@imports <> source, recording_env())
 
   defp recording_env do
     Process.delete(@recorder_key)

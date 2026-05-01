@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.BaseNumericExtraTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # ---------------------------------------------------------------------------
   # Issue #86 — floor / ceiling / truncate / round

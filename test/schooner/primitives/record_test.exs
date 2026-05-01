@@ -20,7 +20,7 @@ defmodule Schooner.Primitives.RecordTest do
     env
   end
 
-  defp run(source, env), do: Schooner.eval(source, env)
+  defp run(source, env), do: Schooner.eval!(source, env)
 
   test "%record-instance constructs a record value with the given type id and fields" do
     env = env()

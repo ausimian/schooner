@@ -3,7 +3,7 @@ defmodule Schooner.Primitives.ExceptionsTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "error object construction" do
     test "(error msg) constructs and raises an error object" do

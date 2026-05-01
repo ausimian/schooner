@@ -24,7 +24,7 @@ defmodule Schooner.Conformance.R7rsSection611ExceptionsTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # ---------------------------------------------------------------------------
   # §6.11 with-exception-handler

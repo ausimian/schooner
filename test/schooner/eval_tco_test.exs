@@ -24,7 +24,7 @@ defmodule Schooner.EvalTcoTest do
     |> Env.define("sub1", Value.primitive("sub1", 1, fn [n] -> n - 1 end))
   end
 
-  defp run!(source), do: Schooner.eval(source, env_with_int_prims())
+  defp run!(source), do: Schooner.eval!(source, env_with_int_prims())
 
   defp assert_bounded_heap(fun) do
     fun.()
@@ -72,7 +72,7 @@ defmodule Schooner.EvalTcoTest do
     """
 
     assert_bounded_heap(fn ->
-      assert Schooner.eval(source, env) == Value.symbol("done")
+      assert Schooner.eval!(source, env) == Value.symbol("done")
     end)
   end
 

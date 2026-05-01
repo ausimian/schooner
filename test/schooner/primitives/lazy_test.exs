@@ -3,7 +3,7 @@ defmodule Schooner.Primitives.LazyTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "make-promise + force" do
     test "force on an eager make-promise returns the wrapped value" do

@@ -5,7 +5,7 @@ defmodule Schooner.Primitives.BaseTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   # ---------------------------------------------------------------------------
   # Arithmetic — exactness contamination matrix
@@ -208,7 +208,7 @@ defmodule Schooner.Primitives.BaseTest do
       for {literal, tags} <- @fixture, pred <- @predicates do
         tag = Map.fetch!(@pred_to_tag, pred)
         expected = Value.bool(tag in tags)
-        actual = Schooner.run("(#{pred} #{literal})")
+        actual = Schooner.run!("(#{pred} #{literal})")
 
         assert actual == expected,
                "(#{pred} #{literal}) => #{inspect(actual)} (want #{inspect(expected)})"

@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.CharTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "char->integer / integer->char" do
     test "ASCII round-trip" do

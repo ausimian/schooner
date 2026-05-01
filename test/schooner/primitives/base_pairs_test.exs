@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.BasePairsTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "cons / car / cdr" do
     test "cons builds a pair, car/cdr destructure it" do

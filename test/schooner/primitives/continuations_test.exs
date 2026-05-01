@@ -20,7 +20,7 @@ defmodule Schooner.Primitives.ContinuationsTest do
   @recorder_key {__MODULE__, :record}
   @imports "(import (scheme base) (scheme cxr) (scheme char))\n"
 
-  defp run(source), do: Schooner.eval(@imports <> source, recording_env())
+  defp run(source), do: Schooner.eval!(@imports <> source, recording_env())
 
   # The standard libraries get pulled in via the `@imports` line that
   # `run/1` prepends to every test source. The env returned here only

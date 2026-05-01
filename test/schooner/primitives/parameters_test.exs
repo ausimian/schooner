@@ -3,7 +3,7 @@ defmodule Schooner.Primitives.ParametersTest do
 
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "make-parameter" do
     test "without converter, initial value is the supplied init" do

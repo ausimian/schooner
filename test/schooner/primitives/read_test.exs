@@ -4,7 +4,7 @@ defmodule Schooner.Primitives.ReadTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "read" do
     test "reads an integer" do

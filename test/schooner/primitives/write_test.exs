@@ -5,7 +5,7 @@ defmodule Schooner.Primitives.WriteTest do
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "write" do
     test "renders strings with quotes" do

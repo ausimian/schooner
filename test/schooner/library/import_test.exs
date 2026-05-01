@@ -145,27 +145,27 @@ defmodule Schooner.Library.ImportTest do
 
   describe "Schooner.eval/2 with imports" do
     test "(import (scheme base)) does not error on a regular program" do
-      assert Schooner.run("(import (scheme base)) (+ 1 2)") == 3
+      assert Schooner.run!("(import (scheme base)) (+ 1 2)") == 3
     end
 
     test "macros remain available after an import (additive on top of bootstrap)" do
       # cond comes from base.scm via the bootstrap env. Adding an import
       # of (scheme base) is additive in 13.4 — the macro stays
       # resolvable. (13.6 will tighten this to "import-or-nothing".)
-      assert Schooner.run("(import (scheme base)) (cond (#t 'yes))") ==
+      assert Schooner.run!("(import (scheme base)) (cond (#t 'yes))") ==
                Schooner.Value.symbol("yes")
     end
 
     test "renamed import binds the new name" do
       result =
-        Schooner.run("(import (rename (only (scheme base) car) (car head))) (head '(1 2 3))")
+        Schooner.run!("(import (rename (only (scheme base) car) (car head))) (head '(1 2 3))")
 
       assert result == 1
     end
 
     test "missing library raises NotFoundError" do
       assert_raise NotFoundError, fn ->
-        Schooner.run("(import (scheme nope)) 1")
+        Schooner.run!("(import (scheme nope)) 1")
       end
     end
   end

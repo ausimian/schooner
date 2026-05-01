@@ -8,7 +8,7 @@ defmodule Schooner.ExpanderTest do
   alias Schooner.Eval.Error
   alias Schooner.Value
 
-  defp run(source), do: Schooner.run(source)
+  defp run(source), do: Schooner.run!(source)
 
   describe "define-syntax" do
     test "user-defined macro expands at top level" do
