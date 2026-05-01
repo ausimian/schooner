@@ -29,12 +29,15 @@ defmodule Schooner.LibraryTest do
       end
     end
 
-    test "rejects empty name" do
-      assert_raise ArgumentError, ~r/non-empty list/, fn -> Library.new(name: []) end
+    test "accepts empty name (anonymous host library)" do
+      lib = Library.new(name: [])
+      assert lib.name == []
     end
 
     test "rejects non-list name" do
-      assert_raise ArgumentError, ~r/non-empty list/, fn -> Library.new(name: "scheme.base") end
+      assert_raise ArgumentError, ~r/library name must be a list/, fn ->
+        Library.new(name: "scheme.base")
+      end
     end
 
     test "rejects negative integer segment" do
@@ -72,7 +75,7 @@ defmodule Schooner.LibraryTest do
     end
 
     test "validates each import name" do
-      assert_raise ArgumentError, ~r/non-empty list/, fn ->
+      assert_raise ArgumentError, ~r/library name must be a list/, fn ->
         Library.new(name: ["x"], imports: [["scheme", "base"], "not-a-list"])
       end
     end
@@ -149,6 +152,10 @@ defmodule Schooner.LibraryTest do
 
     test "formats integer segments" do
       assert Library.render_name(["srfi", 1]) == "(srfi 1)"
+    end
+
+    test "renders the empty name as the anonymous label" do
+      assert Library.render_name([]) == "(anonymous host library)"
     end
   end
 

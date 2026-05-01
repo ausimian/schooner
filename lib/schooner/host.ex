@@ -56,6 +56,7 @@ defmodule Schooner.Host do
   """
 
   alias Schooner.Host.TypeError
+  alias Schooner.Library
   alias Schooner.Value
 
   # ---------------------------------------------------------------------------
@@ -93,6 +94,114 @@ defmodule Schooner.Host do
 
   @spec primitive(binary(), Value.arity_spec(), (list() -> Value.t())) :: Value.primitive_v()
   defdelegate primitive(name, arity, fun), to: Value
+
+  # ---------------------------------------------------------------------------
+  # Library builder
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Build a `Schooner.Library` from host-supplied primitive specs and
+  arbitrary value bindings.
+
+  ## Options
+
+    * `:name` — canonical library name as a list of binary or
+      non-negative-integer segments. Defaults to `[]`, which marks
+      the library as **anonymous**: it cannot be reached via Scheme
+      `(import ...)`, and its bindings are applied directly to the
+      runtime environment when the embedder lists it. Named
+      libraries (e.g. `["myapp", "log"]`) are sandbox-safe — the
+      script must explicitly `(import (myapp log))` to see them.
+
+    * `:primitives` — list of `{name, arity, fun}` triples
+      registered as `Schooner.Value.primitive/3` bindings. `arity`
+      may be an integer, `{:at_least, n}`, or `{:between, lo, hi}`.
+      `fun` must be `(list() -> Schooner.Value.t())` — the
+      underlying primitive ABI.
+
+    * `:values` — list of `{name, value}` pairs for arbitrary
+      `Schooner.Value.t/0` bindings (constants, foreign-wrapped
+      service handles, pre-built closures). Useful when the host
+      wants to expose data, not just procedures.
+
+  Names within a library must be unique across `:primitives` and
+  `:values` combined; a collision raises `ArgumentError`.
+
+  ## Examples
+
+  Named library — script must import:
+
+      Schooner.Host.library(
+        name: ["myapp", "log"],
+        primitives: [
+          {"info", 1, &MyApp.SchemeLib.info/1}
+        ]
+      )
+
+  Anonymous library — bindings auto-applied, no import required.
+  Sandbox-loosening; list deliberately:
+
+      Schooner.Host.library(
+        primitives: [
+          {"now-ms", 0, fn [] -> System.system_time(:millisecond) end}
+        ]
+      )
+  """
+  @spec library(keyword()) :: Library.t()
+  def library(opts) when is_list(opts) do
+    name = Keyword.get(opts, :name, [])
+    primitives = Keyword.get(opts, :primitives, [])
+    values = Keyword.get(opts, :values, [])
+
+    exports =
+      %{}
+      |> merge_primitives!(primitives)
+      |> merge_values!(values)
+
+    Library.new(name: name, exports: exports)
+  end
+
+  defp merge_primitives!(exports, primitives) when is_list(primitives) do
+    Enum.reduce(primitives, exports, fn
+      {pname, arity, fun}, acc when is_binary(pname) and is_function(fun, 1) ->
+        put_export!(acc, pname, {:var, Value.primitive(pname, arity, fun)})
+
+      bad, _acc ->
+        raise ArgumentError,
+              "host primitive must be {binary, arity_spec, (list() -> Value.t())}, " <>
+                "got #{inspect(bad)}"
+    end)
+  end
+
+  defp merge_primitives!(_exports, other) do
+    raise ArgumentError, ":primitives must be a list, got #{inspect(other)}"
+  end
+
+  defp merge_values!(exports, values) when is_list(values) do
+    Enum.reduce(values, exports, fn
+      {vname, value}, acc when is_binary(vname) ->
+        put_export!(acc, vname, {:var, value})
+
+      bad, _acc ->
+        raise ArgumentError, "host value binding must be {binary, value}, got #{inspect(bad)}"
+    end)
+  end
+
+  defp merge_values!(_exports, other) do
+    raise ArgumentError, ":values must be a list, got #{inspect(other)}"
+  end
+
+  defp put_export!(exports, name, binding) do
+    case Map.fetch(exports, name) do
+      :error ->
+        Map.put(exports, name, binding)
+
+      {:ok, _existing} ->
+        raise ArgumentError,
+              "duplicate host library export: #{inspect(name)} appears more than once " <>
+                "in :primitives / :values"
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Asserting accessors — to_*!/2

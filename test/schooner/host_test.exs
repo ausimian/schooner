@@ -317,4 +317,136 @@ defmodule Schooner.HostTest do
       assert err.message === "host conversion in `lib/foo`: expected string, got 42"
     end
   end
+
+  describe "library/1 — named library" do
+    test "builds a Schooner.Library with the named primitives as exports" do
+      fun = fn [x] -> x end
+
+      lib =
+        Host.library(
+          name: ["myapp", "log"],
+          primitives: [{"info", 1, fun}]
+        )
+
+      assert lib.name == ["myapp", "log"]
+      assert {:var, {:primitive, "info", 1, ^fun}} = lib.exports["info"]
+    end
+
+    test "supports {:at_least, n} and {:between, lo, hi} arity specs" do
+      fun = fn _args -> :unspecified end
+
+      lib =
+        Host.library(
+          name: ["x"],
+          primitives: [
+            {"variadic", {:at_least, 1}, fun},
+            {"bounded", {:between, 0, 3}, fun}
+          ]
+        )
+
+      assert {:var, {:primitive, "variadic", {:at_least, 1}, _}} = lib.exports["variadic"]
+      assert {:var, {:primitive, "bounded", {:between, 0, 3}, _}} = lib.exports["bounded"]
+    end
+
+    test "values exposes arbitrary Scheme values as variable bindings" do
+      lib =
+        Host.library(
+          name: ["myapp", "config"],
+          values: [
+            {"version", Host.string("1.0.0")},
+            {"handle", Host.foreign(self())}
+          ]
+        )
+
+      assert lib.exports["version"] == {:var, "1.0.0"}
+      assert lib.exports["handle"] == {:var, {:foreign, self()}}
+    end
+
+    test "primitives and values can coexist" do
+      lib =
+        Host.library(
+          name: ["x"],
+          primitives: [{"identity", 1, fn [v] -> v end}],
+          values: [{"pi", 3.14159}]
+        )
+
+      assert {:var, {:primitive, "identity", 1, _}} = lib.exports["identity"]
+      assert lib.exports["pi"] == {:var, 3.14159}
+    end
+  end
+
+  describe "library/1 — anonymous library" do
+    test "defaults to name: [] when no name is given" do
+      lib =
+        Host.library(primitives: [{"now-ms", 0, fn [] -> 0 end}])
+
+      assert lib.name == []
+      assert {:var, {:primitive, "now-ms", 0, _}} = lib.exports["now-ms"]
+    end
+
+    test "explicit name: [] is also accepted" do
+      lib = Host.library(name: [], primitives: [{"x", 0, fn [] -> :unspecified end}])
+      assert lib.name == []
+    end
+  end
+
+  describe "library/1 — validation" do
+    test "rejects malformed primitive triples" do
+      assert_raise ArgumentError, ~r/host primitive must be/, fn ->
+        Host.library(primitives: [{"bad", 1}])
+      end
+
+      assert_raise ArgumentError, ~r/host primitive must be/, fn ->
+        Host.library(primitives: [{:not_a_binary, 1, fn [] -> 1 end}])
+      end
+
+      assert_raise ArgumentError, ~r/host primitive must be/, fn ->
+        Host.library(primitives: [{"wrong-arity-fn", 1, fn -> 1 end}])
+      end
+    end
+
+    test "rejects malformed value pairs" do
+      assert_raise ArgumentError, ~r/host value binding must be/, fn ->
+        Host.library(values: [{:not_a_binary, 1}])
+      end
+    end
+
+    test "rejects non-list :primitives" do
+      assert_raise ArgumentError, ~r/:primitives must be a list/, fn ->
+        Host.library(primitives: %{})
+      end
+    end
+
+    test "rejects non-list :values" do
+      assert_raise ArgumentError, ~r/:values must be a list/, fn ->
+        Host.library(values: %{})
+      end
+    end
+
+    test "rejects duplicate names within :primitives" do
+      assert_raise ArgumentError, ~r/duplicate host library export/, fn ->
+        Host.library(
+          primitives: [
+            {"dup", 0, fn [] -> 1 end},
+            {"dup", 0, fn [] -> 2 end}
+          ]
+        )
+      end
+    end
+
+    test "rejects duplicate names within :values" do
+      assert_raise ArgumentError, ~r/duplicate host library export/, fn ->
+        Host.library(values: [{"dup", 1}, {"dup", 2}])
+      end
+    end
+
+    test "rejects collisions between :primitives and :values" do
+      assert_raise ArgumentError, ~r/duplicate host library export/, fn ->
+        Host.library(
+          primitives: [{"shared", 0, fn [] -> 1 end}],
+          values: [{"shared", 2}]
+        )
+      end
+    end
+  end
 end
