@@ -41,10 +41,11 @@
 
 ;; -- let family ------------------------------------------------------------
 ;;
-;; The named-let pattern deliberately applies the recursive closure
-;; *inside* the letrec* body — returning the closure and applying it
-;; outside would let the closure outlive the rec frame and crash on
-;; first recursion.
+;; Named-let applies the recursive closure inside the letrec* body —
+;; the dominant pattern, which keeps the rec frame's slot eligible for
+;; release at letrec exit. Returning the closure and applying it
+;; afterwards is also supported (issue #25): the evaluator detects the
+;; escape and keeps the slot alive with the finalised snapshot.
 
 (define-syntax let
   (syntax-rules ()

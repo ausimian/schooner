@@ -5,10 +5,10 @@
 ;;   - `gen-counter` / `gen-loser` cluster at lines 706-719:
 ;;     uses `set!` to construct a state-bearing closure. Mutation
 ;;     is out of scope.
-;;   - `letrec eqv?` test at 721-724: relies on `letrec` bindings
-;;     surviving outside their frame so two recursively-defined
-;;     procedures can be compared by identity. Schooner's
-;;     mutation-free letrec does not support that escape.
+;;
+;; Previously excluded but now restored: the `letrec eqv?` test at
+;; 721-724 needed letrec bindings to escape the rec frame intact.
+;; Issue #25 fixed escape, so the upstream form is included below.
 
 (test-begin "6.1 Equivalence Predicates")
 
@@ -38,6 +38,14 @@
 (test #t
     (let ((p (lambda (x) x)))
       (eq? p p)))
+
+;; Two distinct closures built in the same `letrec` frame remain
+;; distinct under `eqv?` after escape — letrec ties the recursive
+;; knot but does not collapse identity.
+(test #f
+    (letrec ((f (lambda () (g)))
+             (g (lambda () (f))))
+      (eqv? f g)))
 
 (test #t (equal? 'a 'a))
 (test #t (equal? '(a) '(a)))

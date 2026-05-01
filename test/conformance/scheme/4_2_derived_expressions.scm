@@ -23,14 +23,12 @@
 ;;   - `square` references in quasiquote vector test at 347-348:
 ;;     `square` is not a Schooner primitive; the test is rewritten
 ;;     to use an inline `(lambda (x) (* x x))` invocation.
-;;   - The `integers` / `stream-filter` cluster at 283-305: relies on
-;;     a closure escaping its `letrec` frame and recursing afterwards.
-;;     Schooner's mutation-free letrec creates bindings that do not
-;;     survive the letrec body (see priv/scheme/base.scm comment).
-;;     The simple force-twice cases at 277-281 stay; the recursive
-;;     stream cases are reproduced here with `next` and `stream-filter`
-;;     hoisted to top-level `define` so the recursion resolves through
-;;     the global env.
+;;   - (Previously excluded; now restored.) The `integers` /
+;;     `stream-filter` cluster at 283-305 originally exercised closures
+;;     escaping their `letrec` frame and recursing afterwards. Issue
+;;     #25 fixed this — escaped closures now retain access to their
+;;     rec bindings via a slot kept alive in the process dictionary —
+;;     so the upstream letrec-bound shape is included unchanged below.
 
 (test-begin "4.2 Derived expression types")
 
@@ -142,11 +140,14 @@
     (let ((p (delay (+ 1 2))))
       (list (force p) (force p))))
 
-;; `next` hoisted to a top-level define so the recursive call inside
-;; the `delay`-wrapped lambda resolves through the global environment
-;; rather than a `letrec` frame the closure has already escaped.
-(define (next n) (delay (cons n (next (+ n 1)))))
-(define integers (next 0))
+;; Upstream Chibi shape: `next`, `head`, `tail`, `stream-filter`,
+;; and `integers` are all bound by a single `letrec`. The recursive
+;; calls inside the `delay`-wrapped lambdas escape the rec frame,
+;; and resolve through the slot kept alive at letrec exit (issue #25).
+(define integers
+  (letrec ((next (lambda (n) (delay (cons n (next (+ n 1)))))))
+    (next 0)))
+
 (define head
   (lambda (stream) (car (force stream))))
 (define tail
@@ -154,15 +155,18 @@
 
 (test 2 (head (tail (tail integers))))
 
-(define (stream-filter p? s)
-  (delay-force
-   (if (null? (force s))
-       (delay '())
-       (let ((h (car (force s)))
-             (t (cdr (force s))))
-         (if (p? h)
-             (delay (cons h (stream-filter p? t)))
-             (stream-filter p? t))))))
+(define stream-filter
+  (letrec ((stream-filter
+            (lambda (p? s)
+              (delay-force
+               (if (null? (force s))
+                   (delay '())
+                   (let ((h (car (force s)))
+                         (t (cdr (force s))))
+                     (if (p? h)
+                         (delay (cons h (stream-filter p? t)))
+                         (stream-filter p? t))))))))
+    stream-filter))
 
 (test 5 (head (tail (tail (stream-filter odd? integers)))))
 
