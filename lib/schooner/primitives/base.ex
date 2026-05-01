@@ -31,9 +31,11 @@ defmodule Schooner.Primitives.Base do
   """
 
   alias Schooner.Eval
+  alias Schooner.Lexer
   alias Schooner.Primitive.Error
   alias Schooner.Primitives.Compare
   alias Schooner.Primitives.Inexact
+  alias Schooner.Reader
   alias Schooner.Value
 
   defguardp is_special(v)
@@ -85,20 +87,34 @@ defmodule Schooner.Primitives.Base do
       {"quotient", 2, &quotient/1},
       {"remainder", 2, &remainder/1},
       {"modulo", 2, &modulo/1},
+      {"truncate-quotient", 2, &truncate_quotient/1},
+      {"truncate-remainder", 2, &truncate_remainder/1},
+      {"truncate/", 2, &truncate_div/1},
+      {"floor-quotient", 2, &floor_quotient/1},
+      {"floor-remainder", 2, &floor_remainder/1},
+      {"floor/", 2, &floor_div/1},
+      {"floor", 1, &floor_/1},
+      {"ceiling", 1, &ceiling_/1},
+      {"truncate", 1, &truncate_/1},
+      {"round", 1, &round_/1},
       {"abs", 1, &abs_/1},
       {"min", {:at_least, 1}, &min_/1},
       {"max", {:at_least, 1}, &max_/1},
       {"expt", 2, &expt/1},
       {"gcd", {:at_least, 0}, &gcd_/1},
       {"lcm", {:at_least, 0}, &lcm_/1},
+      {"square", 1, &square_/1},
       {"sqrt", 1, &sqrt_/1},
+      {"exact-integer-sqrt", 1, &exact_integer_sqrt_/1},
       {"exact->inexact", 1, &exact_to_inexact/1},
       {"inexact->exact", 1, &inexact_to_exact/1},
       {"inexact", 1, &inexact_/1},
       {"exact", 1, &exact_/1},
       {"numerator", 1, &numerator_/1},
       {"denominator", 1, &denominator_/1},
-      {"rationalize", 2, &rationalize_/1}
+      {"rationalize", 2, &rationalize_/1},
+      {"number->string", {:between, 1, 2}, &number_to_string/1},
+      {"string->number", {:between, 1, 2}, &string_to_number/1}
     ]
   end
 
@@ -308,30 +324,128 @@ defmodule Schooner.Primitives.Base do
 
   defp do_float_divide(a, b), do: a / b
 
-  defp quotient([a, b]) do
-    require_integer!("quotient", a)
-    require_integer!("quotient", b)
-    if b == 0, do: raise(Error, reason: {:division_by_zero, "quotient"})
+  defp quotient([a, b]), do: do_truncate_quotient("quotient", a, b)
+  defp remainder([a, b]), do: do_truncate_remainder("remainder", a, b)
+  defp modulo([a, b]), do: do_floor_remainder("modulo", a, b)
+
+  defp truncate_quotient([a, b]), do: do_truncate_quotient("truncate-quotient", a, b)
+  defp truncate_remainder([a, b]), do: do_truncate_remainder("truncate-remainder", a, b)
+
+  defp truncate_div([a, b]) do
+    {:values,
+     [
+       do_truncate_quotient("truncate/", a, b),
+       do_truncate_remainder("truncate/", a, b)
+     ]}
+  end
+
+  defp floor_quotient([a, b]), do: do_floor_quotient("floor-quotient", a, b)
+  defp floor_remainder([a, b]), do: do_floor_remainder("floor-remainder", a, b)
+
+  defp floor_div([a, b]) do
+    {:values,
+     [
+       do_floor_quotient("floor/", a, b),
+       do_floor_remainder("floor/", a, b)
+     ]}
+  end
+
+  defp do_truncate_quotient(op, a, b) do
+    require_integer!(op, a)
+    require_integer!(op, b)
+    if b == 0, do: raise(Error, reason: {:division_by_zero, op})
     coerce_int_result(a, b, div(trunc_int(a), trunc_int(b)))
   end
 
-  defp remainder([a, b]) do
-    require_integer!("remainder", a)
-    require_integer!("remainder", b)
-    if b == 0, do: raise(Error, reason: {:division_by_zero, "remainder"})
+  defp do_truncate_remainder(op, a, b) do
+    require_integer!(op, a)
+    require_integer!(op, b)
+    if b == 0, do: raise(Error, reason: {:division_by_zero, op})
     coerce_int_result(a, b, rem(trunc_int(a), trunc_int(b)))
   end
 
-  defp modulo([a, b]) do
-    require_integer!("modulo", a)
-    require_integer!("modulo", b)
-    if b == 0, do: raise(Error, reason: {:division_by_zero, "modulo"})
+  defp do_floor_quotient(op, a, b) do
+    require_integer!(op, a)
+    require_integer!(op, b)
+    if b == 0, do: raise(Error, reason: {:division_by_zero, op})
+    coerce_int_result(a, b, Integer.floor_div(trunc_int(a), trunc_int(b)))
+  end
+
+  defp do_floor_remainder(op, a, b) do
+    require_integer!(op, a)
+    require_integer!(op, b)
+    if b == 0, do: raise(Error, reason: {:division_by_zero, op})
 
     ai = trunc_int(a)
     bi = trunc_int(b)
     r = rem(ai, bi)
     result = if r != 0 and signum(r) != signum(bi), do: r + bi, else: r
     coerce_int_result(a, b, result)
+  end
+
+  defp floor_([n]) do
+    require_real!("floor", n)
+    do_round(:floor, n)
+  end
+
+  defp ceiling_([n]) do
+    require_real!("ceiling", n)
+    do_round(:ceiling, n)
+  end
+
+  defp truncate_([n]) do
+    require_real!("truncate", n)
+    do_round(:truncate, n)
+  end
+
+  defp round_([n]) do
+    require_real!("round", n)
+    do_round(:round, n)
+  end
+
+  # Exactness tracks the operand: exact integers / rationals stay exact;
+  # floats stay floats; non-finite specials pass through unchanged.
+  defp do_round(_mode, n) when is_integer(n), do: n
+  defp do_round(_mode, {:float_special, _} = s), do: s
+  defp do_round(:floor, n) when is_float(n), do: Float.floor(n)
+  defp do_round(:ceiling, n) when is_float(n), do: Float.ceil(n)
+  defp do_round(:truncate, n) when is_float(n), do: trunc(n) * 1.0
+  defp do_round(:round, n) when is_float(n), do: float_round_to_even(n)
+  defp do_round(:floor, {:rational, num, den}), do: Integer.floor_div(num, den)
+  defp do_round(:ceiling, {:rational, num, den}), do: -Integer.floor_div(-num, den)
+  defp do_round(:truncate, {:rational, num, den}), do: div(num, den)
+  defp do_round(:round, {:rational, num, den}), do: rat_round_to_even(num, den)
+
+  # Banker's rounding: ties (fractional part exactly 1/2) round to the
+  # nearest even integer. `Float.floor/1` followed by a fractional-part
+  # comparison sidesteps the away-from-zero default of `Kernel.round/1`.
+  defp float_round_to_even(n) do
+    fl = Float.floor(n)
+    diff = n - fl
+
+    cond do
+      diff < 0.5 -> fl
+      diff > 0.5 -> fl + 1.0
+      rem(trunc(fl), 2) == 0 -> fl
+      true -> fl + 1.0
+    end
+  end
+
+  # Rationals are stored in lowest terms with positive denominator. The
+  # only denominator that admits a tie (exact half) is 2 — for any
+  # larger denominator a fraction of `(den/2)/den` would reduce, so the
+  # gcd-1 invariant rules it out. Outside the q==2 case we compare
+  # `2 * remainder` against `den` to decide which side the fractional
+  # part falls on.
+  defp rat_round_to_even(num, 2) do
+    fl = Integer.floor_div(num, 2)
+    if rem(fl, 2) == 0, do: fl, else: fl + 1
+  end
+
+  defp rat_round_to_even(num, den) do
+    fl = Integer.floor_div(num, den)
+    rem_part = num - fl * den
+    if 2 * rem_part > den, do: fl + 1, else: fl
   end
 
   defp abs_([n]) do
@@ -516,6 +630,22 @@ defmodule Schooner.Primitives.Base do
     if any_float?, do: result * 1.0, else: result
   end
 
+  defp square_([z]) do
+    require_number!("square", z)
+    mul_pair(z, z)
+  end
+
+  defp exact_integer_sqrt_([k]) when is_integer(k) and k >= 0 do
+    s = isqrt(k)
+    {:values, [s, k - s * s]}
+  end
+
+  defp exact_integer_sqrt_([other]),
+    do:
+      raise(Error,
+        reason: {:type_error, "exact-integer-sqrt", "exact non-negative integer", other}
+      )
+
   defp sqrt_([n]) do
     require_number!("sqrt", n)
     do_sqrt(n)
@@ -691,6 +821,118 @@ defmodule Schooner.Primitives.Base do
   defp rat_floor({:rational, n, d}), do: Integer.floor_div(n, d)
 
   # ---------------------------------------------------------------------------
+  # number->string / string->number
+  # ---------------------------------------------------------------------------
+
+  defp number_to_string([z]) do
+    require_number!("number->string", z)
+    Value.string(format_number(z, 10))
+  end
+
+  defp number_to_string([z, radix]) do
+    require_number!("number->string", z)
+    r = require_radix!("number->string", radix)
+    Value.string(format_number(z, r))
+  end
+
+  # Radix 10 delegates to `Value.write/1` so the result round-trips
+  # through the reader without a separate formatter to maintain. The
+  # non-decimal branches handle exact integers / rationals / complex
+  # by recursive component rendering; inexacts fall through to the
+  # error clause since r7rs only guarantees radix 10 for them.
+  defp format_number(v, 10), do: Value.write(v)
+  defp format_number(n, radix) when is_integer(n), do: format_int(n, radix)
+
+  defp format_number({:rational, num, den}, radix),
+    do: format_int(num, radix) <> "/" <> format_int(den, radix)
+
+  defp format_number({:complex, 0, 1}, _), do: "+i"
+  defp format_number({:complex, 0, -1}, _), do: "-i"
+  defp format_number({:complex, 0, i}, radix), do: with_imag_sign(format_number(i, radix)) <> "i"
+  defp format_number({:complex, r, 1}, radix), do: format_number(r, radix) <> "+i"
+  defp format_number({:complex, r, -1}, radix), do: format_number(r, radix) <> "-i"
+
+  defp format_number({:complex, r, i}, radix),
+    do: format_number(r, radix) <> with_imag_sign(format_number(i, radix)) <> "i"
+
+  defp format_number(_v, _radix),
+    do: raise(Error, reason: {:invalid_radix_for_inexact, "number->string"})
+
+  defp format_int(n, radix) when n < 0, do: "-" <> format_int(-n, radix)
+  defp format_int(n, radix), do: n |> Integer.to_string(radix) |> String.downcase()
+
+  defp with_imag_sign(<<?+, _::binary>> = s), do: s
+  defp with_imag_sign(<<?-, _::binary>> = s), do: s
+  defp with_imag_sign(s), do: "+" <> s
+
+  defp string_to_number([s]) when is_binary(s), do: parse_number_string(s, 10)
+
+  defp string_to_number([s, radix]) when is_binary(s) do
+    r = require_radix!("string->number", radix)
+    parse_number_string(s, r)
+  end
+
+  defp string_to_number([other | _]),
+    do: raise(Error, reason: {:type_error, "string->number", "string", other})
+
+  # The reader already implements every numeric form Scheme can write;
+  # `string->number` reuses it and converts any tokenisation / parse
+  # failure into the standard `#f`. The supplied `radix` is folded into
+  # the source as a `#b` / `#o` / `#x` prefix unless the string already
+  # carries an explicit radix prefix (which per r7rs overrides the
+  # supplied default). A leading sign sits to the right of the prefix,
+  # so the prepend stays valid.
+  defp parse_number_string(s, radix) do
+    cond do
+      s == "" ->
+        false
+
+      contains_disallowed?(s) ->
+        false
+
+      true ->
+        source = if has_radix_prefix?(s), do: s, else: radix_prefix(radix) <> s
+        try_parse_number(source)
+    end
+  end
+
+  defp try_parse_number(source) do
+    case Reader.read_string(source) do
+      [v] -> if Value.number?(v), do: v, else: false
+      _ -> false
+    end
+  rescue
+    Lexer.Error -> false
+    Reader.Error -> false
+  end
+
+  # `string->number` rejects anything outside a single self-delimiting
+  # numeric token: whitespace, list / quoting / comment / string
+  # punctuation. The lexer's atom scanner stops at these characters,
+  # so without this pre-check `"3 "` would parse as `3`.
+  defp contains_disallowed?(s) do
+    Enum.any?(:erlang.binary_to_list(s), fn c ->
+      c in [?\s, ?\t, ?\n, ?\r, ?(, ?), ?[, ?], ?{, ?}, ?", ?;, ?|, ?', ?`, ?,]
+    end)
+  end
+
+  defp has_radix_prefix?(<<?#, c, _::binary>>)
+       when c in [?b, ?B, ?o, ?O, ?d, ?D, ?x, ?X],
+       do: true
+
+  defp has_radix_prefix?(_), do: false
+
+  defp radix_prefix(2), do: "#b"
+  defp radix_prefix(8), do: "#o"
+  defp radix_prefix(10), do: ""
+  defp radix_prefix(16), do: "#x"
+
+  defp require_radix!(_op, n) when n in [2, 8, 10, 16], do: n
+
+  defp require_radix!(op, n),
+    do: raise(Error, reason: {:invalid_radix, op, n})
+
+  # ---------------------------------------------------------------------------
   # Comparison
   # ---------------------------------------------------------------------------
 
@@ -797,6 +1039,8 @@ defmodule Schooner.Primitives.Base do
       {"rational?", 1, &rational_p/1},
       {"exact?", 1, &exact_p/1},
       {"inexact?", 1, &inexact_p/1},
+      {"exact-integer?", 1, &exact_integer_p/1},
+      {"exact-rational?", 1, &exact_rational_p/1},
       {"zero?", 1, &zero_p/1},
       {"positive?", 1, &positive_p/1},
       {"negative?", 1, &negative_p/1},
@@ -827,6 +1071,8 @@ defmodule Schooner.Primitives.Base do
   defp rational_p([v]), do: Value.bool(Value.rational?(v))
   defp exact_p([v]), do: Value.bool(Value.exact?(v))
   defp inexact_p([v]), do: Value.bool(Value.inexact?(v))
+  defp exact_integer_p([v]), do: Value.bool(is_integer(v))
+  defp exact_rational_p([v]), do: Value.bool(is_integer(v) or is_rational(v))
   defp boolean_p([v]), do: Value.bool(Value.boolean?(v))
   defp pair_p([v]), do: Value.bool(Value.pair?(v))
   defp null_p([v]), do: Value.bool(Value.null?(v))
