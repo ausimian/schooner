@@ -21,6 +21,39 @@ end
 
 Documentation is published at <https://hexdocs.pm/schooner>.
 
+## Quick example
+
+```iex
+iex> alias Schooner.Host
+iex> env =
+...>   Schooner.Environment.new(
+...>     pre_imports: [["scheme", "base"]],
+...>     libraries: [
+...>       Host.library(
+...>         primitives: [
+...>           {"shout", 1, fn [msg] ->
+...>              text = Host.to_string!(msg, op: "shout")
+...>              Host.string(String.upcase(text) <> "!")
+...>            end}
+...>         ]
+...>       )
+...>     ]
+...>   )
+iex> Schooner.eval(~s|(shout (string-append "hello, " "world"))|, env)
+{:ok, "HELLO, WORLD!"}
+iex> {:ok, double} = Schooner.eval("(lambda (x) (* x 2))", env)
+iex> Schooner.apply(double, [21])
+{:ok, 42}
+```
+
+What's happening:
+
+- `Schooner.Environment.new/1` builds a sandbox surface — `(scheme base)` is pre-imported (so `string-append`, `lambda`, `*` are in scope without an explicit `(import ...)`), plus an anonymous host library exposing `shout` as a Scheme procedure backed by an Elixir function.
+- `Schooner.eval/2` returns `{:ok, value}` on success. `Schooner.Host.to_string!/2` extracts the underlying binary; `Schooner.Host.string/1` constructs a Scheme string for the return.
+- `Schooner.apply/2` invokes any Scheme procedure value (closure, primitive, or parameter) from Elixir.
+
+See the [Embedding](https://hexdocs.pm/schooner/embedding.html) and [Host Functions](https://hexdocs.pm/schooner/host-functions.html) guides for the full story.
+
 ## Choosing an entry point
 
 Schooner has two top-level evaluation entry points. They differ in
