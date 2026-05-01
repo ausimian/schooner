@@ -1,3 +1,0 @@
-### Added
-
-- Initial release.
