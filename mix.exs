@@ -14,7 +14,22 @@ defmodule Schooner.MixProject do
       aliases: aliases(),
       elixirc_paths: elixirc_paths(Mix.env()),
       elixirc_options: [warnings_as_errors: true],
+      package: package(),
+      description: description(),
       docs: docs()
+    ]
+  end
+
+  defp description do
+    "An embeddable, sandboxed Scheme interpreter for the BEAM, targeting " <>
+      "the r7rs-small language minus its mutable operations."
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib priv guides .formatter.exs mix.exs README.md LICENSE)
     ]
   end
 
@@ -37,7 +52,8 @@ defmodule Schooner.MixProject do
       {:nimble_options, "~> 1.1"},
       {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:publisho, "~> 1.0", only: :dev, runtime: false}
     ]
   end
 
@@ -45,6 +61,7 @@ defmodule Schooner.MixProject do
     [
       main: "readme",
       source_url: @source_url,
+      source_ref: @version,
       extras: [
         "README.md",
         "guides/embedding.md",
@@ -64,7 +81,8 @@ defmodule Schooner.MixProject do
           Schooner.Host,
           Schooner.Value,
           Schooner.Env,
-          Schooner.Library
+          Schooner.Library,
+          Schooner.Time
         ],
         Errors: [
           Schooner.Error,
@@ -94,6 +112,7 @@ defmodule Schooner.MixProject do
                     Schooner.Env,
                     Schooner.Library,
                     Schooner.Library.NotFoundError,
+                    Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
                     Schooner.Primitive.Error,
