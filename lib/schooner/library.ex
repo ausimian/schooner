@@ -40,7 +40,11 @@ defmodule Schooner.Library do
             features: []
 
   @type segment :: binary() | non_neg_integer()
-  @type name :: [segment(), ...]
+  # Non-empty lists denote standard r7rs-style library names like
+  # `(scheme base)`. The empty list `[]` is reserved for anonymous
+  # host libraries — see `Schooner.Host.library/1` and the comment
+  # on `validate_name!/1`.
+  @type name :: [segment()]
   @type export :: {:var, term()} | {:macro, term()}
   @type source :: :native | {:file, binary(), term()}
   @type t :: %__MODULE__{
@@ -187,9 +191,14 @@ defmodule Schooner.Library do
   end
 
   @doc """
-  Render `name` in `(scheme base)` form for diagnostics.
+  Render `name` in `(scheme base)` form for diagnostics. The empty
+  list (an anonymous host library) renders as
+  `"(anonymous host library)"` — there is no Scheme syntax that can
+  produce that name, so a literal `()` rendering would be misleading.
   """
   @spec render_name(name()) :: binary()
+  def render_name([]), do: "(anonymous host library)"
+
   def render_name(name) when is_list(name) do
     "(" <> Enum.map_join(name, " ", &render_segment/1) <> ")"
   end
@@ -218,6 +227,16 @@ defmodule Schooner.Library do
   defp render_segment(seg) when is_binary(seg), do: seg
   defp render_segment(seg) when is_integer(seg), do: Integer.to_string(seg)
 
+  # The empty list is a valid library name and denotes an *anonymous*
+  # host library — one whose bindings are applied directly to the
+  # runtime environment (see `Schooner.Environment.new/1`) rather
+  # than registered for `(import ...)` resolution. There is no
+  # Scheme syntax that can produce an empty library-name datum, so
+  # an anonymous library is unreachable from the script side: the
+  # only way its bindings enter scope is by the host listing the
+  # library when constructing the environment.
+  defp validate_name!([] = name), do: name
+
   defp validate_name!([_ | _] = name) do
     Enum.each(name, fn
       seg when is_binary(seg) ->
@@ -235,7 +254,7 @@ defmodule Schooner.Library do
   end
 
   defp validate_name!(other) do
-    raise ArgumentError, "library name must be a non-empty list, got #{inspect(other)}"
+    raise ArgumentError, "library name must be a list, got #{inspect(other)}"
   end
 
   defp validate_exports!(map) when is_map(map) do
