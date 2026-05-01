@@ -267,22 +267,49 @@ defmodule Schooner.Eval do
   # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
   # knot without any after-the-fact mutation of the closures
   # themselves.
+  #
+  # On normal body return, `finalize_letrec_star/3` walks the result
+  # value: if any closure's env still names the rec frame's
+  # process-dictionary slot, the slot is *kept alive* with its now-
+  # finalised snapshot so escaped closures (and any inner closures
+  # they reach via rec lookups, including mutually-recursive
+  # bindings) can resolve their rec names through it. If no closure
+  # in the result references the slot, it is released as usual. The
+  # slot becomes immutable after letrec exit — the evaluator never
+  # writes to a freed-but-kept slot.
   defp eval_letrec_star([bindings_form | body], env) when body != [] do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
+    [{:rec, ref} | _] = rec_env.lex
 
-    with_rec_frame(rec_env, fn ->
-      names
-      |> Enum.zip(inits)
-      |> Enum.each(fn {name, init} ->
-        Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
-      end)
+    result =
+      try do
+        names
+        |> Enum.zip(inits)
+        |> Enum.each(fn {name, init} ->
+          Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
+        end)
 
-      eval_body(body, rec_env)
-    end)
+        eval_body(body, rec_env)
+      rescue
+        e ->
+          Env.release_rec(rec_env)
+          reraise(e, __STACKTRACE__)
+      end
+
+    finalize_letrec_star(result, ref, rec_env)
   end
 
   defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+
+  defp finalize_letrec_star(result, ref, rec_env) do
+    if escapes_rec?(result, ref) do
+      result
+    else
+      Env.release_rec(rec_env)
+      result
+    end
+  end
 
   defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [], [])
 
@@ -355,14 +382,55 @@ defmodule Schooner.Eval do
   # creation time so per-application cost stays at zero.
   defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
 
-  # Run `body_fun` and release `rec_env`'s recursive frame on every
-  # exit path. The body's tail-recursive calls bounce through
-  # `eval`/`eval_sequence`/`apply_proc` and never return through this
-  # frame, so TCO across the body is preserved — see `eval_tco_test`.
-  defp with_rec_frame(rec_env, body_fun) do
-    body_fun.()
-  after
-    Env.release_rec(rec_env)
+  # Walk `value` returning true iff any closure in the tree references
+  # `{:rec, ref}` in its captured env. The walk recurses into every
+  # aggregate value tag that can carry a closure — pairs, vectors,
+  # records, multi-values, promises, parameters, error objects — and
+  # is identity-false for atomic / opaque tags. A missed aggregate
+  # tag would prematurely release a slot a captured closure still
+  # depends on, surfacing as a delayed lookup failure, so extending
+  # the value model means extending this walk.
+  #
+  # Detection of `{:rec, ref}` in a closure's env directly is
+  # sufficient: every closure constructed during the body's
+  # evaluation captures the rec frame in its env at construction
+  # time, so any closure that depends on the slot has the rec marker
+  # somewhere in its lex chain. Closures captured *before* the
+  # letrec entered have envs that don't name this ref — even if they
+  # later end up in the result tree by reference, they don't depend
+  # on the slot.
+  @spec escapes_rec?(Value.t() | {:values, [Value.t()]}, reference()) :: boolean()
+  defp escapes_rec?({:closure, _params, _body, %Env{lex: lex}, _name}, ref) do
+    lex_has_rec?(lex, ref)
+  end
+
+  defp escapes_rec?([h | t], ref), do: escapes_rec?(h, ref) or escapes_rec?(t, ref)
+
+  defp escapes_rec?({:vector, tup}, ref), do: tuple_has_escape?(tup, ref)
+  defp escapes_rec?({:record, _type_id, fields}, ref), do: tuple_has_escape?(fields, ref)
+
+  defp escapes_rec?({:values, vs}, ref) when is_list(vs) do
+    Enum.any?(vs, &escapes_rec?(&1, ref))
+  end
+
+  defp escapes_rec?({:promise, _kind, v}, ref), do: escapes_rec?(v, ref)
+
+  defp escapes_rec?({:parameter, _id, init, conv}, ref) do
+    escapes_rec?(init, ref) or escapes_rec?(conv, ref)
+  end
+
+  defp escapes_rec?({:error_obj, _kind, msg, irritants}, ref) do
+    escapes_rec?(msg, ref) or Enum.any?(irritants, &escapes_rec?(&1, ref))
+  end
+
+  defp escapes_rec?(_other, _ref), do: false
+
+  defp lex_has_rec?([], _ref), do: false
+  defp lex_has_rec?([{:rec, this_ref} | _rest], ref) when this_ref === ref, do: true
+  defp lex_has_rec?([_frame | rest], ref), do: lex_has_rec?(rest, ref)
+
+  defp tuple_has_escape?(tup, ref) do
+    Enum.any?(0..(tuple_size(tup) - 1)//1, &escapes_rec?(elem(tup, &1), ref))
   end
 
   # r7rs §5.3.3 lets a body begin with a sequence of `define` forms

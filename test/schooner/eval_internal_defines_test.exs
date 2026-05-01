@@ -284,7 +284,7 @@ defmodule Schooner.EvalInternalDefinesTest do
     end
   end
 
-  describe "TCO across letrec* try/after" do
+  describe "TCO across letrec* try/rescue" do
     test "internal-define-driven mutual recursion at depth" do
       env =
         Env.new()
@@ -305,6 +305,177 @@ defmodule Schooner.EvalInternalDefinesTest do
       assert Schooner.eval(source, env) == Value.bool(true)
       {:total_heap_size, heap} = Process.info(self(), :total_heap_size)
       assert heap < 5_000_000
+    end
+
+    # Stress shape that exercises issue 25's TCO concern: every iteration
+    # of the tail-recursive `loop` re-enters `eval_letrec_star` because
+    # the body has an internal define. The walk-and-rewrite path holds
+    # one `try/rescue` frame per call until the body returns. Stack must
+    # stay constant — heap accumulates per-iteration allocations that GC
+    # reclaims, so we bound stack_size rather than total_heap_size here.
+    test "tail loop with internal define on every call preserves stack TCO" do
+      env =
+        Env.new()
+        |> Env.define(
+          "zero-int?",
+          Value.primitive("zero-int?", 1, fn [n] -> Value.bool(n === 0) end)
+        )
+        |> Env.define("sub1", Value.primitive("sub1", 1, fn [n] -> n - 1 end))
+
+      source = """
+      (define (loop n)
+        (define helper 1)
+        (if (zero-int? n) 'done (loop (sub1 n))))
+      (loop 100000)
+      """
+
+      assert Schooner.eval(source, env) == Value.symbol("done")
+      {:stack_size, stack} = Process.info(self(), :stack_size)
+      # 100k frames stacked unoptimised would push tens of thousands of
+      # words; a healthy TCO leaves stack_size in low triple digits.
+      assert stack < 1_000, "stack_size grew to #{stack} words — TCO likely broken"
+    end
+  end
+
+  describe "letrec body return-value escape (issue 25)" do
+    test "closure escapes via top-level binding, then resolves rec names" do
+      assert run("""
+             (define escaped
+               (letrec ((helper (lambda () 42))
+                        (caller (lambda () (helper))))
+                 caller))
+             (escaped)
+             """) == 42
+    end
+
+    # Escape keeps the rec slot alive on purpose: the snapshot lives
+    # in the slot so escaped closures (and any closures they reach via
+    # rec lookups, including mutually-recursive ones) can resolve rec
+    # names. Leakage is therefore bounded to actual closure escapes,
+    # not letrec-form count.
+    test "closure escape leaves exactly one rec slot per escaping letrec" do
+      before = count_rec_slots()
+
+      Schooner.run("""
+      (define escaped
+        (letrec ((helper (lambda () 42))
+                 (caller (lambda () (helper))))
+          caller))
+      (escaped)
+      """)
+
+      assert count_rec_slots() == before + 1
+    end
+
+    test "many non-escaping letrecs do not leak; many escaping ones leak per escape" do
+      before = count_rec_slots()
+
+      for _ <- 1..50 do
+        Schooner.run("(letrec ((x 1)) x)")
+      end
+
+      assert count_rec_slots() == before, "non-escaping letrecs should not leak"
+
+      base = count_rec_slots()
+
+      for _ <- 1..50 do
+        Schooner.run("(letrec ((f (lambda () 1))) f)")
+      end
+
+      assert count_rec_slots() == base + 50, "each escaping letrec leaves one slot"
+    end
+
+    test "closure escape via cons; both car and cdr resolve" do
+      assert run("""
+             (define p
+               (letrec ((x 7)
+                        (f (lambda () x)))
+                 (cons f x)))
+             (cons ((car p)) (cdr p))
+             """) == [7 | 7]
+    end
+
+    test "closure escape via vector" do
+      assert run("""
+             (define v
+               (letrec ((const (lambda () 11))
+                        (boxed (lambda () (const))))
+                 (vector const boxed)))
+             (cons ((vector-ref v 0)) ((vector-ref v 1)))
+             """) == [11 | 11]
+    end
+
+    test "closure escape via list of closures" do
+      assert run("""
+             (define fs
+               (letrec ((make (lambda (n) (lambda () (* n 2)))))
+                 (list (make 1) (make 2) (make 3))))
+             (map (lambda (f) (f)) fs)
+             """) == [2, 4, 6]
+    end
+
+    test "closure escape via record" do
+      assert run("""
+             (define-record-type box (make-box value) box?
+               (value box-value))
+             (define b
+               (letrec ((helper (lambda () 99))
+                        (caller (lambda () (helper))))
+                 (make-box caller)))
+             ((box-value b))
+             """) == 99
+    end
+
+    test "closure escape via multi-values consumed by call-with-values" do
+      assert run("""
+             (call-with-values
+               (lambda ()
+                 (letrec ((helper (lambda () 1))
+                          (caller (lambda () (helper))))
+                   (values caller helper)))
+               (lambda (a b) (cons (a) (b))))
+             """) == [1 | 1]
+    end
+
+    test "nested letrecs: outer body returns inner-letrec closure" do
+      assert run("""
+             (define f
+               (letrec ((x 1))
+                 (letrec ((g (lambda () x)))
+                   g)))
+             (f)
+             """) == 1
+    end
+
+    test "mutually-recursive escape resolves both directions" do
+      assert run("""
+             (define ev
+               (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
+                        (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
+                 my-even?))
+             (cons (ev 4) (ev 5))
+             """) == [true | false]
+    end
+
+    test "mutually-recursive escape works through pair-wrapped pair of closures" do
+      assert run("""
+             (define pair-of
+               (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
+                        (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
+                 (cons my-even? my-odd?)))
+             (cons ((car pair-of) 6) ((cdr pair-of) 7))
+             """) == [true | true]
+    end
+
+    test "deeper mutually-recursive escape: triadic mutual recursion" do
+      assert run("""
+             (define f
+               (letrec ((a (lambda (n) (if (= n 0) 'a (b (- n 1)))))
+                        (b (lambda (n) (if (= n 0) 'b (c (- n 1)))))
+                        (c (lambda (n) (if (= n 0) 'c (a (- n 1))))))
+                 a))
+             (list (f 0) (f 1) (f 2) (f 3))
+             """) == [Value.symbol("a"), Value.symbol("b"), Value.symbol("c"), Value.symbol("a")]
     end
   end
 end

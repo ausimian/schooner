@@ -30,11 +30,17 @@ defmodule Schooner.Env do
   keyed by `make_ref/0`, so closures captured during init evaluation
   see later bindings via frame identity.
 
-  Each such frame must be released by `release_rec/1` once the body of
-  the binding form finishes. The recommended pattern is to wrap the
-  body in `try ... after`. Closures that escape the body and continue
-  to reference recursive bindings after the slot is released will
-  raise — Schooner does not currently support that case.
+  Each such frame is released by `release_rec/1` when the body
+  finishes — *unless* the body's return value carries a closure whose
+  env still names the frame. In that case the evaluator detects the
+  escape and leaves the slot alive holding the now-finalised
+  snapshot, so the escaped closure (and any closures it reaches via
+  rec lookups, including mutually-recursive bindings) can resolve
+  rec names through the slot for the rest of the process lifetime.
+  Slot leakage is therefore bounded to *actual* closure escapes — a
+  letrec form whose body returns a non-closure value (the dominant
+  case in typical Scheme code, including all named-let recursion
+  whose body is `(tag val ...)`) releases its slot as usual.
   """
 
   alias Schooner.Value
