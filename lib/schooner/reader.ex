@@ -45,12 +45,17 @@ defmodule Schooner.Reader do
     * `{:vector, pos, [item_tree]}` — `#(...)` literal.
     * `{:bytevector, pos}` — `#u8(...)` literal; bytes are atoms with no
       individual sub-trees.
+
+  Position slots are `nil` when the tree was built synthetically
+  (e.g. by `Schooner.Library.Loader` from a raw datum with no
+  reader-tracked positions). Real reader output always carries a
+  concrete `Lexer.position()`.
   """
   @type pos_tree ::
-          {:atom, Lexer.position()}
-          | {:pair, Lexer.position(), pos_tree(), pos_tree()}
-          | {:vector, Lexer.position(), [pos_tree()]}
-          | {:bytevector, Lexer.position()}
+          {:atom, Lexer.position() | nil}
+          | {:pair, Lexer.position() | nil, pos_tree(), pos_tree()}
+          | {:vector, Lexer.position() | nil, [pos_tree()]}
+          | {:bytevector, Lexer.position() | nil}
 
   @doc "Read a binary of source into a list of top-level datums."
   @spec read_string(binary()) :: [Value.t()]
@@ -79,7 +84,7 @@ defmodule Schooner.Reader do
   # ---------------------------------------------------------------------------
 
   @doc "Start position of the datum the position tree describes."
-  @spec position_of(pos_tree()) :: Lexer.position()
+  @spec position_of(pos_tree()) :: Lexer.position() | nil
   def position_of({:atom, pos}), do: pos
   def position_of({:pair, pos, _, _}), do: pos
   def position_of({:vector, pos, _}), do: pos

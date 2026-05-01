@@ -276,7 +276,7 @@ defmodule Schooner do
   """
   @spec compile(binary(), Environment.t()) ::
           {:ok, Compiled.t()} | {:error, Exception.t()}
-  def compile(source, %Environment{} = env_struct) when is_binary(source) do
+  def compile(source, env_struct) when is_binary(source) do
     {:ok, compile!(source, env_struct)}
   rescue
     e -> rescue_script_error(e, __STACKTRACE__)
@@ -291,13 +291,17 @@ defmodule Schooner do
   Bang form of `compile/2` — raises on source-level failure.
   """
   @spec compile!(binary(), Environment.t()) :: Compiled.t()
-  def compile!(source, %Environment{} = env_struct) when is_binary(source) do
+  def compile!(source, env_struct) when is_binary(source) do
     forms = Reader.read_string(source)
     {import_specs, body} = LibImport.extract_program_imports(forms)
-    bindings = LibImport.resolve(import_specs, env_struct.registry)
+    bindings = LibImport.resolve(import_specs, Environment.registry(env_struct))
 
     {_compile_env, compile_syntax_env} =
-      LibImport.apply_bindings(bindings, env_struct.env, env_struct.syntax_env)
+      LibImport.apply_bindings(
+        bindings,
+        Environment.env(env_struct),
+        Environment.syntax_env(env_struct)
+      )
 
     expanded = Expander.expand_program(body, compile_syntax_env)
 
@@ -307,7 +311,7 @@ defmodule Schooner do
         _, acc -> acc
       end)
 
-    %Compiled{program: expanded, var_bindings: var_bindings}
+    Compiled.new(expanded, var_bindings)
   end
 
   @spec compile!(binary()) :: Compiled.t()
@@ -330,7 +334,7 @@ defmodule Schooner do
   """
   @spec run_compiled(Compiled.t(), Environment.t()) ::
           {:ok, Value.t()} | {:error, Exception.t()}
-  def run_compiled(%Compiled{} = compiled, %Environment{} = env_struct) do
+  def run_compiled(compiled, env_struct) do
     {:ok, run_compiled!(compiled, env_struct)}
   rescue
     e -> rescue_script_error(e, __STACKTRACE__)
@@ -340,11 +344,13 @@ defmodule Schooner do
   Bang form of `run_compiled/2` — raises on script-level failure.
   """
   @spec run_compiled!(Compiled.t(), Environment.t()) :: Value.t()
-  def run_compiled!(%Compiled{program: program, var_bindings: bindings}, %Environment{
-        env: env,
-        syntax_env: syntax_env
-      }) do
-    do_run_program(program, bindings, env, syntax_env)
+  def run_compiled!(compiled, env_struct) do
+    do_run_program(
+      Compiled.program(compiled),
+      Compiled.var_bindings(compiled),
+      Environment.env(env_struct),
+      Environment.syntax_env(env_struct)
+    )
   end
 
   defp do_run_program(program, var_bindings, env, syntax_env) do

@@ -45,4 +45,18 @@ defmodule Schooner.Compiled do
             program: [Value.t()],
             var_bindings: %{binary() => Library.export()}
           }
+
+  @doc false
+  @spec new([Value.t()], %{binary() => Library.export()}) :: t()
+  def new(program, var_bindings) when is_list(program) and is_map(var_bindings) do
+    %__MODULE__{program: program, var_bindings: var_bindings}
+  end
+
+  @doc false
+  @spec program(t()) :: [Value.t()]
+  def program(%__MODULE__{program: program}), do: program
+
+  @doc false
+  @spec var_bindings(t()) :: %{binary() => Library.export()}
+  def var_bindings(%__MODULE__{var_bindings: var_bindings}), do: var_bindings
 end

@@ -42,7 +42,15 @@ defmodule Schooner.Eval do
   every single-value context — `call-with-values`'s producer return
   path is the only deliberate exception.
   """
-  @spec single_value!(Value.t() | {:values, [Value.t()]}) :: Value.t()
+  @typedoc """
+  Result of `eval/2` and `apply_proc/2`: either a regular value or
+  the multi-value transit marker `{:values, vs}` produced by
+  `(values ...)` and consumed only by `call-with-values` /
+  `single_value!/1`.
+  """
+  @type eval_result :: Value.t() | {:values, [Value.t()]}
+
+  @spec single_value!(eval_result()) :: Value.t()
   def single_value!({:values, [v]}), do: v
 
   def single_value!({:values, vs}) when is_list(vs) do
@@ -51,7 +59,7 @@ defmodule Schooner.Eval do
 
   def single_value!(other), do: other
 
-  @spec eval(Value.t(), Env.t()) :: Value.t()
+  @spec eval(Value.t(), Env.t()) :: eval_result()
 
   def eval({:sym, name}, env) do
     case Env.lookup(env, name) do
@@ -232,7 +240,7 @@ defmodule Schooner.Eval do
 
   defp eval_args(_, _env, _acc), do: raise(Error, reason: :improper_application)
 
-  @spec apply_proc(Value.t(), [Value.t()]) :: Value.t()
+  @spec apply_proc(Value.t(), [Value.t()]) :: eval_result()
   def apply_proc({:closure, params, body, env, name}, args) do
     new_env = Env.extend(env, bind_params(params, args, name))
     eval_sequence(body, new_env)

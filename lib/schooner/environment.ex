@@ -73,6 +73,18 @@ defmodule Schooner.Environment do
             registry: Library.registry()
           }
 
+  @doc false
+  @spec env(t()) :: Env.t()
+  def env(%__MODULE__{env: env}), do: env
+
+  @doc false
+  @spec syntax_env(t()) :: SyntaxEnv.t()
+  def syntax_env(%__MODULE__{syntax_env: syntax_env}), do: syntax_env
+
+  @doc false
+  @spec registry(t()) :: Library.registry()
+  def registry(%__MODULE__{registry: registry}), do: registry
+
   @standard_shortcuts %{
     base: ["scheme", "base"],
     cxr: ["scheme", "cxr"],
