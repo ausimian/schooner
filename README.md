@@ -47,7 +47,7 @@ Add `schooner` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:schooner, "~> 0.1.0"}
+    {:schooner, "~> 1.0"}
   ]
 end
 ```
