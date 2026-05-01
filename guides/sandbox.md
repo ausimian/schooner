@@ -115,9 +115,12 @@ Even with the standard surface fully imported, an `eval/2`
 script:
 
 - **Cannot do file I/O.** `(scheme file)`, `(scheme load)`,
-  `(scheme repl)`, `(scheme process-context)`, `(scheme time)`,
-  `(scheme eval)` are all unimported (and not shipped at all
-  for the file ones — see [Deviations](deviations.md)).
+  `(scheme repl)`, `(scheme process-context)`, `(scheme eval)`
+  are not shipped at all — see [Deviations](deviations.md).
+  `(scheme time)` ships as an opt-in host library (`Schooner.Time`)
+  and is unreachable until the embedder lists it on
+  `Schooner.Environment.new/1`; default sandboxes have no
+  wall-clock access.
 - **Cannot mutate.** Schooner's value model has no
   destructive operations. `set!`, `set-car!`, `set-cdr!`,
   `string-set!`, `vector-set!`, `bytevector-u8-set!`, record

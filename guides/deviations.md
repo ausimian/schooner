@@ -228,23 +228,30 @@ to Scheme errors:
 
 ## Libraries shipped vs omitted
 
-| Shipped | Omitted |
-| --- | --- |
-| `(scheme base)` | `(scheme file)` |
-| `(scheme cxr)` | `(scheme load)` |
-| `(scheme char)` | `(scheme repl)` |
-| `(scheme inexact)` | `(scheme process-context)` |
-| `(scheme complex)` | `(scheme time)` |
-| `(scheme case-lambda)` | `(scheme eval)` |
-| `(scheme lazy)` | `(scheme r5rs)` |
-| `(scheme write)` |  |
-| `(scheme read)` |  |
+| Shipped (default registry) | Shipped (opt-in host library) | Omitted |
+| --- | --- | --- |
+| `(scheme base)` | `(scheme time)` via `Schooner.Time` | `(scheme file)` |
+| `(scheme cxr)` |  | `(scheme load)` |
+| `(scheme char)` |  | `(scheme repl)` |
+| `(scheme inexact)` |  | `(scheme process-context)` |
+| `(scheme complex)` |  | `(scheme eval)` |
+| `(scheme case-lambda)` |  | `(scheme r5rs)` |
+| `(scheme lazy)` |  |  |
+| `(scheme write)` |  |  |
+| `(scheme read)` |  |  |
 
-The omitted set is intentionally absent: file / process / time /
-eval are host concerns, exposed by **the embedder** via host
-functions if and only if they are appropriate for the trust
-context. See [Host Functions](host-functions.md) for the
-recommended pattern.
+The omitted set is intentionally absent: file / process / eval
+are host concerns, exposed by **the embedder** via host functions
+if and only if they are appropriate for the trust context.
+
+`(scheme time)` *is* shipped, but as a host library (`Schooner.Time`)
+that the embedder must opt in to by passing
+`Schooner.Time.library()` to `Schooner.Environment.new/1`. Wall-clock
+access is the first side-effecting and non-deterministic primitive,
+so keeping it out of the default registry preserves the "default
+sandbox is pure" property. The same module also doubles as a worked
+example of the embeddable-library pattern — see
+[Host Functions](host-functions.md).
 
 ## I/O is string-port-only
 

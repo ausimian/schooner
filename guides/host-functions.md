@@ -12,6 +12,14 @@ and Elixir terms, foreign payloads for opaque host data, the
 callback pattern (Scheme → host → Scheme), and how to map errors
 between the two sides.
 
+> **Worked reference:** `Schooner.Time` (in `lib/schooner/time.ex`)
+> is the r7rs `(scheme time)` library shipped as an opt-in host
+> library. Read it alongside this guide for a concrete, runnable
+> example of the patterns described here — a single public
+> `library/0` that returns a `%Schooner.Library{}`, a small set of
+> primitive impls following the standard ABI, and a sandbox-safe
+> canonical name (`["scheme", "time"]`).
+
 ## A first host library
 
 ```elixir
