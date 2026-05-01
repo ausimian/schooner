@@ -88,15 +88,17 @@ libraries deliberately.
 ## Conversion helpers
 
 Schooner does not auto-marshal across the host boundary. Host
-functions consume `Schooner.Value.t/0` and return
-`Schooner.Value.t/0`. To go between Scheme values and idiomatic
+functions consume `t:Schooner.Value.t/0` and return
+`t:Schooner.Value.t/0`. To go between Scheme values and idiomatic
 Elixir terms, use the helpers on `Schooner.Host`.
 
 ### Naming convention
 
 - `to_*!/2` — **asserting**: raises `Schooner.Host.TypeError` on
   shape mismatch. Takes a keyword list with `:op` so the error
-  points at the host call site.
+  points at the host call site. The bang in the name is the
+  Elixir convention for "raises rather than returns a tagged
+  result".
 - `to_*/1` — **total**: returns `{:ok, term} | :error`. Use for
   the "branch on shape" case.
 
@@ -113,32 +115,32 @@ end
 
 ### Avoid `import Schooner.Host`
 
-Several helper names (`to_string`, `to_string!`) shadow
-`Kernel.to_string/1`. **Use `alias Schooner.Host`** and call the
-helpers as `Host.to_string!(value, op: "...")`. Don't `import`
-the module.
+Several helper names — `Schooner.Host.to_string/1` and
+`Schooner.Host.to_string!/2` — shadow `Kernel.to_string/1`.
+**Use `alias Schooner.Host`** and call the helpers as
+`Host.to_string!(value, op: "...")`. Don't `import` the module.
 
 ### Available accessors
 
 | Helper | Accepts | Returns |
 | --- | --- | --- |
-| `to_integer!/2` | bare exact integer | Elixir integer |
-| `to_float!/2` | bare Elixir float | Elixir float |
-| `to_real!/2` | integer / float / rational | Elixir number (rationals coerced to float) |
-| `to_string!/2` | bare binary (Scheme string) | Elixir binary |
-| `to_symbol_name!/2` | `{:sym, name}` | Elixir binary (the name) |
-| `to_char!/2` | `{:char, cp}` | non-negative integer codepoint |
-| `to_bool!/2` | `true \| false` | Elixir bool |
-| `to_list!/2` | proper Scheme list | Elixir list |
-| `to_vector!/2` | `{:vector, tuple}` | Elixir list |
-| `to_bytevector!/2` | `{:bytevector, binary}` | Elixir binary |
-| `to_foreign_ref!/2` | `{:foreign, term}` | the wrapped host term |
-| `to_proc!/2` | closure / primitive / parameter | the value unchanged (callable assertion) |
+| `Schooner.Host.to_integer!/2` | bare exact integer | Elixir integer |
+| `Schooner.Host.to_float!/2` | bare Elixir float | Elixir float |
+| `Schooner.Host.to_real!/2` | integer / float / rational | Elixir number (rationals coerced to float) |
+| `Schooner.Host.to_string!/2` | bare binary (Scheme string) | Elixir binary |
+| `Schooner.Host.to_symbol_name!/2` | `{:sym, name}` | Elixir binary (the name) |
+| `Schooner.Host.to_char!/2` | `{:char, cp}` | non-negative integer codepoint |
+| `Schooner.Host.to_bool!/2` | `true \| false` | Elixir bool |
+| `Schooner.Host.to_list!/2` | proper Scheme list | Elixir list |
+| `Schooner.Host.to_vector!/2` | `{:vector, tuple}` | Elixir list |
+| `Schooner.Host.to_bytevector!/2` | `{:bytevector, binary}` | Elixir binary |
+| `Schooner.Host.to_foreign_ref!/2` | `{:foreign, term}` | the wrapped host term |
+| `Schooner.Host.to_proc!/2` | closure / primitive / parameter | the value unchanged (callable assertion) |
 
-The `to_real!/2` vs `to_float!/2` split is deliberate:
-`to_float!/2` rejects integers (the host should say what it
-wants), `to_real!/2` is the lenient "give me whatever number it
-is" form.
+The `Schooner.Host.to_real!/2` vs `Schooner.Host.to_float!/2`
+split is deliberate: `to_float!` rejects integers (the host
+should say what it wants), `to_real!` is the lenient "give me
+whatever number it is" form.
 
 ### Constructors
 

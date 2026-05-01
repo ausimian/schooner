@@ -1,6 +1,6 @@
 defmodule Schooner.Lexer.Error do
   @moduledoc """
-  Exception raised by `Schooner.Lexer` on malformed source.
+  Exception raised by the lexer on malformed source.
 
   Each error carries:
 

@@ -202,9 +202,9 @@ defmodule Schooner.Primitives.Inexact do
   # the underlying transcendentals are inherently inexact.
 
   @doc """
-  `expt(z, w) = exp(w * log z)` on the complex tower. Public so
-  `Schooner.Primitives.Base.expt/1` can defer the non-integer-exponent
-  path here without exposing the underlying complex `exp`/`log`.
+  `expt(z, w) = exp(w * log z)` on the complex tower. Public so the
+  base-library `expt` primitive can defer the non-integer-exponent
+  path here without exposing the underlying complex `exp` / `log`.
   """
   @spec generic_expt(Value.complex_v() | Value.real_v(), Value.complex_v() | Value.real_v()) ::
           Value.t()

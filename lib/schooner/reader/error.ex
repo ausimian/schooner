@@ -1,6 +1,6 @@
 defmodule Schooner.Reader.Error do
   @moduledoc """
-  Exception raised by `Schooner.Reader` on malformed source.
+  Exception raised by the reader on malformed source.
 
   Each error carries:
 

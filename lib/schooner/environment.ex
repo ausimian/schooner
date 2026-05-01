@@ -67,11 +67,11 @@ defmodule Schooner.Environment do
   @enforce_keys [:env, :syntax_env, :registry]
   defstruct [:env, :syntax_env, :registry]
 
-  @type t :: %__MODULE__{
-          env: Env.t(),
-          syntax_env: SyntaxEnv.t(),
-          registry: Library.registry()
-        }
+  @opaque t :: %__MODULE__{
+            env: Env.t(),
+            syntax_env: SyntaxEnv.t(),
+            registry: Library.registry()
+          }
 
   @standard_shortcuts %{
     base: ["scheme", "base"],
@@ -101,7 +101,7 @@ defmodule Schooner.Environment do
           `:cxr`, `:write`, `:read`, `:lazy`, `:case_lambda` /
           `:"case-lambda"`).
 
-    * `:libraries` — list of `Schooner.Library.t/0` (typically
+    * `:libraries` — list of `t:Schooner.Library.t/0` (typically
       built via `Schooner.Host.library/1`). Named libraries join
       the registry; anonymous libraries (`name: []`) have their
       bindings applied directly to the runtime env.

@@ -7,29 +7,9 @@ to one of the entry points below, get back an Elixir term, and
 resource-bound the work with the standard process tools
 (`:max_heap_size`, `Task.shutdown/2`).
 
-## Choosing an entry point
-
-Schooner has two top-level evaluation entry points. **The trust posture
-differs — picking the wrong one for untrusted input is a sandbox-shaped
-hole.** The naming is the opposite of what reflex suggests: `run/1` is
-the lax convenience, `eval/2` is the strict embedding path.
-
-| Entry point        | Auto-imports                                                                              | Trust posture                                       | Use for                                                            |
-| ---                | ---                                                                                       | ---                                                 | ---                                                                |
-| `Schooner.run/1`   | injects `(import ...)` of every shipped standard library when the script declares none    | **Not sandbox-safe.** Every primitive is in scope.  | tests, REPL-style use, your own scripts where you control the source |
-| `Schooner.eval/2`  | none — bindings come exclusively from `env` and the script's own `(import ...)`           | **Sandbox-safe.** The embedder controls the surface.| embedding untrusted or semi-trusted scripts                        |
-
-The implicit-import behaviour of `run/1` is opt-in via
-`Schooner.eval(source, env, implicit_imports: :all)`; `run/1` is just
-that call with a fresh `Schooner.Env`. Use `eval/2` (no options) for
-anything you would not paste into your own REPL — a script that omits
-`(import ...)` cannot reach any primitive, so the host gets to set the
-surface deliberately.
-
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `schooner` to your list of dependencies in `mix.exs`:
+Add `schooner` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
@@ -39,16 +19,36 @@ def deps do
 end
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/schooner>.
+Documentation is published at <https://hexdocs.pm/schooner>.
+
+## Choosing an entry point
+
+Schooner has two top-level evaluation entry points. They differ in
+**what's in scope when the script starts**, and picking the wrong one
+for untrusted input is a sandbox hole.
+
+| Entry point        | Auto-imports                                                                              | Trust posture                                       | Use for                                                            |
+| ---                | ---                                                                                       | ---                                                 | ---                                                                |
+| `Schooner.run/1`   | injects `(import ...)` of every shipped standard library when the script declares none    | **Not sandbox-safe.** Every primitive is in scope.  | tests, REPL-style use, your own scripts                              |
+| `Schooner.eval/2`  | none — bindings come from `env` and the script's own `(import ...)` declarations          | **Sandbox-safe.** The embedder controls the surface.| embedding scripts you do not control                                |
+
+For untrusted input, use `Schooner.eval/2`. A script that omits
+`(import ...)` cannot reach any primitive, so the embedder sets the
+surface deliberately.
+
+Both functions also have raising bang variants (`run!/1`, `eval!/2,3`)
+and a richer environment-construction path via
+`Schooner.Environment.new/1` — see the [Embedding](guides/embedding.md)
+guide.
 
 ## Deviations from r7rs-small
 
 Schooner targets r7rs-small but deliberately ships a smaller surface.
 The table below summarises every intentional gap; conformance tests
 under `test/conformance/` cover the surface that *is* shipped, with
-each excluded upstream case annotated inline.
+each excluded upstream case annotated inline. The
+[Deviations](guides/deviations.md) guide expands every row with a
+runnable example and a workaround.
 
 | Area                         | Schooner                                                                                                                                                  |
 | ---                          | ---                                                                                                                                                       |

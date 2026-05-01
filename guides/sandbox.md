@@ -167,8 +167,8 @@ host code that manipulates them is unsupported:
   knows the type. Use `Schooner.Host.foreign/1` to wrap host data
   you want to pass through Scheme; don't define record types in
   Scheme expecting the host to use them as Elixir structs.
-- **Parameters** — `Schooner.Value.parameter_v/0` shape is an
-  internal detail. Treat them like closures: invoke via
+- **Parameters** — the `t:Schooner.Value.parameter_v/0` shape is
+  an internal detail. Treat them like closures: invoke via
   `Schooner.apply/2`, don't move across processes.
 - **Continuations** — already covered above. Even within v1's
   escape-only model, do not try to capture and re-invoke a

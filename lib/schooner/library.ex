@@ -21,11 +21,10 @@ defmodule Schooner.Library do
 
   A *registry* is a plain map of `name => %Schooner.Library{}`.
   `register/2` and `lookup/2` are pure and operate on a map the caller
-  owns. The standard library registry — built once by
-  `Schooner.Library.Standard.boot/0` at OTP application start — is
-  stashed under the persistent term key `{Schooner.Library,
-  :standard}`. `standard/0` reads it without copying, so spawned
-  evaluator processes pay no cost to access it.
+  owns. The standard library registry is built once at OTP
+  application start and stashed under the persistent term key
+  `{Schooner.Library, :standard}`. `standard/0` reads it without
+  copying, so spawned evaluator processes pay no cost to access it.
   """
 
   alias Schooner.Library.NotFoundError
@@ -109,8 +108,8 @@ defmodule Schooner.Library do
 
   @doc """
   Read the standard registry from persistent term storage. Returns
-  `%{}` when the key is unset, which lets `Schooner.Library.Standard`
-  build the first registry on top of an empty default.
+  `%{}` when the key is unset, which lets the standard-library
+  bootstrapper build the first registry on top of an empty default.
   """
   @spec standard() :: registry()
   def standard, do: :persistent_term.get(@persistent_key, %{})
