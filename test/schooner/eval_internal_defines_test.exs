@@ -284,7 +284,7 @@ defmodule Schooner.EvalInternalDefinesTest do
     end
   end
 
-  describe "TCO across letrec* try/after" do
+  describe "TCO across letrec* try/rescue" do
     test "internal-define-driven mutual recursion at depth" do
       env =
         Env.new()
@@ -305,6 +305,139 @@ defmodule Schooner.EvalInternalDefinesTest do
       assert Schooner.eval(source, env) == Value.bool(true)
       {:total_heap_size, heap} = Process.info(self(), :total_heap_size)
       assert heap < 5_000_000
+    end
+
+    # Stress shape that exercises issue 25's TCO concern: every iteration
+    # of the tail-recursive `loop` re-enters `eval_letrec_star` because
+    # the body has an internal define. The walk-and-rewrite path holds
+    # one `try/rescue` frame per call until the body returns. Stack must
+    # stay constant — heap accumulates per-iteration allocations that GC
+    # reclaims, so we bound stack_size rather than total_heap_size here.
+    test "tail loop with internal define on every call preserves stack TCO" do
+      env =
+        Env.new()
+        |> Env.define(
+          "zero-int?",
+          Value.primitive("zero-int?", 1, fn [n] -> Value.bool(n === 0) end)
+        )
+        |> Env.define("sub1", Value.primitive("sub1", 1, fn [n] -> n - 1 end))
+
+      source = """
+      (define (loop n)
+        (define helper 1)
+        (if (zero-int? n) 'done (loop (sub1 n))))
+      (loop 100000)
+      """
+
+      assert Schooner.eval(source, env) == Value.symbol("done")
+      {:stack_size, stack} = Process.info(self(), :stack_size)
+      # 100k frames stacked unoptimised would push tens of thousands of
+      # words; a healthy TCO leaves stack_size in low triple digits.
+      assert stack < 1_000, "stack_size grew to #{stack} words — TCO likely broken"
+    end
+  end
+
+  describe "letrec body return-value escape (issue 25)" do
+    test "closure escapes via top-level binding, then resolves rec names" do
+      assert run("""
+             (define escaped
+               (letrec ((helper (lambda () 42))
+                        (caller (lambda () (helper))))
+                 caller))
+             (escaped)
+             """) == 42
+    end
+
+    test "closure escape leaves no rec slot behind" do
+      assert_no_slot_leak(fn ->
+        Schooner.run("""
+        (define escaped
+          (letrec ((helper (lambda () 42))
+                   (caller (lambda () (helper))))
+            caller))
+        (escaped)
+        """)
+      end)
+    end
+
+    test "closure escape via cons; both car and cdr resolve" do
+      assert run("""
+             (define p
+               (letrec ((x 7)
+                        (f (lambda () x)))
+                 (cons f x)))
+             (cons ((car p)) (cdr p))
+             """) == [7 | 7]
+    end
+
+    test "closure escape via vector" do
+      assert run("""
+             (define v
+               (letrec ((const (lambda () 11))
+                        (boxed (lambda () (const))))
+                 (vector const boxed)))
+             (cons ((vector-ref v 0)) ((vector-ref v 1)))
+             """) == [11 | 11]
+    end
+
+    test "closure escape via list of closures" do
+      assert run("""
+             (define fs
+               (letrec ((make (lambda (n) (lambda () (* n 2)))))
+                 (list (make 1) (make 2) (make 3))))
+             (map (lambda (f) (f)) fs)
+             """) == [2, 4, 6]
+    end
+
+    test "closure escape via record" do
+      assert run("""
+             (define-record-type box (make-box value) box?
+               (value box-value))
+             (define b
+               (letrec ((helper (lambda () 99))
+                        (caller (lambda () (helper))))
+                 (make-box caller)))
+             ((box-value b))
+             """) == 99
+    end
+
+    test "closure escape via multi-values consumed by call-with-values" do
+      assert run("""
+             (call-with-values
+               (lambda ()
+                 (letrec ((helper (lambda () 1))
+                          (caller (lambda () (helper))))
+                   (values caller helper)))
+               (lambda (a b) (cons (a) (b))))
+             """) == [1 | 1]
+    end
+
+    test "nested letrecs: outer body returns inner-letrec closure" do
+      assert run("""
+             (define f
+               (letrec ((x 1))
+                 (letrec ((g (lambda () x)))
+                   g)))
+             (f)
+             """) == 1
+    end
+
+    # Documents the known limitation: closures stored *inside* the
+    # snapshot keep their original {:rec, ref} env, so mutually-
+    # recursive escape where the inner closure references another rec
+    # binding by name (and that name has no out-of-letrec resolution)
+    # will fall through to surrounding scope. With non-stdlib names
+    # there is no fallback and the lookup raises.
+    test "mutually-recursive escape with non-stdlib names is a known limitation" do
+      assert_raise Error, ~r/unbound variable: my-even\?/, fn ->
+        Schooner.run("""
+        (define ev
+          (letrec ((my-even? (lambda (n) (if (= n 0) #t (my-odd? (- n 1)))))
+                   (my-odd?  (lambda (n) (if (= n 0) #f (my-even? (- n 1))))))
+            my-even?))
+        (ev 4)
+        """)
+      end
     end
   end
 end

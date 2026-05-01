@@ -267,22 +267,44 @@ defmodule Schooner.Eval do
   # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
   # knot without any after-the-fact mutation of the closures
   # themselves.
+  #
+  # On normal body return, `finalize_letrec_star/2` snapshots the
+  # rec-frame map, releases the process-dictionary slot, and walks
+  # the body's return value rebuilding any closure whose env still
+  # references the now-released `{:rec, ref}` so it instead carries
+  # the immutable snapshot map directly. Closures that escape the
+  # body therefore continue to resolve their rec bindings without
+  # the slot. See the `rewrite_rec/3` family below.
   defp eval_letrec_star([bindings_form | body], env) when body != [] do
     {names, inits} = parse_bindings(bindings_form, "letrec*")
     rec_env = Env.extend_rec(env, names)
+    [{:rec, ref} | _] = rec_env.lex
 
-    with_rec_frame(rec_env, fn ->
-      names
-      |> Enum.zip(inits)
-      |> Enum.each(fn {name, init} ->
-        Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
-      end)
+    result =
+      try do
+        names
+        |> Enum.zip(inits)
+        |> Enum.each(fn {name, init} ->
+          Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
+        end)
 
-      eval_body(body, rec_env)
-    end)
+        eval_body(body, rec_env)
+      rescue
+        e ->
+          Env.release_rec(rec_env)
+          reraise(e, __STACKTRACE__)
+      end
+
+    finalize_letrec_star(result, ref, rec_env)
   end
 
   defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+
+  defp finalize_letrec_star(result, ref, rec_env) do
+    {:rec_frame, snapshot} = Process.get(ref)
+    Env.release_rec(rec_env)
+    rewrite_rec(result, ref, snapshot)
+  end
 
   defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [], [])
 
@@ -355,14 +377,82 @@ defmodule Schooner.Eval do
   # creation time so per-application cost stays at zero.
   defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
 
-  # Run `body_fun` and release `rec_env`'s recursive frame on every
-  # exit path. The body's tail-recursive calls bounce through
-  # `eval`/`eval_sequence`/`apply_proc` and never return through this
-  # frame, so TCO across the body is preserved — see `eval_tco_test`.
-  defp with_rec_frame(rec_env, body_fun) do
-    body_fun.()
-  after
-    Env.release_rec(rec_env)
+  # Walk `value` and rebuild any closure whose env still references
+  # `{:rec, ref}` so it carries the immutable `snapshot` map in that
+  # frame's place. The walk recurses into every aggregate value tag
+  # that can carry a closure — pairs, vectors, records, multi-values,
+  # promises, parameters, error objects — and is tagged-default
+  # identity for atomic / opaque tags. A missed aggregate tag would
+  # silently leave a stale `{:rec, ref}` behind that surfaces as a
+  # delayed lookup failure when the closure is later applied, so
+  # extending the value model means extending this walk.
+  #
+  # Closures stored *inside* `snapshot` keep their original
+  # `{:rec, ref}` env: a second-level lookup through them after the
+  # slot has been released falls through. Direct escape (the
+  # canonical issue-25 pattern) works; mutually-recursive escape
+  # where the inner closure also references rec bindings is a known
+  # narrower limitation tracked separately.
+  @spec rewrite_rec(Value.t() | {:values, [Value.t()]}, reference(), map()) ::
+          Value.t() | {:values, [Value.t()]}
+  defp rewrite_rec({:closure, params, body, %Env{lex: lex} = env, name}, ref, snapshot) do
+    {:closure, params, body, %{env | lex: rewrite_lex(lex, ref, snapshot)}, name}
+  end
+
+  defp rewrite_rec([h | t], ref, snapshot) do
+    [rewrite_rec(h, ref, snapshot) | rewrite_rec(t, ref, snapshot)]
+  end
+
+  defp rewrite_rec({:vector, tup}, ref, snapshot) do
+    {:vector, rewrite_tuple(tup, ref, snapshot)}
+  end
+
+  defp rewrite_rec({:record, type_id, fields}, ref, snapshot) do
+    {:record, type_id, rewrite_tuple(fields, ref, snapshot)}
+  end
+
+  defp rewrite_rec({:values, vs}, ref, snapshot) when is_list(vs) do
+    {:values, Enum.map(vs, &rewrite_rec(&1, ref, snapshot))}
+  end
+
+  defp rewrite_rec({:promise, :forced, v}, ref, snapshot) do
+    {:promise, :forced, rewrite_rec(v, ref, snapshot)}
+  end
+
+  defp rewrite_rec({:promise, :lazy, thunk}, ref, snapshot) do
+    {:promise, :lazy, rewrite_rec(thunk, ref, snapshot)}
+  end
+
+  defp rewrite_rec({:parameter, id, init, conv}, ref, snapshot) do
+    {:parameter, id, rewrite_rec(init, ref, snapshot), rewrite_rec(conv, ref, snapshot)}
+  end
+
+  defp rewrite_rec({:error_obj, kind, msg, irritants}, ref, snapshot) do
+    {:error_obj, kind, rewrite_rec(msg, ref, snapshot),
+     Enum.map(irritants, &rewrite_rec(&1, ref, snapshot))}
+  end
+
+  defp rewrite_rec(other, _ref, _snapshot), do: other
+
+  defp rewrite_lex([], _ref, _snapshot), do: []
+
+  defp rewrite_lex([{:rec, this_ref} | rest], ref, snapshot) when this_ref === ref do
+    [snapshot | rewrite_lex(rest, ref, snapshot)]
+  end
+
+  defp rewrite_lex([{:rec, _other} = frame | rest], ref, snapshot) do
+    [frame | rewrite_lex(rest, ref, snapshot)]
+  end
+
+  defp rewrite_lex([frame | rest], ref, snapshot) when is_map(frame) do
+    [frame | rewrite_lex(rest, ref, snapshot)]
+  end
+
+  defp rewrite_tuple(tup, ref, snapshot) do
+    tup
+    |> Tuple.to_list()
+    |> Enum.map(&rewrite_rec(&1, ref, snapshot))
+    |> List.to_tuple()
   end
 
   # r7rs §5.3.3 lets a body begin with a sequence of `define` forms

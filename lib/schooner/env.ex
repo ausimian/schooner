@@ -31,10 +31,19 @@ defmodule Schooner.Env do
   see later bindings via frame identity.
 
   Each such frame must be released by `release_rec/1` once the body of
-  the binding form finishes. The recommended pattern is to wrap the
-  body in `try ... after`. Closures that escape the body and continue
-  to reference recursive bindings after the slot is released will
-  raise — Schooner does not currently support that case.
+  the binding form finishes evaluating. Closures that escape the body
+  retain access to their rec bindings via a walk-and-rewrite step in
+  the evaluator: at letrec exit the frame map is snapshotted into an
+  immutable Elixir map and any closure in the body's return value
+  whose env still names this frame is rebuilt to carry the snapshot
+  directly, so subsequent applications resolve rec names without the
+  released slot. Closures stored *inside* the snapshot keep their
+  original `{:rec, ref}` env, so a chain of escape-then-apply that
+  lands inside one of those snapshot-resident closures and from there
+  references another rec binding will fall through to surrounding
+  scope (e.g. globals) — i.e. mutually-recursive escape works only
+  when each rec binding's referents are reachable from the snapshot's
+  shape, not via the snapshot's own closures.
   """
 
   alias Schooner.Value
