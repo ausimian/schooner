@@ -40,7 +40,7 @@ defmodule Schooner.Expander do
   # in the bindings it generates — `syntax-rules` templates are pure
   # substitution and can't introduce a fresh constant per use.
   @core_specials MapSet.new(
-                   ~w(quote if lambda define begin set! letrec* define-record-type guard)
+                   ~w(quote if lambda define define-values begin set! letrec* define-record-type guard)
                  )
 
   @doc """
@@ -160,6 +160,8 @@ defmodule Schooner.Expander do
   def expand([{:sym, "lambda"} | tail], env), do: expand_lambda(tail, env)
 
   def expand([{:sym, "define"} | tail], env), do: expand_define(tail, env)
+
+  def expand([{:sym, "define-values"} | tail], env), do: expand_define_values(tail, env)
 
   def expand([{:sym, "if"} | tail], env), do: expand_if(tail, env)
 
@@ -294,6 +296,29 @@ defmodule Schooner.Expander do
   end
 
   defp expand_define(_, _env), do: raise(Error, reason: {:bad_special_form, "define"})
+
+  # `define-values` is a core form rather than a `syntax-rules` macro
+  # because, in internal-definition position, it has to fan out into
+  # multiple recursive bindings on a single evaluation of the producer
+  # — the body desugarer in `Schooner.Eval` handles that splice. The
+  # expander only validates the formal-list shape and recursively
+  # expands the producer expression.
+  defp expand_define_values([formals | [producer | []]], env) do
+    validate_define_values_formals(formals)
+    [{:sym, "define-values"} | [formals | [expand(producer, env) | []]]]
+  end
+
+  defp expand_define_values(_, _env),
+    do: raise(Error, reason: {:bad_special_form, "define-values"})
+
+  defp validate_define_values_formals({:sym, _}), do: :ok
+  defp validate_define_values_formals([]), do: :ok
+
+  defp validate_define_values_formals([{:sym, _} | rest]),
+    do: validate_define_values_formals(rest)
+
+  defp validate_define_values_formals(_),
+    do: raise(Error, reason: {:bad_special_form, "define-values"})
 
   defp expand_if([test | [then_e | []]], env) do
     [{:sym, "if"} | [expand(test, env) | [expand(then_e, env) | []]]]

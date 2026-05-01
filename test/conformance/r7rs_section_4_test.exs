@@ -8,8 +8,6 @@ defmodule Schooner.Conformance.R7rsSection4Test do
   # back in once the dependencies land:
   #   - mutation (set!, vector-set!, string-set!): out of scope
   #   - internal define / body splicing: phase 8
-  #   - `define-values`: not implemented (would need a non-mutating
-  #     splice in the body desugarer)
   #   - delayed evaluation (delay, force, make-promise): phase 13
   #   - dynamic bindings (parameterize, make-parameter): exercised by the
   #     Chibi r7rs §4.2 section file, not transcribed here

@@ -14,11 +14,11 @@ defmodule Schooner.Eval do
 
   After phase 9 the evaluator only consumes the core forms produced
   by `Schooner.Expander`: `quote`, `if`, `lambda`, top-level
-  `define`, `begin`, `letrec*`, `quasiquote`, application, and
-  variable reference. Everything else (`cond`, `case`, the `let`
-  family, `do`, `and`/`or`, `when`/`unless`) is a `syntax-rules`
-  macro defined by the bootstrap; the throwaway evaluator branches
-  for those forms have been removed.
+  `define`, `define-values`, `begin`, `letrec*`, `quasiquote`,
+  application, and variable reference. Everything else (`cond`,
+  `case`, the `let` family, `do`, `and`/`or`, `when`/`unless`) is a
+  `syntax-rules` macro defined by the bootstrap; the throwaway
+  evaluator branches for those forms have been removed.
 
   `letrec*` is retained as a core form rather than reduced to a
   macro because it backs both user-facing recursive bindings and
@@ -67,6 +67,7 @@ defmodule Schooner.Eval do
   def eval([{:sym, "if"} | tail], env), do: eval_if(tail, env)
   def eval([{:sym, "lambda"} | tail], env), do: eval_lambda(tail, env)
   def eval([{:sym, "define"} | tail], env), do: eval_define(tail, env)
+  def eval([{:sym, "define-values"} | tail], env), do: eval_define_values(tail, env)
   def eval([{:sym, "begin"} | tail], env), do: eval_sequence(tail, env)
   def eval([{:sym, "letrec*"} | tail], env), do: eval_letrec_star(tail, env)
   def eval([{:sym, "quasiquote"} | tail], env), do: eval_quasiquote_top(tail, env)
@@ -162,6 +163,43 @@ defmodule Schooner.Eval do
   end
 
   defp eval_define(_, _env), do: raise(Error, reason: {:bad_special_form, "define"})
+
+  # ---------------------------------------------------------------------------
+  # define-values — top-level
+  # ---------------------------------------------------------------------------
+  #
+  # The internal-definition position is desugared into a `letrec*`
+  # multi-binding by `desugar_body/1`; this clause only fires for a
+  # `define-values` written at the top level (or inside a top-level
+  # `begin` that the expander has already flattened). The producer is
+  # evaluated once, normalised to a list of values, and each formal
+  # name is installed as a top-level binding.
+
+  defp eval_define_values([formals | [expr | []]], env) do
+    spec = parse_define_values_formals(formals)
+    values = values_to_list(eval(expr, env))
+
+    spec
+    |> bind_params(values, "define-values")
+    |> Enum.each(fn {name, value} -> Env.define(env, name, value) end)
+
+    :unspecified
+  end
+
+  defp eval_define_values(_, _env),
+    do: raise(Error, reason: {:bad_special_form, "define-values"})
+
+  defp parse_define_values_formals(formals) do
+    parse_params(formals)
+  rescue
+    Error -> reraise Error, [reason: {:bad_special_form, "define-values"}], __STACKTRACE__
+  end
+
+  # Multi-value returns reach this entry as `{:values, vs}`; bare
+  # values are treated as a one-element value list. Mirrors the
+  # producer-side coercion `call-with-values` performs.
+  defp values_to_list({:values, vs}) when is_list(vs), do: vs
+  defp values_to_list(v), do: [v]
 
   # ---------------------------------------------------------------------------
   # sequence — body of begin / lambda / define-fn
@@ -278,18 +316,14 @@ defmodule Schooner.Eval do
   # slot becomes immutable after letrec exit — the evaluator never
   # writes to a freed-but-kept slot.
   defp eval_letrec_star([bindings_form | body], env) when body != [] do
-    {names, inits} = parse_bindings(bindings_form, "letrec*")
+    parsed = parse_bindings(bindings_form, "letrec*")
+    names = collect_binding_names(parsed)
     rec_env = Env.extend_rec(env, names)
     [{:rec, ref} | _] = rec_env.lex
 
     result =
       try do
-        names
-        |> Enum.zip(inits)
-        |> Enum.each(fn {name, init} ->
-          Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
-        end)
-
+        Enum.each(parsed, &init_binding(&1, rec_env))
         eval_body(body, rec_env)
       rescue
         e ->
@@ -311,17 +345,49 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [], [])
+  # `letrec*` bindings are normally `(name init)`. The body desugarer
+  # emits a second internal-only shape, `{:multi_vals, params_spec}`
+  # in the head slot, to splice `define-values` into the rec frame
+  # without mutation: one init expression produces a value list whose
+  # elements are bound across multiple rec slots in a single step.
+  # The Elixir-tagged head is unreachable from Scheme source, so the
+  # surface `letrec*` syntax is unchanged.
+  defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [])
 
-  defp parse_bindings([], _ctx, names, inits) do
-    {Enum.reverse(names), Enum.reverse(inits)}
+  defp parse_bindings([], _ctx, acc), do: Enum.reverse(acc)
+
+  defp parse_bindings([[{:sym, name} | [init | []]] | rest], ctx, acc) do
+    parse_bindings(rest, ctx, [{:single, name, init} | acc])
   end
 
-  defp parse_bindings([[{:sym, name} | [init | []]] | rest], ctx, ns, is) do
-    parse_bindings(rest, ctx, [name | ns], [init | is])
+  defp parse_bindings([[{:multi_vals, spec} | [init | []]] | rest], ctx, acc) do
+    parse_bindings(rest, ctx, [{:multi, spec, init} | acc])
   end
 
-  defp parse_bindings(_, ctx, _, _), do: raise(Error, reason: {:bad_special_form, ctx})
+  defp parse_bindings(_, ctx, _), do: raise(Error, reason: {:bad_special_form, ctx})
+
+  defp collect_binding_names(parsed) do
+    Enum.flat_map(parsed, fn
+      {:single, name, _} -> [name]
+      {:multi, spec, _} -> spec_names(spec)
+    end)
+  end
+
+  defp spec_names({:fixed, _, names}), do: names
+  defp spec_names({:any, name}), do: [name]
+  defp spec_names({:fixed_rest, _, names, rest}), do: names ++ [rest]
+
+  defp init_binding({:single, name, init}, rec_env) do
+    Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
+  end
+
+  defp init_binding({:multi, spec, init}, rec_env) do
+    values = values_to_list(eval(init, rec_env))
+
+    spec
+    |> bind_params(values, "define-values")
+    |> Enum.each(fn {name, value} -> Env.rec_set(rec_env, name, value) end)
+  end
 
   # `unquote` and `unquote-splicing` only fire at quasi level 1; nested
   # `quasiquote` raises the level, nested `unquote` lowers it.
@@ -485,13 +551,28 @@ defmodule Schooner.Eval do
   defp parse_internal_define([{:sym, "define"} | body]) do
     case body do
       [{:sym, name} | [expr | []]] ->
-        {name, expr}
+        {:single, name, expr}
 
       [[{:sym, name} | params] | body_forms] when body_forms != [] ->
-        {name, [{:sym, "lambda"} | [params | body_forms]]}
+        {:single, name, [{:sym, "lambda"} | [params | body_forms]]}
 
       _ ->
         raise(Error, reason: {:bad_special_form, "define"})
+    end
+  end
+
+  # r7rs §5.3.2: `define-values` in internal-definition position fans
+  # out into a single multi-binding letrec* slot. The producer is
+  # evaluated once, and its values are spread across the formals'
+  # rec slots in lock-step — no mutation, no auxiliary tmp visible to
+  # the user.
+  defp parse_internal_define([{:sym, "define-values"} | body]) do
+    case body do
+      [formals | [expr | []]] ->
+        {:multi, parse_define_values_formals(formals), expr}
+
+      _ ->
+        raise(Error, reason: {:bad_special_form, "define-values"})
     end
   end
 
@@ -513,8 +594,18 @@ defmodule Schooner.Eval do
 
   defp build_letrec_bindings([]), do: []
 
-  defp build_letrec_bindings([{name, init} | rest]) do
+  defp build_letrec_bindings([{:single, name, init} | rest]) do
     binding = [{:sym, name} | [init | []]]
+    [binding | build_letrec_bindings(rest)]
+  end
+
+  # The `{:multi_vals, spec}` head is an Elixir-tagged tuple — Scheme
+  # source can't construct it, so users typing into `letrec*` directly
+  # never collide with this internal binding shape; only the desugarer
+  # emits it. `parse_bindings/3` recognises it and routes the init
+  # through `init_binding/2`'s multi-value path.
+  defp build_letrec_bindings([{:multi, spec, init} | rest]) do
+    binding = [{:multi_vals, spec} | [init | []]]
     [binding | build_letrec_bindings(rest)]
   end
 
