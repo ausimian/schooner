@@ -29,7 +29,7 @@ defmodule Schooner.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv guides .formatter.exs mix.exs README.md LICENSE)
+      files: ~w(lib priv guides .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
@@ -67,7 +67,8 @@ defmodule Schooner.MixProject do
         "guides/embedding.md",
         "guides/host-functions.md",
         "guides/sandbox.md",
-        "guides/deviations.md"
+        "guides/deviations.md",
+        "CHANGELOG.md"
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
