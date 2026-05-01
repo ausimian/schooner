@@ -61,7 +61,7 @@ defmodule Schooner.Expander.SyntaxRules do
   @mark_separator <<0>>
 
   @core_keywords MapSet.new(~w(
-    quote if lambda define begin set!
+    quote if lambda define define-values begin set!
     define-syntax let-syntax letrec-syntax syntax-rules
     quasiquote unquote unquote-splicing
     ...

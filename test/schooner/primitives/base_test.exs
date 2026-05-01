@@ -1137,5 +1137,123 @@ defmodule Schooner.Primitives.BaseTest do
                c)
              """) == 3
     end
+
+    test "top-level define-values binds each formal to one value" do
+      assert run("""
+             (define-values (a b c) (values 1 2 3))
+             (list a b c)
+             """) == Value.list([1, 2, 3])
+    end
+
+    test "top-level define-values with a single-value producer wraps it as one value" do
+      assert run("""
+             (define-values (x) 42)
+             x
+             """) == 42
+    end
+
+    test "top-level define-values with rest formal collects trailing values" do
+      assert run("""
+             (define-values (head . rest) (values 1 2 3 4))
+             (cons head rest)
+             """) == Value.list([1, 2, 3, 4])
+    end
+
+    test "top-level define-values with bare rest collects all values into a list" do
+      assert run("""
+             (define-values all (values 1 2 3))
+             all
+             """) == Value.list([1, 2, 3])
+    end
+
+    test "top-level define-values with empty formals accepts a zero-value producer" do
+      assert run("""
+             (define-values () (values))
+             'ok
+             """) == Value.symbol("ok")
+    end
+
+    test "top-level define-values arity mismatch on too few values" do
+      e =
+        assert_raise Schooner.Eval.Error, fn ->
+          run("(define-values (a b c) (values 1 2))")
+        end
+
+      assert match?({:arity_mismatch, "define-values", {:exact, 3}, 2}, e.reason)
+    end
+
+    test "top-level define-values arity mismatch on too many values" do
+      e =
+        assert_raise Schooner.Eval.Error, fn ->
+          run("(define-values (a b) (values 1 2 3))")
+        end
+
+      assert match?({:arity_mismatch, "define-values", {:exact, 2}, 3}, e.reason)
+    end
+
+    test "internal define-values fans out into a single rec frame" do
+      assert run("""
+             (define (f)
+               (define-values (a b c) (values 10 20 30))
+               (+ a b c))
+             (f)
+             """) == 60
+    end
+
+    test "internal define-values can mix with internal define and is mutually recursive" do
+      assert run("""
+             (define (f)
+               (define-values (a b) (values 1 2))
+               (define s (+ a b))
+               (define (twice) (* s 2))
+               (twice))
+             (f)
+             """) == 6
+    end
+
+    test "internal define-values binds a rest formal" do
+      assert run("""
+             (define (f)
+               (define-values (head . tail) (values 1 2 3 4))
+               (cons head tail))
+             (f)
+             """) == Value.list([1, 2, 3, 4])
+    end
+
+    test "internal define-values arity mismatch raises on entry" do
+      e =
+        assert_raise Schooner.Eval.Error, fn ->
+          run("""
+          (define (f)
+            (define-values (a b) (values 1 2 3))
+            (+ a b))
+          (f)
+          """)
+        end
+
+      assert match?({:arity_mismatch, "define-values", {:exact, 2}, 3}, e.reason)
+    end
+
+    test "define-values after a non-define expression in a body is rejected" do
+      e =
+        assert_raise Schooner.Eval.Error, fn ->
+          run("""
+          (define (f)
+            1
+            (define-values (a) (values 2))
+            a)
+          (f)
+          """)
+        end
+
+      assert e.reason == :define_after_expression
+    end
+
+    test "define-values producer that returns a single bare value binds a one-element list to a bare-rest formal" do
+      assert run("""
+             (define-values rest 42)
+             rest
+             """) == Value.list([42])
+    end
   end
 end
