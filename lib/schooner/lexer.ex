@@ -583,9 +583,6 @@ defmodule Schooner.Lexer do
   defp lift_int(n, :inexact), do: n / 1
   defp lift_int(n, _), do: n
 
-  defp parse_complex_part(raw, exactness, _whole, _line, _col) when is_integer(raw),
-    do: lift_int(raw, exactness)
-
   defp parse_complex_part("+inf.0", _exactness, _whole, _line, _col),
     do: {:float_special, :pos_inf}
 
