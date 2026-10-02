@@ -63,6 +63,7 @@ defmodule Schooner do
   alias Schooner.Env
   alias Schooner.Environment
   alias Schooner.Eval
+  alias Schooner.Eval.Analyze
   alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Eval.ExceptionState
@@ -311,7 +312,7 @@ defmodule Schooner do
         _, acc -> acc
       end)
 
-    Compiled.new(expanded, var_bindings)
+    Compiled.new(Enum.map(expanded, &Analyze.analyze/1), var_bindings)
   end
 
   @spec compile!(binary()) :: Compiled.t()
@@ -365,7 +366,7 @@ defmodule Schooner do
       {env, _syntax_env} = LibImport.apply_bindings(var_bindings, env, syntax_env)
 
       program
-      |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
+      |> Enum.reduce(:unspecified, fn node, _acc -> Eval.exec(node, env) end)
       |> Eval.single_value!()
     after
       ExceptionState.restore(prev_handlers)
