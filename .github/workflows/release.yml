@@ -1,0 +1,56 @@
+name: Release
+
+# Publishes the package and docs to Hex when a version tag is pushed.
+# `mix publisho` creates tags named after the bare version (`1.1.0`,
+# `1.1.0-rc.1`), with no `v` prefix.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+# Never run two publishes for the same tag at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish to Hex
+    needs: ci
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.3"
+
+      - name: Check the tag matches the version in mix.exs
+        run: |
+          version=$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match mix.exs version '$version'"
+            exit 1
+          fi
+
+      # `mix hex.publish` builds the docs, which needs the :dev-only
+      # ex_doc dependency, so this job runs in the default dev env.
+      - name: Install dependencies
+        run: mix deps.get --check-locked
+
+      - name: Publish package and docs
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
