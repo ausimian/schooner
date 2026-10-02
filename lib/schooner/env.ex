@@ -12,11 +12,19 @@ defmodule Schooner.Env do
   applied to the top-level frame: closures reference the frame by
   identity, not by value-at-bind-time.
 
-  Globals are stored as a Map on the process heap, not in `:ets`, so
+  Globals live in the process dictionary, not in `:ets`, so
   consecutive lookups of the same name return the *same* heap term.
   This preserves `erts_debug.same/2` identity for aggregates bound
   at top level — `(eq? x x)` answers `#t` for vectors, pairs,
   parameters, and other aggregates, matching the lexical case.
+
+  Each global has its own *cell*: a process-dictionary entry keyed by
+  a fresh reference, holding the value. The globals slot maps names to
+  cells. The evaluator resolves a global reference to its cell once,
+  when it compiles the reference, so reading a global at run time is a
+  single process-dictionary get rather than a lookup by name. A cell
+  is created the first time a name is defined or compiled as a
+  reference, and holds an "unbound" sentinel until it is defined.
 
   The globals slot is owned by the process that calls `new/0` and is
   reclaimed when that process exits, so per-execution sandboxing
@@ -63,6 +71,9 @@ defmodule Schooner.Env do
   # so a forward reference within an init can be flagged as a runtime
   # error rather than silently returning `:unspecified`.
   @rec_uninitialised :__schooner_rec_uninitialised__
+
+  # Held in a global's cell before the name is defined.
+  @unbound :__schooner_unbound__
 
   @enforce_keys [:globals, :lex]
   defstruct [:globals, :lex]
@@ -138,9 +149,11 @@ defmodule Schooner.Env do
   defp rec_value(value, _name), do: {:ok, value}
 
   defp globals_lookup(ref, name) do
-    case :maps.find(name, :erlang.get(ref)) do
-      {:ok, _} = ok -> ok
-      :error -> :error
+    with {:ok, cell} <- :maps.find(name, :erlang.get(ref)) do
+      case :erlang.get(cell) do
+        @unbound -> :error
+        value -> {:ok, value}
+      end
     end
   end
 
@@ -154,9 +167,32 @@ defmodule Schooner.Env do
   """
   @spec define(t(), binary(), Value.t()) :: t()
   def define(%__MODULE__{globals: ref} = env, name, value) when is_binary(name) do
-    Process.put(ref, Map.put(Process.get(ref), name, value))
+    :erlang.put(global_cell(ref, name), value)
     env
   end
+
+  @doc false
+  # The cell holding global `name` in the globals slot `ref`, created
+  # (unbound) if the name has none yet.
+  @spec global_cell(reference(), binary()) :: reference()
+  def global_cell(ref, name) when is_binary(name) do
+    cells = :erlang.get(ref)
+
+    case cells do
+      %{^name => cell} ->
+        cell
+
+      _ ->
+        cell = make_ref()
+        :erlang.put(cell, @unbound)
+        :erlang.put(ref, Map.put(cells, name, cell))
+        cell
+    end
+  end
+
+  @doc false
+  @spec unbound() :: atom()
+  def unbound, do: @unbound
 
   @doc "Push a new lexical frame on top of `env`."
   @spec extend(t(), [{binary(), Value.t()}]) :: t()

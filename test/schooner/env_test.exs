@@ -2,6 +2,8 @@ defmodule Schooner.EnvTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Env
+  alias Schooner.Eval
+  alias Schooner.Eval.Analyze
   alias Schooner.Value
 
   test "new/0 returns an env with no lexical frames" do
@@ -49,6 +51,38 @@ defmodule Schooner.EnvTest do
     base = Env.new() |> Env.extend([{"a", 1}])
     Env.define(base, "later", 42)
     assert Env.lookup(base, "later") == {:ok, 42}
+  end
+
+  describe "global cells" do
+    test "a cell exists before its name is defined and sees the later define" do
+      env = Env.new()
+      cell = Env.global_cell(env.globals, "later")
+      assert Env.lookup(env, "later") == :error
+      assert Env.global_cell(env.globals, "later") == cell
+
+      Env.define(env, "later", 7)
+      assert Process.get(cell) == 7
+      assert Env.lookup(env, "later") == {:ok, 7}
+    end
+
+    test "a compiled reference made before the define reads the defined value" do
+      env = Env.new()
+
+      code =
+        Value.symbol("x") |> Analyze.analyze() |> Eval.compile(env.globals)
+
+      e = assert_raise Eval.Error, fn -> code.(env) end
+      assert e.reason == {:unbound, "x"}
+
+      Env.define(env, "x", 1)
+      assert code.(env) == 1
+      Env.define(env, "x", 2)
+      assert code.(env) == 2
+    end
+
+    test "forward references between top-level procedures resolve" do
+      assert Schooner.run!("(define (f) (g)) (define (g) 'ok) (f)") == Value.symbol("ok")
+    end
   end
 
   test "two envs created independently do not share globals" do

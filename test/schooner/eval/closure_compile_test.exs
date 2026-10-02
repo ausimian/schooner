@@ -1,6 +1,6 @@
 defmodule Schooner.Eval.ClosureCompileTest do
   @moduledoc """
-  `Schooner.Eval.compile/1` turns analysed IR into closures, with
+  `Schooner.Eval.compile/2` turns analysed IR into closures, with
   applications specialised on argument count. These tests pin the
   behaviour each specialisation must share with the general path, and
   that `%Schooner.Compiled{}` stays plain data.

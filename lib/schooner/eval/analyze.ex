@@ -103,6 +103,8 @@ defmodule Schooner.Eval.Analyze do
           | {:define_values, params(), ir()}
           | {:seq, [ir()]}
           | {:letrec, [binary()], [binding()], [ir()]}
+          | {:fixrec, [{tuple(), [ir()]}], [ir()]}
+          | {:known_call, non_neg_integer(), non_neg_integer(), tuple(), [ir()]}
           | {:quasi, template()}
           | {:guard, {binary()}, [guard_clause()], [ir()]}
           | {:raise, Exception.t()}
@@ -304,7 +306,7 @@ defmodule Schooner.Eval.Analyze do
           {:multi, spec, analyze(init, rec_scope), targets}
       end)
 
-    {:letrec, names, bindings, analyze_deferred_body(body, rec_scope)}
+    known_calls({:letrec, names, bindings, analyze_deferred_body(body, rec_scope)})
   end
 
   defp analyze_letrec_star(_, _scope), do: raise(Error, reason: {:bad_special_form, "letrec*"})
@@ -330,6 +332,159 @@ defmodule Schooner.Eval.Analyze do
 
   defp binding_names({:single, name, _}), do: [name]
   defp binding_names({:multi, spec, _}), do: spec_names(spec)
+
+  # ---------------------------------------------------------------------------
+  # Known calls
+  # ---------------------------------------------------------------------------
+  #
+  # A `letrec*` whose bindings are all fixed-arity lambdas, and whose
+  # names are only ever used as the operator of a call with the right
+  # number of arguments, can never let one of those lambdas be observed
+  # as a value: nothing takes it, stores it, compares it or returns it.
+  # Named `let` is the common case. Such a `letrec*` becomes
+  #
+  #     {:fixrec, [{names_tuple, body}, ...], body}
+  #
+  # and each call to one of its lambdas becomes
+  #
+  #     {:known_call, depth, slot, names_tuple, args}
+  #
+  # which the evaluator runs by pushing the callee's argument frame and
+  # tail-calling its compiled body, with no closure, process-dictionary
+  # frame, lookup or arity check.
+  #
+  # A call from inside a nested `lambda` disqualifies the `letrec*`:
+  # that closure can outlive the form, and calling it later must still
+  # see the released-frame lookup `Schooner.Env` describes. Calls from
+  # inside a nested `:fixrec` lambda are fine, since it is never a
+  # closure either; this is what lets nested named `let` loops both
+  # convert. Analysis runs bottom-up, so inner forms have already been
+  # converted by the time an outer one is checked.
+  #
+  # Every lambda init evaluates without effects and every reference is
+  # a call, so no init can observe an uninitialised slot and the
+  # conversion keeps evaluation order and error timing unchanged.
+
+  defp known_calls({:letrec, names, bindings, body} = node) do
+    case known_arities(bindings, 0, []) do
+      {:ok, arities} when length(arities) == length(names) ->
+        info = List.to_tuple(arities)
+
+        try do
+          lambdas =
+            for {:single, _slot, {:lambda, _params, {fnames, fbody}, _name}} <- bindings do
+              {fnames, known_all(fbody, 1, false, info)}
+            end
+
+          {:fixrec, lambdas, known_all(body, 0, false, info)}
+        catch
+          :not_known -> node
+        end
+
+      _ ->
+        node
+    end
+  end
+
+  # Slot `i` must be written by binding `i`, so the frame's lambdas
+  # line up with their slots.
+  defp known_arities([], _i, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp known_arities([{:single, i, {:lambda, {:fixed, n, _}, {fnames, _}, _}} | rest], i, acc),
+    do: known_arities(rest, i + 1, [{n, fnames} | acc])
+
+  defp known_arities(_bindings, _i, _acc), do: :error
+
+  # Rewrite calls to the candidate frame `d` levels up, throwing
+  # `:not_known` at any other use of it. `lam?` is true under a nested
+  # `lambda`. Depths in a `rref`'s or marked `gref`'s fallback are
+  # counted from the same scope as the reference itself.
+  defp known_all(irs, d, lam?, info), do: Enum.map(irs, &known(&1, d, lam?, info))
+
+  defp known({:app, {:rref, d, slot, _name, _fallback}, args}, d, false, info) do
+    {n, fnames} = elem(info, slot)
+    if length(args) != n, do: throw(:not_known)
+    {:known_call, d, slot, fnames, known_all(args, d, false, info)}
+  end
+
+  defp known({:rref, d, _slot, _name, _fallback}, d, _lam?, _info), do: throw(:not_known)
+
+  defp known({:rref, depth, slot, name, fallback}, d, lam?, info),
+    do: {:rref, depth, slot, name, known(fallback, d, lam?, info)}
+
+  defp known({:gref, _name, nil} = ref, _d, _lam?, _info), do: ref
+
+  defp known({:gref, name, marked}, d, lam?, info),
+    do: {:gref, name, known(marked, d, lam?, info)}
+
+  defp known({tag, _} = leaf, _d, _lam?, _info) when tag in [:const, :raise], do: leaf
+  defp known({:lref, _, _} = ref, _d, _lam?, _info), do: ref
+
+  defp known({:if, test, then_e, else_e}, d, lam?, info),
+    do:
+      {:if, known(test, d, lam?, info), known(then_e, d, lam?, info),
+       known(else_e, d, lam?, info)}
+
+  defp known({:app, head, args}, d, lam?, info),
+    do: {:app, known(head, d, lam?, info), known_all(args, d, lam?, info)}
+
+  defp known({:known_call, depth, slot, fnames, args}, d, lam?, info),
+    do: {:known_call, depth, slot, fnames, known_all(args, d, lam?, info)}
+
+  defp known({:lambda, params, {fnames, body}, name}, d, _lam?, info),
+    do: {:lambda, params, {fnames, known_all(body, d + 1, true, info)}, name}
+
+  defp known({:define, name, expr}, d, lam?, info),
+    do: {:define, name, known(expr, d, lam?, info)}
+
+  defp known({:define_values, spec, expr}, d, lam?, info),
+    do: {:define_values, spec, known(expr, d, lam?, info)}
+
+  defp known({:seq, body}, d, lam?, info), do: {:seq, known_all(body, d, lam?, info)}
+
+  defp known({:letrec, names, bindings, body}, d, lam?, info) do
+    bindings =
+      Enum.map(bindings, fn
+        {:single, slot, init} -> {:single, slot, known(init, d + 1, lam?, info)}
+        {:multi, spec, init, slots} -> {:multi, spec, known(init, d + 1, lam?, info), slots}
+      end)
+
+    {:letrec, names, bindings, known_all(body, d + 1, lam?, info)}
+  end
+
+  defp known({:fixrec, lambdas, body}, d, lam?, info) do
+    lambdas = for {fnames, fbody} <- lambdas, do: {fnames, known_all(fbody, d + 2, lam?, info)}
+    {:fixrec, lambdas, known_all(body, d + 1, lam?, info)}
+  end
+
+  defp known({:quasi, template}, d, lam?, info),
+    do: {:quasi, known_template(template, d, lam?, info)}
+
+  defp known({:guard, names, clauses, body}, d, lam?, info) do
+    clauses = Enum.map(clauses, &known_clause(&1, d + 1, lam?, info))
+    {:guard, names, clauses, known_all(body, d, lam?, info)}
+  end
+
+  defp known_template({:qc, _} = t, _d, _lam?, _info), do: t
+  defp known_template({:qu, expr}, d, lam?, info), do: {:qu, known(expr, d, lam?, info)}
+
+  defp known_template({:qcons, h, t}, d, lam?, info),
+    do: {:qcons, known_template(h, d, lam?, info), known_template(t, d, lam?, info)}
+
+  defp known_template({:qsplice, expr, t}, d, lam?, info),
+    do: {:qsplice, known(expr, d, lam?, info), known_template(t, d, lam?, info)}
+
+  defp known_template({:qvec, t}, d, lam?, info), do: {:qvec, known_template(t, d, lam?, info)}
+
+  defp known_clause({:else, body}, d, lam?, info), do: {:else, known_all(body, d, lam?, info)}
+  defp known_clause({:bad, _} = bad, _d, _lam?, _info), do: bad
+  defp known_clause({:test, test}, d, lam?, info), do: {:test, known(test, d, lam?, info)}
+
+  defp known_clause({:arrow, test, proc}, d, lam?, info),
+    do: {:arrow, known(test, d, lam?, info), known(proc, d, lam?, info)}
+
+  defp known_clause({:test_body, test, body}, d, lam?, info),
+    do: {:test_body, known(test, d, lam?, info), known_all(body, d, lam?, info)}
 
   # ---------------------------------------------------------------------------
   # quasiquote
