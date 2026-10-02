@@ -6,11 +6,10 @@ up data, talking to a database — comes from **host functions**:
 Elixir functions you register as Scheme procedures via
 `Schooner.Host.library/1`.
 
-This guide walks the host-function authoring API: building a
-library, the conversion helpers that move between Scheme values
-and Elixir terms, foreign payloads for opaque host data, the
-callback pattern (Scheme → host → Scheme), and how to map errors
-between the two sides.
+This guide covers building a host library, the conversion
+helpers that move between Scheme values and Elixir terms, foreign
+payloads for opaque host data, the callback pattern (Scheme →
+host → Scheme), and how to map errors between the two sides.
 
 > **Worked reference:** `Schooner.Time` (in `lib/schooner/time.ex`)
 > is the r7rs `(scheme time)` library shipped as an opt-in host
@@ -104,9 +103,7 @@ Elixir terms, use the helpers on `Schooner.Host`.
 
 - `to_*!/2` — **asserting**: raises `Schooner.Host.TypeError` on
   shape mismatch. Takes a keyword list with `:op` so the error
-  points at the host call site. The bang in the name is the
-  Elixir convention for "raises rather than returns a tagged
-  result".
+  points at the host call site.
 - `to_*/1` — **total**: returns `{:ok, term} | :error`. Use for
   the "branch on shape" case.
 
@@ -123,10 +120,10 @@ end
 
 ### Avoid `import Schooner.Host`
 
-Several helper names — `Schooner.Host.to_string/1` and
-`Schooner.Host.to_string!/2` — shadow `Kernel.to_string/1`.
-**Use `alias Schooner.Host`** and call the helpers as
-`Host.to_string!(value, op: "...")`. Don't `import` the module.
+`Schooner.Host.to_string/1` conflicts with the auto-imported
+`Kernel.to_string/1`. **Use `alias Schooner.Host`** and call the
+helpers as `Host.to_string!(value, op: "...")` rather than
+importing the module.
 
 ### Available accessors
 
@@ -152,7 +149,7 @@ whatever number it is" form.
 
 ### Constructors
 
-The same module re-exports `Schooner.Value`'s constructors:
+The same module delegates to `Schooner.Value`'s constructors:
 `Host.string/1`, `Host.symbol/1`, `Host.list/1`, `Host.vector/1`,
 `Host.foreign/1`, `Host.primitive/3`, etc. Use them instead of
 naming the internal tag shape directly — that way future
@@ -198,9 +195,6 @@ contents to `#<foreign>`. `eq?` / `eqv?` / `equal?` compare the
 wrapped Elixir terms with `===`, so two foreigns wrapping the
 same pid are equal.
 
-This is the right vehicle for any "host handle a script needs
-to reference but shouldn't see inside".
-
 ## Callback pattern (Scheme → host → Scheme)
 
 A host function can receive a Scheme procedure as an argument
@@ -228,9 +222,10 @@ Used from Scheme:
 `Schooner.apply!/2` works on any procedure value — closures,
 primitives, parameters. The callback runs in the same Elixir
 process as the outer eval, so it inherits the current
-exception/parameter state. A `with-exception-handler` installed
-in the outer script catches an error raised three frames deep
-across two host hops.
+exception and parameter state. A `with-exception-handler` or
+`guard` in the outer script therefore also handles a `raise`
+from inside the callback, however many host calls lie between
+them.
 
 ### Continuation barrier (documentation-only in v1)
 
@@ -241,7 +236,7 @@ escape-only; a continuation invoked outside its dynamic extent
 already raises a structured error, and the host-boundary case
 fires the same guard. So the rule is:
 
-> Capture-and-escape across the host boundary is undefined and
+> Capture-and-escape across the host boundary is unsupported and
 > raises `Schooner.Eval.Error`. Use `(raise ...)` and
 > `with-exception-handler` for callbacks that need long-lived
 > non-local exit — exceptions cross the host boundary cleanly
@@ -252,7 +247,9 @@ which will turn the rule into a hard runtime barrier.
 
 ## Error mapping
 
-Two failure modes cross the boundary in opposite directions.
+An error raised in host code either reaches the script's
+exception handlers or bypasses them and surfaces to the embedder,
+depending on its type.
 
 ### Host raises a Scheme-catchable error
 
@@ -302,7 +299,7 @@ pattern above; if you want it to be a host-side bug report,
 use `Schooner.Host.TypeError` (which is what the assertion
 helpers produce automatically).
 
-## Tying it all together
+## A complete example
 
 ```elixir
 defmodule MyApp.Embed do

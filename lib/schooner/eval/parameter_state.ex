@@ -38,9 +38,9 @@ defmodule Schooner.Eval.ParameterState do
 
   @doc """
   Snapshot/restore the entire stack. Every `parameterize`-installer
-  saves the stack on entry and restores it on every exit path. The
-  symmetric pattern is identical to `ExceptionState`'s — see its
-  module docs for why a blind pop in an `after` clause is wrong.
+  saves the stack on entry and restores it on every exit path, as
+  with `Schooner.Eval.ExceptionState.snapshot/0`, whose docs explain
+  why a blind pop in an `after` clause is wrong.
   """
   @spec snapshot() :: [frame()]
   def snapshot, do: get_stack()

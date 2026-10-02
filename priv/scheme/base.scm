@@ -1,12 +1,12 @@
-;; Macros that re-express phase 7's derived forms (when, unless, and,
-;; or, let, let*, letrec, cond, case, do) as syntax-rules. Loaded once
-;; at boot by Schooner.Expander.bootstrap_env/0 and surfaced as the
-;; macro half of the (scheme base) library by
-;; Schooner.Library.Standard.boot/0.
+;; The derived forms of (scheme base) (when, unless, and, or, let,
+;; let*, letrec, cond, case, do, let-values, let*-values, parameterize)
+;; as syntax-rules macros. Loaded once at boot by
+;; Schooner.Expander.bootstrap_env/0 and exported as the macros of the
+;; (scheme base) library by Schooner.Library.Standard.boot/0.
 ;;
-;; quasiquote stays as a special form in Schooner.Eval (r7rs §4.2.8
-;; defines it level-aware over vectors as well, which is awkward to
-;; express with finite, non-recursive syntax-rules rules).
+;; quasiquote stays a core form handled by the evaluator: r7rs §4.2.8
+;; defines it in terms of nesting levels and vector templates, which
+;; is awkward to express in syntax-rules.
 ;;
 ;; letrec* stays a core form (the workhorse for both user-facing
 ;; recursive bindings and internal-define splicing); the macros below
@@ -139,8 +139,9 @@
 
 ;; -- multi-value binding ---------------------------------------------------
 ;;
-;; Standard r7rs §4.2.2 reference implementation, using string literals
-;; ("bind" / "mktmp") as helper-rule keywords to drive the binding-walk.
+;; The r7rs §7.3 reference implementation, using string literals
+;; ("bind" / "mktmp") as helper-rule keywords to drive the walk over
+;; the bindings.
 
 (define-syntax let-values
   (syntax-rules ()

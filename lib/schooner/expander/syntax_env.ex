@@ -4,15 +4,15 @@ defmodule Schooner.Expander.SyntaxEnv do
 
   Holds two kinds of bindings:
 
-    * **Macros** — a transformer function and a set of "literals" used by
-      `syntax-rules` to recognise constants in patterns. Transformers are
-      stored both globally (top-level `define-syntax`) and per-frame
-      (`let-syntax`, `letrec-syntax`).
-    * **Variables** — names bound as runtime values (lambda parameters,
-      `define`s, `let`s after expansion). The expander records these only
-      so that an inner `let` shadowing a macro keyword does the right
-      thing: an enclosed reference resolves as a variable rather than as
-      the outer macro.
+    * **Macros** — `{:macro, transformer}`, where the transformer is a
+      compiled `syntax-rules` closure. Top-level `define-syntax` binds
+      them globally; `let-syntax` and `letrec-syntax` bind them in a
+      lexical frame.
+    * **Variables** — names bound as runtime values by an enclosing
+      `lambda` (which covers the `let` family after expansion), procedure
+      `define`, `letrec*`, or `guard` clause. The expander records these
+      only so that a local binding that shadows a macro keyword resolves
+      as a variable rather than as the outer macro.
 
   Frames are kept innermost-first. Resolution walks the lex frames and
   then the global map. Globals are intentionally a plain map rather than
@@ -57,9 +57,8 @@ defmodule Schooner.Expander.SyntaxEnv do
   @doc """
   Return a new env with `name` bound at top level to `transformer`.
 
-  Used for top-level `define-syntax`. Idempotently overwrites a
-  pre-existing binding under the same name (consistent with
-  `Env.define/3` for runtime values).
+  Used for top-level `define-syntax`. Replaces any existing binding of
+  the same name, as `Schooner.Env.define/3` does for runtime values.
   """
   @spec define_macro(t(), binary(), transformer()) :: t()
   def define_macro(%__MODULE__{globals: g} = env, name, transformer)

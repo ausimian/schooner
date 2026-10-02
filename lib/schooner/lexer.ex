@@ -468,9 +468,10 @@ defmodule Schooner.Lexer do
     {token, rest, col + taken + atom_len}
   end
 
-  # `parse_number/3` doesn't recognise complex literals; for decimal
-  # `#e` / `#i` prefixes fall through to the same complex-atom path the
-  # unprefixed scanner uses so `#e3+4i`, `#i1/2+1/3i` parse correctly.
+  # `parse_number/3` doesn't recognise complex literals, so a decimal
+  # prefixed literal that it rejects falls through to the complex-atom
+  # path the unprefixed scanner uses. This is what lets `#e3+4i` and
+  # `#i1/2+1/3i` parse.
   defp prefixed_complex_or_raise(raw, line, col, exactness) do
     case atom_kind(raw, false) do
       {:complex_literal, parts} -> complex_token(raw, parts, line, col, exactness)
@@ -647,7 +648,8 @@ defmodule Schooner.Lexer do
   defp starts_with_arrow?(<<?-, ?>, _::binary>>), do: true
   defp starts_with_arrow?(_), do: false
 
-  # An atom "looks numeric" if its first non-sign byte is a digit or '.'.
+  # An atom looks numeric if, after an optional sign, it starts with a
+  # digit or with `.` followed by a digit.
   defp numeric_lookalike?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp numeric_lookalike?(<<?., c, _::binary>>) when c in ?0..?9, do: true
   defp numeric_lookalike?(<<s, c, _::binary>>) when s in [?+, ?-] and c in ?0..?9, do: true
@@ -657,10 +659,11 @@ defmodule Schooner.Lexer do
   defp numeric_lookalike?(_), do: false
 
   # Try to recognise `<real>+<ureal>i`, `<real>-<ureal>i`, `<real>+i`,
-  # `<real>-i`, or `<real>@<real>`. Returns either:
+  # `<real>-i`, or `<real>@<real>`. Returns one of:
   #
   #   * `{real_raw, imag_raw}` — both halves as raw decimal strings
-  #     ready to feed back through `parse_number/3`
+  #     ready to feed back through `parse_number/3`; for `<real>±i`
+  #     the imaginary half is the integer `1` or `-1`
   #   * `{:polar, mag_raw, ang_raw}` — polar form, converted to
   #     rectangular by the token-builder
   #   * `:no_match` — atom is not a complex literal

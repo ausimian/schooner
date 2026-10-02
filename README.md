@@ -38,7 +38,7 @@ What's happening:
 - `Schooner.eval/2` returns `{:ok, value}` on success. `Schooner.Host.to_string!/2` extracts the underlying binary; `Schooner.Host.string/1` constructs a Scheme string for the return.
 - `Schooner.apply/2` invokes any Scheme procedure value (closure, primitive, or parameter) from Elixir.
 
-See the [Embedding](https://hexdocs.pm/schooner/embedding.html) and [Host Functions](https://hexdocs.pm/schooner/host-functions.html) guides for the full story.
+The [Embedding](https://hexdocs.pm/schooner/embedding.html) and [Host Functions](https://hexdocs.pm/schooner/host-functions.html) guides cover these APIs in detail.
 
 ## Installation
 
@@ -87,7 +87,7 @@ runnable example and a workaround.
 | ---                          | ---                                                                                                                                                       |
 | Mutation                     | None. `set!`, `set-car!`, `set-cdr!`, `string-set!`, `vector-set!`, `bytevector-u8-set!`, record mutators, `string-fill!`/`copy!`, `vector-fill!`/`copy!`, `list-set!` are not defined. |
 | Numeric procedures           | Inexact reals are double-precision only.                                                                                                                                                  |
-| Special-form names           | `if`, `let`, `cond`'s `=>`, etc. cannot be lexically rebound as ordinary variables. The expander dispatches them on the literal symbol before consulting the lexical environment. |
+| Special-form names           | Core special forms (`if`, `lambda`, `quote`, `define`, etc.) are always the special form at the head of a form, even where a local variable of the same name is in scope. A top-level `define` does not shadow a macro keyword such as `when`, and `syntax-rules` literals such as `cond`'s `else` and `=>` match by name even when locally bound. |
 | Macro hygiene                | `(syntax-rules <id> () ...)` custom-ellipsis identifier and `define-syntax` introduced by another macro template are not supported.                                                                          |
 | `define-syntax` placement    | Top-level only — a `define-syntax` inside a `(let () ...)` body is rejected.                                                                              |
 | `call/cc`                    | Escape-only. A captured continuation invoked after its dynamic extent has ended raises a Schooner error. Multi-shot continuations and `dynamic-wind` re-entry are deferred to v2.0. |

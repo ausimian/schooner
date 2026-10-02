@@ -25,9 +25,10 @@ defmodule Schooner.Library.Loader do
       Paths resolve relative to the including file, so nested includes
       thread the directory of the innermost file.
 
-  Relative include paths that resolve outside the entry-point's
-  directory are rejected; absolute paths are likewise rejected unless
-  they fall inside the entry-point's directory.
+  When a base directory is known (from `load_file/2` or the
+  `:base_dir` option), include paths, relative or absolute, that
+  resolve outside it are rejected. Without one, relative include
+  paths are an error and absolute paths are not checked.
 
   ## Diagnostics
 

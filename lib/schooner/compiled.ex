@@ -16,25 +16,23 @@ defmodule Schooner.Compiled do
   ## Reuse semantics
 
   The same `%Compiled{}` can be passed to `Schooner.run_compiled/2`
-  many times against many `Schooner.Environment`s — that is the
-  embedding cache win. The captured `var_bindings` are re-applied
+  many times against many `Schooner.Environment`s, which is what
+  makes it worth caching. The captured `var_bindings` are re-applied
   to the runtime env on every call; macros expanded at compile
   time stay expanded.
 
-  Compatibility constraint: a compiled program is valid against
-  any environment whose **macro environment is compatible** with
-  the registry passed to `compile`. Variable sets can differ
-  freely — host primitives can be swapped, and the compiled
-  program's `(import ...)` bindings are baked in so they shadow
-  any same-named runtime overrides. Macro additions made *after*
-  compile (via a different `Environment` at run time) will not
-  re-expand the program.
+  Macro expansion is fixed at compile time: running the program
+  against an `Environment` whose macros differ from the one passed
+  to `compile` does not re-expand it. Variable bindings can differ
+  freely, so host primitives can be swapped between runs. The
+  program's own `(import ...)` bindings are re-applied on each run
+  and shadow any same-named binding in the runtime environment.
 
   ## Opacity
 
-  Embedders must treat the struct as opaque — pattern-matching on
-  internals is unsupported and reserved for evaluator changes
-  (the v2.0 evaluator rewrite is the seam this opacity protects).
+  Embedders must treat the struct as opaque. Pattern-matching on
+  its internals is unsupported, because their shape changes with
+  the evaluator's internal representation.
   """
 
   alias Schooner.Eval.Analyze

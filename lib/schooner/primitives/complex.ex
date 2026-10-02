@@ -54,8 +54,8 @@ defmodule Schooner.Primitives.Complex do
   end
 
   # `magnitude * (cos angle + i sin angle)`. Both components are
-  # forced to floats — polar form intrinsically introduces
-  # transcendentals so the result is inexact even for rational inputs.
+  # forced to floats: cos and sin are transcendental, so the result is
+  # inexact even for rational inputs.
   defp make_polar([m, a]) do
     mf = require_finite_real!("make-polar", m)
     af = require_finite_real!("make-polar", a)
@@ -66,10 +66,8 @@ defmodule Schooner.Primitives.Complex do
   defp real_part([n]) when is_real_number(n), do: n
   defp real_part([other]), do: raise_type("real-part", other)
 
-  # Imag part of a real takes its exactness from the operand: an exact
-  # real has imag 0, an inexact real has imag 0.0. Matches r7rs §6.2.6
-  # so `(eqv? 1 1)` ⟹ #t but `(eqv? 1.0 (real-part 1.0))` keeps the
-  # inexact contagion when `imag-part` is later applied to the same.
+  # The imaginary part of a real takes its exactness from the operand:
+  # 0 for an exact real, 0.0 for an inexact one.
   defp imag_part([{:complex, _, i}]), do: i
   defp imag_part([n]) when is_integer(n) or is_rational(n), do: 0
   defp imag_part([n]) when is_float(n), do: 0.0

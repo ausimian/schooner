@@ -16,19 +16,17 @@ defmodule Schooner.Reader do
   Datum comments (`#;`) skip exactly one following datum and may stack.
 
   Errors are raised as `Schooner.Reader.Error` with a structured reason
-  and source position so downstream tooling can quote the offending input
-  back to the user.
+  and the source position of the offending input.
 
   ## Positioned output
 
   `read_string_positioned/1` returns each top-level datum paired with a
   parallel "position tree" mirroring the datum's spine. Each position
   tree node carries the `{line, column}` of the datum's first token.
-  Use the helpers `position_of/1` and `list_positions/1` to walk the
-  tree alongside the datum. The unpositioned `read_string/1` runs a
-  separate fast path that does not allocate the position spine — it is
-  the right choice for hot paths (REPL, `Standard.boot/0`) where
-  positions are unused.
+  Use `position_of/1` and `list_positions/1` to walk the tree alongside
+  the datum. `read_string/1` is a separate code path that does not
+  build position trees; callers that never report positions, such as
+  the `Schooner` entry points and `Standard.boot/0`, use it.
   """
 
   alias Schooner.Lexer
@@ -41,7 +39,8 @@ defmodule Schooner.Reader do
     * `{:atom, pos}` — non-compound datum (symbol, number, string, char,
       bool, `[]`, etc.) or the terminating `[]` of a proper list.
     * `{:pair, pos, car_tree, cdr_tree}` — cons cell. `pos` is the
-      position of the opening `(` of the surrounding list.
+      position of the opening `(` of the surrounding list, or of the
+      quote character for `'x`-style abbreviations.
     * `{:vector, pos, [item_tree]}` — `#(...)` literal.
     * `{:bytevector, pos}` — `#u8(...)` literal; bytes are atoms with no
       individual sub-trees.

@@ -1,12 +1,12 @@
 defmodule Schooner.Primitive.Error do
   @moduledoc """
-  Exception raised by built-in primitives for domain-specific failures —
-  type errors, division by zero, and the "would require complex /
-  irrational" cases that Schooner does not implement.
+  Exception raised by built-in primitives for domain-specific failures:
+  type errors, division by zero, out-of-range indices and sizes,
+  improper lists, and results Schooner cannot represent.
 
   Kept distinct from `Schooner.Eval.Error` because primitives report a
-  different vocabulary of failures than the evaluator. Tests can pattern
-  on `:reason` to pin behaviour without coupling to wording.
+  different vocabulary of failures than the evaluator. Tests can match
+  on `:reason` without coupling to the message wording.
   """
 
   defexception [:reason, :message]
@@ -26,7 +26,7 @@ defmodule Schooner.Primitive.Error do
   end
 
   defp format({:irrational, op, arg}) do
-    "`(#{op} #{inspect(arg)})` would yield an irrational; Schooner has no rational tower"
+    "`#{op}`: unsupported argument #{inspect(arg)}"
   end
 
   defp format({:not_representable_exact, value}) do

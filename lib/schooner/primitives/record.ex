@@ -2,26 +2,23 @@ defmodule Schooner.Primitives.Record do
   @moduledoc """
   Runtime primitives that back the `define-record-type` form.
 
-  The expander emits calls to these primitives — they are not part
-  of the user-facing language proper. Each call carries the record
-  type's identity (a fresh `{:record_type, name, unique_int}` term
-  minted at expansion time) so the primitive can verify that the
-  value it was handed is actually an instance of that type before
-  doing anything else.
+  The expander emits calls to these primitives; they are not part of
+  the user-facing language. Each call carries the record type's
+  identity (a fresh `{:record_type, name, unique_int}` term minted at
+  expansion time) so the primitive can check that its argument is an
+  instance of that type.
 
-  Since type identity comes from a per-expansion gensym, two
-  `define-record-type` forms with the same record name in
-  different lexical scopes mint different identities; the
-  predicate from one scope returns `#f` for an instance from the
-  other, even though the renderings look identical.
+  Because each expansion mints a new identity, two
+  `define-record-type` forms with the same record name produce
+  distinct types: the predicate from one returns `#f` for an instance
+  of the other, even though both print the same way.
   """
 
   alias Schooner.Primitive.Error
   alias Schooner.Value
 
-  # Names exposed publicly so the expander emits exactly the strings
-  # this module registers. Single source of truth — adding a new
-  # record primitive only requires updating `specs/0`.
+  # Exposed through the functions below so the expander emits exactly
+  # the names this module registers.
   @instance_name "%record-instance"
   @predicate_name "%record-of?"
   @ref_name "%record-ref"

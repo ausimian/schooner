@@ -25,8 +25,8 @@ defmodule Schooner.Environment do
       `Schooner.Host.library/1` and a non-empty `:name`) join the
       registry alongside the standard libraries. The script must
       `(import ...)` them to bring their bindings into scope.
-      Sandbox-safe — the embedder controls the menu, the script
-      controls which dishes it orders.
+      This is sandbox-safe: the embedder decides what is available
+      and the script decides what to import.
 
     * **Anonymous host libraries** (`name: []`) bypass the registry
       entirely. Their bindings are applied directly to the runtime
@@ -45,12 +45,12 @@ defmodule Schooner.Environment do
   ## Re-use across evaluations
 
   An `%Environment{}` can be passed to many `Schooner.eval/2,3`
-  calls. The runtime `env`'s globals slot persists across
+  calls, all from the process that created it: its globals live in
+  that process's dictionary. The runtime `env`'s globals slot persists across
   evaluations, so a script's top-level `define`s remain visible to
-  later scripts evaluated against the same environment. This is
-  the embedding-friendly model for things like rule-loading: load
-  rule definitions once, evaluate many trigger scripts that call
-  them.
+  later scripts evaluated against the same environment. For
+  example, a rules engine can load rule definitions once and then
+  evaluate many trigger scripts that call them.
 
   Each call to `eval` snapshots and restores the per-process
   exception / continuation / parameter state, so leftover state

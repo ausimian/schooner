@@ -71,17 +71,14 @@ recommended pattern is to run untrusted scripts inside a
 short-lived process bounded by the standard BEAM tools:
 
 ```elixir
-def run_untrusted(source, env) do
+def run_untrusted(source, env_opts) do
   task =
-    Task.Supervisor.async_nolink(
-      MyApp.TaskSupervisor,
-      fn -> Schooner.eval(source, env) end,
-      max_heap_size: %{
-        size: 50_000_000,         # ~50 MB heap
-        kill: true,
-        error_logger: false
-      }
-    )
+    Task.Supervisor.async_nolink(MyApp.TaskSupervisor, fn ->
+      # Measured in words: 6_250_000 words is about 50 MB on a 64-bit VM.
+      Process.flag(:max_heap_size, %{size: 6_250_000, kill: true, error_logger: false})
+      env = Schooner.Environment.new(env_opts)
+      Schooner.eval(source, env)
+    end)
 
   case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
     {:ok, result}      -> result                     # {:ok, value} | {:error, _}
@@ -91,7 +88,14 @@ def run_untrusted(source, env) do
 end
 ```
 
-Three knobs are doing the work:
+The environment is built inside the task because its globals live
+in the process dictionary of the process that creates it; an
+environment built in the caller cannot be used from the task. The
+heap limit is also set from inside the task, with `Process.flag/2`:
+`Task.Supervisor.async_nolink/3` does not take spawn options, and
+passing it `:max_heap_size` has no effect.
+
+Three settings bound the task:
 
 - **`:max_heap_size`** — when the spawned task's heap exceeds
   the cap, the BEAM kills it. A runaway `(make-vector
@@ -100,14 +104,12 @@ Three knobs are doing the work:
 - **`Task.yield(task, timeout)`** — bounds wall-clock time. A
   script that loops forever doesn't return on its own; the
   yield window expires and we move to shutdown.
-- **`Task.shutdown(task, :brutal_kill)`** — guarantees the task
-  is gone after the timeout, even if it was busy executing
-  pure Elixir/native code that would not check reductions.
+- **`Task.shutdown(task, :brutal_kill)`** — kills the task if
+  the yield window expires without a result.
 
-Adjust `max_heap_size` and the yield timeout to whatever
-budget makes sense for your workload. The same pattern works
-with plain `spawn` + monitoring if you don't want a Task
-supervisor.
+Set `max_heap_size` and the yield timeout to suit your
+workload. The same pattern works with plain `spawn` + monitoring
+if you don't want a Task supervisor.
 
 ## What the script can and cannot do
 
@@ -162,10 +164,11 @@ Some values cannot be marshalled out of Scheme back into idiomatic
 Elixir. `Schooner.eval/2` may return them unchanged, but writing
 host code that manipulates them is unsupported:
 
-- **Closures** — the captured env carries a process-dictionary
-  globals slot, so a closure returned by `eval` is valid only in
-  the calling Elixir process. Treat it as a handle, invoke it via
-  `Schooner.apply/2`, don't pass it to other processes.
+- **Closures** — a closure's environment refers to globals held
+  in the process dictionary, so a closure returned by `eval` is
+  valid only in the process that evaluated it. Treat it as a
+  handle, invoke it via `Schooner.apply/2`, don't pass it to
+  other processes.
 - **Records** — opaque from the host side unless your host code
   knows the type. Use `Schooner.Host.foreign/1` to wrap host data
   you want to pass through Scheme; don't define record types in
@@ -188,19 +191,15 @@ Putting it together — what a host-side wrapper might look like:
 
 ```elixir
 defmodule MyApp.Sandbox do
-  @sandbox_env Schooner.Environment.new(
-                 standard_libraries: [:base, :char, :write],
-                 pre_imports: [["scheme", "base"]]
-               )
-
   def run(source, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 5_000)
-    heap = Keyword.get(opts, :max_heap_size, 50_000_000)
+    # In words: about 50 MB on a 64-bit VM.
+    heap = Keyword.get(opts, :max_heap_size, 6_250_000)
 
     task =
-      Task.async(fn ->
+      Task.Supervisor.async_nolink(MyApp.TaskSupervisor, fn ->
         Process.flag(:max_heap_size, %{size: heap, kill: true, error_logger: false})
-        Schooner.eval(source, @sandbox_env)
+        Schooner.eval(source, sandbox_env())
       end)
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
@@ -209,6 +208,15 @@ defmodule MyApp.Sandbox do
       {:exit, :killed}       -> {:error, :resource_limit}
       nil                    -> {:error, :timeout}
     end
+  end
+
+  # Built inside the task on every run: an environment belongs to the
+  # process that creates it.
+  defp sandbox_env do
+    Schooner.Environment.new(
+      standard_libraries: [:base, :char, :write],
+      pre_imports: [["scheme", "base"]]
+    )
   end
 end
 ```

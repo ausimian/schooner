@@ -7,17 +7,15 @@ defmodule Schooner.Primitives.Write do
   Schooner has no port abstraction (see PLAN.md — I/O is delegated to
   host functions), so these primitives deviate from r7rs in two ways:
 
-    1. They take only the value (no port arg). The host wires up I/O
-       explicitly via injected functions.
+    1. They take only the value, with no port argument. Hosts that
+       need output inject their own functions.
     2. They return the rendered text as a Scheme string instead of
        writing to a port and returning unspecified. `(newline)`
-       returns the literal `"\\n"`; `(write-string str)` returns
-       `str` unchanged.
+       returns `"\\n"`; `(write-string str)` returns `str` unchanged.
 
-  This is the documented "string-port flavour" called out in the
-  Phase 13 plan. `write-shared` and `write-simple` delegate to `write`
-  because Schooner values are immutable persistent terms — there are
-  no shared structures to label and no cycles to break.
+  `write-shared` and `write-simple` delegate to `write`. Schooner
+  values are immutable, so they cannot contain cycles, and shared
+  substructure is written out in full rather than labelled.
   """
 
   alias Schooner.Primitive.Error

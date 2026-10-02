@@ -8,8 +8,8 @@ defmodule Schooner.Reader.Error do
       tagged tuple); meant to be machine-matchable in tests
     * `:position` — `{line, column}` of the offending input
 
-  The pretty `:message` is generated lazily so tests can assert on
-  `:reason` and `:position` without coupling to wording.
+  `:message` is derived from `:reason` and `:position`, so tests can
+  assert on those fields without coupling to the wording.
   """
 
   defexception [:reason, :position, :message]

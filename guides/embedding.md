@@ -3,9 +3,9 @@
 Schooner is a sandboxed Scheme interpreter you embed in an Elixir
 application. The host hands a script source to one of the entry
 points, gets back an Elixir term, and resource-bounds the work
-with the standard process tools. This guide is the five-minute
-getting-started — the first script, the value model you'll see on
-the way back, and the choice between the available entry points.
+with the standard process tools. This guide covers a first
+script, the choice of entry point, and the value model that results
+come back in.
 
 ## Hello, Schooner
 
@@ -43,8 +43,9 @@ bang and a tagged-tuple form:
 | `Schooner.run/1` and `Schooner.run!/1` | injects every shipped standard library when the script declares none | **Not sandbox-safe.** Every shipped primitive is in scope. | tests, REPL-style use, your own scripts |
 | `Schooner.eval/2,3` and `Schooner.eval!/2,3` | none — bindings come exclusively from the env and the script's own `(import ...)` | **Sandbox-safe.** The embedder controls the surface. | embedding scripts you do not control |
 
-Picking the wrong family for untrusted input is a sandbox-shaped
-hole. Prefer `eval/2` whenever the script source isn't yours.
+Running untrusted input through the `run` family gives it every
+shipped primitive. Use `eval/2` whenever the script source isn't
+yours.
 
 ## The `Schooner.Environment` shortcut
 
@@ -57,7 +58,7 @@ env =
   Schooner.Environment.new(
     standard_libraries: [:base, :char],   # only these are importable
     libraries: [my_log_lib],              # custom host library
-    pre_imports: [["myapp", "log"]]       # auto-imported, no script-side import needed
+    pre_imports: [["scheme", "base"], ["myapp", "log"]]  # imported without a script-side import
   )
 
 {:ok, value} = Schooner.eval("(info \"hello\") (+ 1 2)", env)
@@ -95,17 +96,16 @@ produced, in this representation:
 | Unspecified | `:unspecified` |
 | Foreign (host opaque) | `{:foreign, term}` |
 
-The strict bare-Elixir representations (integer, float, binary,
-list, boolean) are the same shape Elixir uses natively. Tagged
-representations exist where Scheme's type discrimination is
-finer than the BEAM's — symbols vs strings (both binaries),
-characters vs integers, vectors vs records vs closures (all
-tuples).
+Integers, floats, strings, lists, and booleans use Elixir's
+native representation. Tags appear where Scheme distinguishes
+types that the BEAM does not: symbols from strings (both
+binaries), characters from integers, and vectors from records
+and closures (all tuples).
 
 **Don't pattern-match `Schooner.Value` shapes directly in host
 code.** Use the conversion helpers in `Schooner.Host` — see
-[Host Functions](host-functions.md). They are the seam that
-future representation changes pivot on.
+[Host Functions](host-functions.md) — so that a future change to
+the representation does not break your host code.
 
 ## Calling Scheme procedures from Elixir
 
@@ -118,12 +118,13 @@ env = Schooner.Environment.new()
 {:ok, 42} = Schooner.apply(double, [21])
 ```
 
-Same pattern works for callbacks — see the host-functions guide.
+The same call invokes callbacks that a script passes to a host
+function; see [Host Functions](host-functions.md).
 
 ## Compile once, run many times
 
 For scripts you'll evaluate repeatedly, `Schooner.compile/2`
-caches the lex+read+expand work:
+does the reading, macro expansion, and analysis once:
 
 ```elixir
 env = Schooner.Environment.new()
@@ -137,9 +138,9 @@ The compiled artifact is opaque (`%Schooner.Compiled{}`) — its
 internals belong to the evaluator. You can run it against any
 `%Schooner.Environment{}` whose macro environment is compatible
 with the one passed to `compile`. Variable bindings from the
-script's `(import ...)` declarations are pre-resolved and baked
-in, so they're guaranteed to be in scope at run time regardless
-of the runtime env's registry.
+script's `(import ...)` declarations are resolved at compile
+time and stored in the artifact, so they are in scope at run time
+whatever the runtime environment's registry contains.
 
 ## Error handling
 

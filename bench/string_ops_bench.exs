@@ -4,8 +4,8 @@
 #
 # Run with: `mix run bench/string_ops_bench.exs`
 #
-# Output is a small table per primitive showing min / mean / max time over
-# `@iters` repetitions. No external bench dependency — `:timer.tc/1` is
+# Output is one line per primitive showing min / mean / median / max time
+# over `@iters` repetitions. No external bench dependency — `:timer.tc/1` is
 # enough for the size of effect we expect (single-walk vs. 2N walks).
 
 defmodule StringOpsBench do

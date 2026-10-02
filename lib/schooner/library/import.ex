@@ -16,13 +16,11 @@ defmodule Schooner.Library.Import do
 
   Modifiers compose: `(prefix (only (scheme base) car cdr) my-)`.
 
-  Resolution is purely against `Schooner.Library`'s registry — the
-  caller passes the registry in (typically `Schooner.Library.standard/0`).
+  Resolution is purely against a `Schooner.Library` registry that the
+  caller passes in (typically `Schooner.Library.standard/0`).
   Missing libraries raise `Schooner.Library.NotFoundError` with the
-  canonical name of the offender; missing names inside `only` or
-  `rename` are skipped silently to match r7rs's "ignore-not-present"
-  rule for `rename` and surface an error for `only` (the latter is
-  caught at the call site for clearer reporting).
+  canonical name of the offender. Names inside `only`, `except`, or
+  `rename` that the inner spec does not export are ignored.
   """
 
   alias Schooner.Env
@@ -36,8 +34,8 @@ defmodule Schooner.Library.Import do
   @doc """
   Walk the leading forms of a program, separating `(import ...)`
   declarations from the rest. r7rs requires imports to precede every
-  other top-level form in a program — once a non-import form is
-  encountered, no later `(import ...)` is accepted.
+  other top-level form in a program, so extraction stops at the first
+  non-import form; any later `(import ...)` is left in the body.
 
   Returns `{import_specs, body_forms}` where `import_specs` is the
   flat list of every spec datum across all leading `(import ...)`

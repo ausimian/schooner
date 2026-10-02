@@ -5,10 +5,9 @@ defmodule Schooner.Expander.SyntaxRules do
 
   ## Compiled shapes
 
-  Patterns and templates are pre-compiled at `define-syntax` time so
-  that each macro use only does the work specific to that input —
-  pattern matching against a small AST and walking a small AST to
-  emit code.
+  Patterns and templates are compiled once, when the `syntax-rules`
+  form is compiled, so each macro use only matches the input against
+  the compiled patterns and walks the chosen compiled template.
 
   Pattern AST nodes:
 
@@ -20,15 +19,20 @@ defmodule Schooner.Expander.SyntaxRules do
     * `{:const, value}` — matches `value` by `equal?` (r7rs §4.3.2:
       "P is a datum and F is equal to P in the sense of the equal?
       procedure")
-    * `{:list, head_pats, tail_pat}` — proper-or-improper list
+    * `{:list, head_pats, tail_pat}` — proper or improper list;
+      `tail_pat` is `[]` for a proper list
     * `{:list_ell, pre_pats, ell_pat, post_pats, tail_pat}` — list with
       one ellipsis
+    * `{:vector, pats}` / `{:vector_ell, pre_pats, ell_pat, post_pats}` —
+      the vector counterparts
 
   Template AST nodes:
 
     * `{:t_sym, name}` — literal identifier from the template
     * `{:t_pvar, name, depth}` — reference to a pattern variable
     * `{:t_const, value}` — non-symbol leaf
+    * `{:t_quote, datum}` — `(quote datum)`; identifiers in `datum`
+      other than pattern variables are emitted without hygiene marks
     * `{:t_list, items, tail}` — list (`items` is a list of
       `{element_template, ellipsis_count}` tuples; `ellipsis_count` is
       0 for plain elements and ≥ 1 for ellipsis-driven elements)
@@ -40,8 +44,9 @@ defmodule Schooner.Expander.SyntaxRules do
   rewritten to `name <> @mark_separator <> Integer.to_string(mark)`
   where `mark` is a fresh integer per expansion and the separator
   is a NUL byte (invalid in r7rs identifiers, so the marked name
-  cannot collide with anything a user can write). Pattern variables
-  are substituted verbatim, preserving any marks on user-supplied
+  cannot collide with anything a user can write). Identifiers in
+  `@core_keywords` are left unmarked. Pattern variables are
+  substituted verbatim, preserving any marks on user-supplied
   identifiers.
 
   At lookup time (in the expander's syntax env and in the evaluator's
@@ -72,10 +77,8 @@ defmodule Schooner.Expander.SyntaxRules do
   form being expanded) → expanded form.
 
   The transformer raises `Schooner.Eval.Error` with reason
-  `{:bad_special_form, name}` if no rule matches the supplied form,
-  mirroring what the throwaway phase-7 evaluator branches did so
-  that the regression tests preserved from that phase need no
-  special-casing for the expansion-time exception class.
+  `{:bad_special_form, name}` if no rule matches the supplied form:
+  the same error a malformed core special form produces.
   """
   @spec compile(Value.t()) :: (Value.t() -> Value.t())
   def compile([{:sym, "syntax-rules"} | tail]) do
@@ -96,10 +99,9 @@ defmodule Schooner.Expander.SyntaxRules do
   fallback lookup and for the expander when an introduced keyword
   needs to be recognised as its base form.
 
-  Short-circuits with a no-allocation `:binary.match/2` before
-  falling into `:binary.split/2`, because the overwhelming common
-  case is unmarked names — every plain user-written variable
-  reference goes through this on a lookup miss.
+  Checks with a non-allocating `:binary.match/2` before calling
+  `:binary.split/2`, because most names are unmarked and every
+  user-written variable reference goes through this on a lookup miss.
   """
   @spec strip_mark(binary()) :: {:ok, binary()} | :error
   def strip_mark(name) when is_binary(name) do
@@ -395,13 +397,10 @@ defmodule Schooner.Expander.SyntaxRules do
   # ---------------------------------------------------------------------------
 
   defp dispatch([], form, _mark) do
-    # Phase 7 raised `Schooner.Eval.Error` with `{:bad_special_form,
-    # name}` for malformed uses of derived forms. The macro layer
-    # mirrors that contract: a use that matches no `syntax-rules`
-    # clause is, from the caller's point of view, the same kind of
-    # failure as a malformed special-form invocation, so the regression
-    # tests carried over from phase 7 do not need to special-case the
-    # macro expander's exception class.
+    # A use that matches no rule raises the same `Schooner.Eval.Error`
+    # `{:bad_special_form, name}` as a malformed core special form, so
+    # a malformed `let` and a malformed `if` fail the same way even
+    # though one is a macro.
     raise EvalError, reason: {:bad_special_form, form_keyword(form)}
   end
 
@@ -703,13 +702,11 @@ defmodule Schooner.Expander.SyntaxRules do
     |> iterate_ellipsis(tmpl, n, env, mark, pvars_used)
   end
 
-  # The driving pvars all have the same length (or we'd raise) and we
-  # need O(N) total work per iteration count, not O(N²). Walk all
-  # the bound `:ellipsis_list`s in lockstep, peeling one element off
-  # each at every step and putting them into the sub-env. Termination
-  # is by emptiness of the first list — `validate_pvar_lengths` has
-  # already proved every list has the same length, so checking one
-  # is enough.
+  # Walk the driving pvars' `:ellipsis_list`s in lockstep, peeling one
+  # element off each per step and binding them in the sub-env; this
+  # keeps the work O(N) rather than O(N²) from indexing each list.
+  # `validate_pvar_lengths/2` has already checked that the lists have
+  # equal length, so stopping when the first is empty is enough.
   defp iterate_ellipsis([[] | _], _tmpl, _n, _env, _mark, _pvars), do: []
   defp iterate_ellipsis([], _tmpl, _n, _env, _mark, _pvars), do: []
 
@@ -735,9 +732,15 @@ defmodule Schooner.Expander.SyntaxRules do
   defp pvar_lists(pvars_used, env) do
     Enum.map(pvars_used, fn name ->
       case Map.fetch(env, name) do
-        {:ok, {:ellipsis_list, list}} -> list
-        {:ok, _} -> raise Error, reason: {:bad_template, "pvar `#{name}` not under ellipsis"}
-        :error -> raise Error, reason: {:bad_template, "pvar `#{name}` unbound"}
+        {:ok, {:ellipsis_list, list}} ->
+          list
+
+        {:ok, _} ->
+          raise Error,
+            reason: {:bad_template, "pattern variable `#{name}` is not under an ellipsis"}
+
+        :error ->
+          raise Error, reason: {:bad_template, "unbound pattern variable `#{name}`"}
       end
     end)
   end
@@ -750,7 +753,7 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  # All template-side pattern variables of depth ≥ `min_depth`. Used to
+  # All template-side pattern variables of depth ≥ `min`. Used to
   # decide which pvars drive an ellipsis: only those whose pattern depth
   # is at least the number of enclosing ellipses are eligible.
   defp template_pvars_at_depth([], _min), do: []

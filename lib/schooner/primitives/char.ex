@@ -5,10 +5,10 @@ defmodule Schooner.Primitives.Char do
   predicates.
 
   Schooner characters are single Unicode scalar values stored as
-  `{:char, codepoint}`. Case mappings that would expand to multiple
-  codepoints (e.g. `ß` → `SS`) leave the original character unchanged
-  — char-level mappings preserve the one-codepoint shape, and the
-  longer mapping is reachable through the string ops.
+  `{:char, codepoint}`. A case mapping that would expand to multiple
+  codepoints (e.g. `ß` → `SS`) leaves the character unchanged, since a
+  character holds exactly one codepoint; `string-upcase` and
+  `string-downcase` apply the full mapping.
   """
 
   alias Schooner.Primitive.Error

@@ -4,14 +4,13 @@ defmodule Schooner.Primitives.Parameters do
   and the runtime helper `%parameterize-apply` that the
   `parameterize` macro in `priv/scheme/base.scm` expands into.
 
-  Dynamic-binding bookkeeping lives in
-  `Schooner.Eval.ParameterState` — this module is the binding layer
-  that exposes those operations to Scheme code. The `parameterize`
-  derived form is a `syntax-rules` macro (so the binding expressions
-  are evaluated by the regular evaluator and converters live as
-  ordinary Scheme procedures), and only the runtime portion —
-  collect bindings, push a frame, run the thunk, restore on every
-  exit — is host-side.
+  Dynamic-binding bookkeeping lives in `Schooner.Eval.ParameterState`;
+  this module exposes those operations to Scheme code. `parameterize`
+  is a `syntax-rules` macro, so the parameter and value expressions
+  are evaluated by the regular evaluator and converters are ordinary
+  Scheme procedures. Only the runtime portion is implemented in
+  Elixir: collect the bindings, push a frame, run the thunk, and
+  restore the stack on every exit.
   """
 
   alias Schooner.Eval
@@ -53,17 +52,15 @@ defmodule Schooner.Primitives.Parameters do
   # ---------------------------------------------------------------------------
 
   # `bindings` is a Scheme list of (parameter . value) pairs, built
-  # by the `parameterize` macro from the source-order `(p v)`
-  # clauses. Each value is run through the parameter's converter (if
-  # any) *before* the frame is pushed, so a converter that errors
-  # rolls back cleanly: the partially-built frame never reaches the
-  # stack. The thunk is invoked for the dynamic extent of the frame.
-  # snapshot/restore (rather than a blind pop in the `after`) matches
-  # the established `with-exception-handler` pattern — a captured
-  # escape continuation that fires *during* the thunk leaves the
-  # stack at whatever depth it had when the escape walked through;
-  # the outer `restore/1` then collapses everything back to the
-  # pre-`parameterize` state.
+  # by the `parameterize` macro from the `(p v)` clauses in source
+  # order. Each value is run through the parameter's converter (if
+  # any) *before* the frame is pushed, so if a converter raises, the
+  # partially built frame never reaches the stack. The thunk runs for
+  # the dynamic extent of the frame. As in `with-exception-handler`,
+  # the stack is restored from a snapshot rather than popped in the
+  # `after`: an escape continuation invoked during the thunk can leave
+  # the stack at any depth, and `restore/1` returns it to its
+  # pre-`parameterize` state regardless.
   defp parameterize_apply([bindings, thunk]) do
     require_procedure!("parameterize", thunk)
     frame = build_frame(bindings, [])

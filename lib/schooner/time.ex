@@ -53,9 +53,8 @@ defmodule Schooner.Time do
 
     * `(current-second)` — inexact seconds since the epoch. Backed by
       `:os.system_time(:nanosecond) / 1.0e9`. R7RS specifies TAI
-      seconds; Schooner returns POSIX seconds, matching what every
-      mainstream Scheme implementation actually does (Chibi, Racket,
-      Guile).
+      seconds; Schooner returns POSIX seconds, as do mainstream
+      implementations such as Chibi, Racket, and Guile.
 
     * `(current-jiffy)` — exact monotonic integer. Backed by
       `:erlang.monotonic_time/0`. The absolute value is unspecified
@@ -64,8 +63,8 @@ defmodule Schooner.Time do
 
     * `(jiffies-per-second)` — exact integer giving the resolution of
       `current-jiffy`. Backed by
-      `:erlang.convert_time_unit(1, :second, :native)`. Expected
-      idiom: divide a jiffy difference by this to get seconds.
+      `:erlang.convert_time_unit(1, :second, :native)`. Divide a
+      jiffy difference by this to get seconds.
   """
 
   alias Schooner.Host

@@ -12,7 +12,7 @@ defmodule Schooner.Value do
   ## Representations
 
     * Booleans  — bare Elixir `true` / `false`. Only `false` is
-      Scheme-falsy. Every other value is truthy, including `:null` and `0`.
+      Scheme-falsy. Every other value is truthy, including `[]` and `0`.
     * Empty list — bare Elixir `[]`
     * Pair — Elixir cons cell `[car | cdr]`. Improper Scheme pairs are
       improper Erlang lists (`[a | b]` where `b` is not a list).
@@ -46,9 +46,9 @@ defmodule Schooner.Value do
     * Record — `{:record, type_id, fields_tuple}`
     * Record type identity — `{:record_type, name, unique_int}` —
       embedded as a literal in the bindings produced by
-      `define-record-type`. Self-evaluating; compared with `===` so
-      two definitions with the same record name in different
-      lexical scopes produce distinct identities.
+      `define-record-type`. Self-evaluating and compared with `===`;
+      the unique integer keeps two definitions with the same record
+      name in different lexical scopes distinct.
     * Error object — `{:error_obj, kind, message, irritants}` where
       `kind` is `:user | :read | :file`, `message` is a Scheme string
       value, and `irritants` is an Elixir list of Scheme values
@@ -56,8 +56,8 @@ defmodule Schooner.Value do
       `(error msg irritant ...)` and reachable via `error?`,
       `error-object?`, `read-error?`, `file-error?`.
     * Parameter — `{:parameter, id, init, converter}`. `id` is a
-      process-monotonic unique integer used as the lookup key in
-      the per-process dynamic-binding stack. `init` is
+      unique integer (`:erlang.unique_integer([:monotonic])`) used as
+      the lookup key in the per-process dynamic-binding stack. `init` is
       the post-converter initial value (returned when no
       `parameterize` is currently shadowing the parameter).
       `converter` is either `nil` or a Scheme procedure applied to
@@ -71,10 +71,10 @@ defmodule Schooner.Value do
       Elixir with `foreign_ref/1`. Scheme code can ask `(foreign? x)`
       to discriminate, but has no constructor and no accessor, and
       `write` redacts the contents to `#<foreign>` — so the wrapped
-      term remains structurally invisible from Scheme. Identity
-      equality only: `eq?` / `eqv?` / `equal?` compare the wrapped
-      terms with `===`, so two foreigns that wrap structurally-equal-
-      but-distinct host values are not equal.
+      term remains structurally invisible from Scheme. `eq?` /
+      `eqv?` / `equal?` compare the wrapped terms with `===`, so
+      foreigns wrapping the same pid or reference are equal, as are
+      foreigns wrapping structurally equal terms.
     * EOF — `:eof`
     * Unspecified — `:unspecified`
   """
@@ -263,9 +263,9 @@ defmodule Schooner.Value do
   @doc """
   Build a Scheme list (proper, null-terminated) from an Elixir list.
 
-  After the pair/null untagging this is the identity on Elixir lists.
-  Kept as a named constructor so call sites stay self-documenting and
-  the seam survives any future representation change.
+  This is the identity on Elixir lists. It is kept as a named
+  constructor so call sites state their intent and a future
+  representation change has one place to land.
   """
   @spec list([t()]) :: t()
   def list(items) when is_list(items), do: items
@@ -280,8 +280,8 @@ defmodule Schooner.Value do
 
   @doc """
   Convert a proper Scheme list (cons cells terminated by `[]`) into
-  an Elixir list. Raises `ArgumentError` on an improper list — the
-  inverse of `list/1`.
+  an Elixir list; the inverse of `list/1`. Raises `ArgumentError` on
+  an improper list.
   """
   @spec to_list(t()) :: [t()]
   def to_list([]), do: []
@@ -354,8 +354,8 @@ defmodule Schooner.Value do
   def eof?(_), do: false
 
   @doc """
-  Scheme `list?` — true for `[]` and proper (null-terminated) cons chains;
-  false for improper lists, atoms, and anything that ends in a non-pair non-null.
+  Scheme `list?` — true for `[]` and proper (null-terminated) cons
+  chains; false for improper lists and non-list values.
   """
   @spec list?(term()) :: boolean()
   def list?([]), do: true
@@ -440,7 +440,7 @@ defmodule Schooner.Value do
 
   @doc """
   Scheme truthiness: only `false` is false; every other value is
-  truthy, including `:null`, `0`, and the empty string.
+  truthy, including `[]`, `0`, and the empty string.
   """
   @spec truthy?(t()) :: boolean()
   def truthy?(false), do: false
@@ -451,10 +451,8 @@ defmodule Schooner.Value do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Scheme `eq?`. Identical to `eqv?` for Schooner — r7rs permits an
-  implementation to collapse the two so long as the stronger discriminations
-  `eq?` is allowed to draw (distinct heap copies of structurally-equal
-  aggregates) are also drawn by `eqv?`. They are: see `eqv?/2` below.
+  Scheme `eq?`. Implemented as `eqv?/2`, which r7rs permits; `eqv?`
+  already distinguishes separately built aggregates by identity.
   """
   @spec eq?(t(), t()) :: boolean()
   def eq?(a, b), do: eqv?(a, b)
@@ -492,10 +490,10 @@ defmodule Schooner.Value do
   def eqv?(a, b), do: :erts_debug.same(a, b) or (atomic?(a) and a === b)
 
   # Values for which r7rs requires `eqv?` (and therefore `eq?`) to compare
-  # by content rather than by location. Bare integers / floats / atoms are
-  # immediates on the BEAM and already collapse under `erts_debug.same/2`,
-  # but listing them here keeps the predicate self-contained against future
-  # boxing changes and means callers can rely on it independently.
+  # by content rather than by location. Small integers and atoms are
+  # immediates on the BEAM and already compare equal under
+  # `erts_debug.same/2`, but floats, bignums and the tagged tuples are
+  # boxed, so two equal values built separately need the `===` check.
   defp atomic?(n) when is_integer(n) or is_float(n), do: true
   defp atomic?({:rational, _, _}), do: true
   defp atomic?({:float_special, _}), do: true
@@ -510,8 +508,10 @@ defmodule Schooner.Value do
   defp atomic?(_), do: false
 
   @doc """
-  Scheme `equal?`. Recurses structurally into pairs, vectors, bytevectors,
-  strings, and records. For everything else it falls through to `eqv?`.
+  Scheme `equal?`. Recurses structurally into pairs, vectors, and
+  records, and compares bytevectors and strings by content. Any other
+  two values are equal only if they are the same term (`===`); NaN is
+  never equal to anything.
   """
   @spec equal?(t(), t()) :: boolean()
   # IEEE-754: NaN is never equal to anything, including another NaN.
