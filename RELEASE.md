@@ -39,8 +39,9 @@
   work. They built the environment in one process and evaluated it in
   another, which fails. The first example also passed `:max_heap_size`
   to `Task.Supervisor.async_nolink/3`, which ignores it, so no heap
-  limit applied. The examples now set the limit inside the task and
-  give it in words rather than bytes.
+  limit applied. The examples now set the limit inside the task, give
+  it in words rather than bytes, and set `include_shared_binaries:
+  true` so that large strings and bytevectors count towards it.
 - The "Special-form names" deviation now describes the actual
   behaviour: rebinding is accepted, but core special forms keep their
   meaning at the head of a form.

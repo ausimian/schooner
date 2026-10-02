@@ -75,7 +75,12 @@ def run_untrusted(source, env_opts) do
   task =
     Task.Supervisor.async_nolink(MyApp.TaskSupervisor, fn ->
       # Measured in words: 6_250_000 words is about 50 MB on a 64-bit VM.
-      Process.flag(:max_heap_size, %{size: 6_250_000, kill: true, error_logger: false})
+      Process.flag(:max_heap_size, %{
+        size: 6_250_000,
+        kill: true,
+        error_logger: false,
+        include_shared_binaries: true
+      })
       env = Schooner.Environment.new(env_opts)
       Schooner.eval(source, env)
     end)
@@ -100,7 +105,12 @@ Three settings bound the task:
 - **`:max_heap_size`** — when the spawned task's heap exceeds
   the cap, the BEAM kills it. A runaway `(make-vector
   1000000000)` allocates a single BEAM tuple, hits the cap, and
-  goes down. The host process is unaffected.
+  goes down. The host process is unaffected. Keep
+  `include_shared_binaries: true` (OTP 27 and later): Scheme
+  strings and bytevectors are binaries, and large ones live off
+  the process heap, so without it a script can allocate an
+  arbitrarily large `(make-bytevector 1000000000)` without
+  reaching the cap.
 - **`Task.yield(task, timeout)`** — bounds wall-clock time. A
   script that loops forever doesn't return on its own; the
   yield window expires and we move to shutdown.
@@ -198,7 +208,12 @@ defmodule MyApp.Sandbox do
 
     task =
       Task.Supervisor.async_nolink(MyApp.TaskSupervisor, fn ->
-        Process.flag(:max_heap_size, %{size: heap, kill: true, error_logger: false})
+        Process.flag(:max_heap_size, %{
+          size: heap,
+          kill: true,
+          error_logger: false,
+          include_shared_binaries: true
+        })
         Schooner.eval(source, sandbox_env())
       end)
 
