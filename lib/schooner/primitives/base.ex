@@ -22,6 +22,11 @@ defmodule Schooner.Primitives.Base do
   follow IEEE-754: `(sqrt +inf.0)` ⟹ `+inf.0`, and `(sqrt -inf.0)` and
   `(sqrt +nan.0)` ⟹ `+nan.0`.
 
+  Negative real bases with non-integer exponents use the principal
+  complex branch. Inexact real powers return signed infinity on
+  overflow and signed zero on underflow. Other float domain or range
+  failures in `expt` and `sqrt` raise `Schooner.Primitive.Error`.
+
   ## `expt` with infinities and NaN
 
   When either operand is an infinity or NaN, `expt` applies the
@@ -528,6 +533,9 @@ defmodule Schooner.Primitives.Base do
     require_number!("expt", base)
     require_number!("expt", exp)
     do_expt(base, exp)
+  rescue
+    ArithmeticError ->
+      reraise Error, [reason: {:numeric_range, "expt", [base, exp]}], __STACKTRACE__
   end
 
   defp do_expt(base, exp) when is_exact(base) and is_integer(exp) and exp >= 0 do
@@ -554,7 +562,31 @@ defmodule Schooner.Primitives.Base do
   defp do_expt(base, exp) when is_special(base) or is_special(exp),
     do: special_expt(base, exp)
 
-  defp do_expt(base, exp), do: :math.pow(to_float(base), to_float(exp))
+  defp do_expt(base, exp) do
+    b = to_float(base)
+    e = to_float(exp)
+
+    cond do
+      b < 0.0 and e != trunc(e) -> Inexact.generic_expt(base, exp)
+      b == 0.0 and e < 0.0 -> raise(Error, reason: {:division_by_zero, "expt"})
+      true -> real_pow(b, e)
+    end
+  end
+
+  defp real_pow(base, exp) do
+    :math.pow(base, exp)
+  rescue
+    ArithmeticError ->
+      negative? = base < 0.0 and odd_integer?(exp)
+      overflow? = (abs(base) > 1.0 and exp > 0.0) or (abs(base) < 1.0 and exp < 0.0)
+
+      case {overflow?, negative?} do
+        {true, true} -> {:float_special, :neg_inf}
+        {true, false} -> {:float_special, :pos_inf}
+        {false, true} -> -0.0
+        {false, false} -> 0.0
+      end
+  end
 
   defp complex_int_pow(_b, 0), do: 1
   defp complex_int_pow(b, 1), do: b
@@ -677,6 +709,8 @@ defmodule Schooner.Primitives.Base do
   defp sqrt_([n]) do
     require_number!("sqrt", n)
     do_sqrt(n)
+  rescue
+    ArithmeticError -> reraise Error, [reason: {:numeric_range, "sqrt", [n]}], __STACKTRACE__
   end
 
   defp do_sqrt({:float_special, :pos_inf}), do: {:float_special, :pos_inf}

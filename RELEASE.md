@@ -30,6 +30,12 @@
 
 ### Fixed
 
+- Rational `asin`/`acos` outside the real domain and negative bases
+  raised to fractional powers now return complex values. Inexact real
+  `expt` and `exp` handle overflow and underflow, and numeric domain or
+  range failures return script errors instead of leaking
+  Elixir arithmetic exceptions.
+
 - Module documentation and guides no longer contradict the
   implementation in several places, including the representation of
   promises and the empty list, `equal?` on foreign values, how
