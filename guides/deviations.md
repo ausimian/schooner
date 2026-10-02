@@ -117,7 +117,11 @@ documented gaps:
 The standard idioms — `cond`, `case`, `let`, `when`, `unless`,
 `and`, `or`, `do`, `letrec`, `parameterize`, `delay`,
 `delay-force`, `case-lambda` — are all defined as
-`syntax-rules` macros and behave per spec.
+`syntax-rules` macros and behave per spec. `letrec` expands to
+`letrec*`, so an initializer that refers to an earlier binding
+sees its value (`(letrec ((x 1) (y x)) y)` returns `1`). R7RS
+calls such a reference an error but does not require
+implementations to signal it.
 
 ## `define-syntax` is top-level only
 
