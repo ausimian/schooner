@@ -8,8 +8,8 @@ defmodule Schooner.Library do
   the library's source: the original datums and the expanded body AST
   are dropped after the body has run and the exports have been
   materialised. Closures that escape via `:exports` carry their own
-  body AST inside `{:closure, params, body, env, name}`; macros survive
-  as transformers.
+  analysed body IR inside `{:closure, params, body, env, name}`; macros
+  survive as transformers.
 
   Names are canonical lists of segments where each segment is either a
   binary (Scheme-symbol form) or a non-negative integer. The reader

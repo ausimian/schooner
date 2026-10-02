@@ -2,9 +2,15 @@ defmodule Schooner.Eval do
   @moduledoc """
   Tail-recursive direct evaluator for the core Scheme language.
 
+  `eval/2` takes a core form as produced by `Schooner.Expander` and
+  runs it through `Schooner.Eval.Analyze`, which rewrites the
+  s-expression into a tagged IR; `exec/2` then interprets that IR.
+  `Schooner.compile/2` stores the analysed IR so `run_compiled/2`
+  goes straight to `exec/2`.
+
   ## Tail-call invariant
 
-  Every branch of `eval/2`, `apply_proc/2`, and `eval_sequence/2`
+  Every branch of `exec/2`, `apply_proc/2`, and `eval_sequence/2`
   finishes with a direct tail call to one of those three. Nothing
   wraps these calls in a `try`, a tuple constructor, a `with`, or any
   expression that would knock them out of tail position. This is what
@@ -12,13 +18,12 @@ defmodule Schooner.Eval do
   last-call optimisation. **Adding a wrapper around any of these
   calls breaks the invariant — see `eval_tco_test.exs`.**
 
-  After phase 9 the evaluator only consumes the core forms produced
-  by `Schooner.Expander`: `quote`, `if`, `lambda`, top-level
-  `define`, `define-values`, `begin`, `letrec*`, `quasiquote`,
+  The evaluator only consumes the core forms produced by
+  `Schooner.Expander`: `quote`, `if`, `lambda`, top-level `define`,
+  `define-values`, `begin`, `letrec*`, `quasiquote`, `guard`,
   application, and variable reference. Everything else (`cond`,
   `case`, the `let` family, `do`, `and`/`or`, `when`/`unless`) is a
-  `syntax-rules` macro defined by the bootstrap; the throwaway
-  evaluator branches for those forms have been removed.
+  `syntax-rules` macro defined by the bootstrap.
 
   `letrec*` is retained as a core form rather than reduced to a
   macro because it backs both user-facing recursive bindings and
@@ -28,6 +33,7 @@ defmodule Schooner.Eval do
   """
 
   alias Schooner.Env
+  alias Schooner.Eval.Analyze
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
@@ -59,9 +65,17 @@ defmodule Schooner.Eval do
 
   def single_value!(other), do: other
 
+  @doc """
+  Analyse and evaluate a single core form.
+  """
   @spec eval(Value.t(), Env.t()) :: eval_result()
+  def eval(form, env), do: exec(Analyze.analyze(form), env)
 
-  def eval({:sym, name}, env) do
+  @doc """
+  Evaluate an IR node produced by `Schooner.Eval.Analyze.analyze/1`.
+  """
+  @spec exec(Analyze.ir(), Env.t()) :: eval_result()
+  def exec({:ref, name}, env) do
     case Env.lookup(env, name) do
       {:ok, value} -> value
       {:uninitialised, n} -> raise Error, reason: {:rec_uninitialised, n}
@@ -69,20 +83,35 @@ defmodule Schooner.Eval do
     end
   end
 
-  def eval([], _env), do: raise(Error, reason: :empty_application)
+  def exec({:const, value}, _env), do: value
 
-  def eval([{:sym, "quote"} | tail], _env), do: eval_quote(tail)
-  def eval([{:sym, "if"} | tail], env), do: eval_if(tail, env)
-  def eval([{:sym, "lambda"} | tail], env), do: eval_lambda(tail, env)
-  def eval([{:sym, "define"} | tail], env), do: eval_define(tail, env)
-  def eval([{:sym, "define-values"} | tail], env), do: eval_define_values(tail, env)
-  def eval([{:sym, "begin"} | tail], env), do: eval_sequence(tail, env)
-  def eval([{:sym, "letrec*"} | tail], env), do: eval_letrec_star(tail, env)
-  def eval([{:sym, "quasiquote"} | tail], env), do: eval_quasiquote_top(tail, env)
-  def eval([{:sym, "guard"} | tail], env), do: eval_guard(tail, env)
-  def eval([head | tail], env), do: eval_apply(head, tail, env)
+  def exec({:if, test, then_e, else_e}, env) do
+    if Value.truthy?(single_value!(exec(test, env))),
+      do: exec(then_e, env),
+      else: exec(else_e, env)
+  end
 
-  def eval(value, _env), do: value
+  def exec({:app, head, args}, env) do
+    proc = single_value!(exec(head, env))
+    apply_proc(proc, eval_args(args, env))
+  end
+
+  def exec({:lambda, params, body, name}, env), do: Value.closure(params, body, env, name)
+
+  def exec({:define, name, expr}, env) do
+    Env.define(env, name, single_value!(exec(expr, env)))
+    :unspecified
+  end
+
+  def exec({:define_values, spec, expr}, env), do: eval_define_values(spec, expr, env)
+  def exec({:seq, body}, env), do: eval_sequence(body, env)
+
+  def exec({:letrec, names, bindings, body}, env),
+    do: eval_letrec_star(names, bindings, body, env)
+
+  def exec({:quasi, template}, env), do: quasi(template, env)
+  def exec({:guard, var, clauses, body}, env), do: eval_guard(var, clauses, body, env)
+  def exec({:raise, exception}, _env), do: raise(exception)
 
   # A name that carries a hygiene mark from a macro template but was
   # never bound by an introduced binder is a free reference to the
@@ -98,109 +127,24 @@ defmodule Schooner.Eval do
   end
 
   # ---------------------------------------------------------------------------
-  # quote
-  # ---------------------------------------------------------------------------
-
-  defp eval_quote([datum | []]), do: datum
-  defp eval_quote(_), do: raise(Error, reason: {:bad_special_form, "quote"})
-
-  # ---------------------------------------------------------------------------
-  # if
-  # ---------------------------------------------------------------------------
-
-  defp eval_if([test | [then_e | []]], env) do
-    if eval_test(test, env), do: eval(then_e, env), else: :unspecified
-  end
-
-  defp eval_if([test | [then_e | [else_e | []]]], env) do
-    if eval_test(test, env), do: eval(then_e, env), else: eval(else_e, env)
-  end
-
-  defp eval_if(_, _env), do: raise(Error, reason: {:bad_special_form, "if"})
-
-  defp eval_test(test, env), do: Value.truthy?(single_value!(eval(test, env)))
-
-  # ---------------------------------------------------------------------------
-  # lambda
-  # ---------------------------------------------------------------------------
-
-  defp eval_lambda([_params_form | []], _env) do
-    raise(Error, reason: {:bad_special_form, "lambda"})
-  end
-
-  defp eval_lambda([params_form | body], env) do
-    Value.closure(parse_params(params_form), desugar_body(body), env, nil)
-  end
-
-  defp eval_lambda(_, _env), do: raise(Error, reason: {:bad_special_form, "lambda"})
-
-  defp parse_params({:sym, name}), do: {:any, name}
-  defp parse_params([]), do: {:fixed, 0, []}
-  defp parse_params([_ | _] = list), do: collect_params(list, [], 0)
-  defp parse_params(_), do: raise(Error, reason: :invalid_params)
-
-  defp collect_params([], acc, n), do: {:fixed, n, Enum.reverse(acc)}
-
-  defp collect_params({:sym, rest_name}, acc, n) do
-    {:fixed_rest, n, Enum.reverse(acc), rest_name}
-  end
-
-  defp collect_params([{:sym, name} | t], acc, n) do
-    collect_params(t, [name | acc], n + 1)
-  end
-
-  defp collect_params(_, _, _), do: raise(Error, reason: :invalid_params)
-
-  # ---------------------------------------------------------------------------
-  # define — top-level only at MVP; not enforced syntactically yet
-  # ---------------------------------------------------------------------------
-
-  defp eval_define([{:sym, name} | [expr | []]], env) do
-    Env.define(env, name, single_value!(eval(expr, env)))
-    :unspecified
-  end
-
-  defp eval_define([[{:sym, _name} | _params] | []], _env) do
-    raise(Error, reason: {:bad_special_form, "define"})
-  end
-
-  defp eval_define([[{:sym, name} | params_form] | body], env) do
-    closure = Value.closure(parse_params(params_form), desugar_body(body), env, name)
-    Env.define(env, name, closure)
-    :unspecified
-  end
-
-  defp eval_define(_, _env), do: raise(Error, reason: {:bad_special_form, "define"})
-
-  # ---------------------------------------------------------------------------
   # define-values — top-level
   # ---------------------------------------------------------------------------
   #
   # The internal-definition position is desugared into a `letrec*`
-  # multi-binding by `desugar_body/1`; this clause only fires for a
+  # multi-binding by the analyser; this clause only fires for a
   # `define-values` written at the top level (or inside a top-level
   # `begin` that the expander has already flattened). The producer is
   # evaluated once, normalised to a list of values, and each formal
   # name is installed as a top-level binding.
 
-  defp eval_define_values([formals | [expr | []]], env) do
-    spec = parse_define_values_formals(formals)
-    values = values_to_list(eval(expr, env))
+  defp eval_define_values(spec, expr, env) do
+    values = values_to_list(exec(expr, env))
 
     spec
     |> bind_params(values, "define-values")
     |> Enum.each(fn {name, value} -> Env.define(env, name, value) end)
 
     :unspecified
-  end
-
-  defp eval_define_values(_, _env),
-    do: raise(Error, reason: {:bad_special_form, "define-values"})
-
-  defp parse_define_values_formals(formals) do
-    parse_params(formals)
-  rescue
-    Error -> reraise Error, [reason: {:bad_special_form, "define-values"}], __STACKTRACE__
   end
 
   # Multi-value returns reach this entry as `{:values, vs}`; bare
@@ -213,10 +157,10 @@ defmodule Schooner.Eval do
   # sequence — body of begin / lambda / define-fn
   # ---------------------------------------------------------------------------
 
-  defp eval_sequence([last | []], env), do: eval(last, env)
+  defp eval_sequence([last | []], env), do: exec(last, env)
 
   defp eval_sequence([head | rest], env) do
-    _ = eval(head, env)
+    _ = exec(head, env)
     eval_sequence(rest, env)
   end
 
@@ -226,23 +170,17 @@ defmodule Schooner.Eval do
   # application
   # ---------------------------------------------------------------------------
 
-  defp eval_apply(head_expr, args_form, env) do
-    proc = single_value!(eval(head_expr, env))
-    args = eval_args(args_form, env)
-    apply_proc(proc, args)
-  end
-
   # Body-recursive so the result comes out in source order without a
   # trailing `Enum.reverse/1`. Argument evaluation is never in tail
-  # position (`apply_proc/2` follows it), so this costs no TCO.
+  # position (`apply_proc/2` follows it), so this costs no TCO. An
+  # improper argument list was turned into a trailing `{:raise, _}`
+  # node by the analyser.
   defp eval_args([], _env), do: []
 
   defp eval_args([h | t], env) do
-    v = single_value!(eval(h, env))
+    v = single_value!(exec(h, env))
     [v | eval_args(t, env)]
   end
-
-  defp eval_args(_, _env), do: raise(Error, reason: :improper_application)
 
   # Fixed-arity closures are the common case: build the frame map in a
   # single walk over names and args instead of `length/1` +
@@ -328,7 +266,7 @@ defmodule Schooner.Eval do
   # `letrec*` is the workhorse for both user-facing recursive bindings
   # (the `let`, `let*`, `letrec`, `letrec*`, named-`let` bootstrap
   # macros all expand to it eventually) and for internal-define
-  # splicing (see `desugar_body/1`). Init expressions are evaluated
+  # splicing (see `Schooner.Eval.Analyze`). Init expressions are evaluated
   # left-to-right in a frame whose closure values reference the
   # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
   # knot without any after-the-fact mutation of the closures
@@ -343,16 +281,14 @@ defmodule Schooner.Eval do
   # in the result references the slot, it is released as usual. The
   # slot becomes immutable after letrec exit — the evaluator never
   # writes to a freed-but-kept slot.
-  defp eval_letrec_star([bindings_form | body], env) when body != [] do
-    parsed = parse_bindings(bindings_form, "letrec*")
-    names = collect_binding_names(parsed)
+  defp eval_letrec_star(names, bindings, body, env) do
     rec_env = Env.extend_rec(env, names)
     [{:rec, ref} | _] = rec_env.lex
 
     result =
       try do
-        Enum.each(parsed, &init_binding(&1, rec_env))
-        eval_body(body, rec_env)
+        Enum.each(bindings, &init_binding(&1, rec_env))
+        eval_sequence(body, rec_env)
       rescue
         e ->
           Env.release_rec(rec_env)
@@ -361,8 +297,6 @@ defmodule Schooner.Eval do
 
     finalize_letrec_star(result, ref, rec_env)
   end
-
-  defp eval_letrec_star(_, _env), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
   defp finalize_letrec_star(result, ref, rec_env) do
     if escapes_rec?(result, ref) do
@@ -373,86 +307,38 @@ defmodule Schooner.Eval do
     end
   end
 
-  # `letrec*` bindings are normally `(name init)`. The body desugarer
-  # emits a second internal-only shape, `{:multi_vals, params_spec}`
-  # in the head slot, to splice `define-values` into the rec frame
-  # without mutation: one init expression produces a value list whose
-  # elements are bound across multiple rec slots in a single step.
-  # The Elixir-tagged head is unreachable from Scheme source, so the
-  # surface `letrec*` syntax is unchanged.
-  defp parse_bindings(form, ctx), do: parse_bindings(form, ctx, [])
-
-  defp parse_bindings([], _ctx, acc), do: Enum.reverse(acc)
-
-  defp parse_bindings([[{:sym, name} | [init | []]] | rest], ctx, acc) do
-    parse_bindings(rest, ctx, [{:single, name, init} | acc])
-  end
-
-  defp parse_bindings([[{:multi_vals, spec} | [init | []]] | rest], ctx, acc) do
-    parse_bindings(rest, ctx, [{:multi, spec, init} | acc])
-  end
-
-  defp parse_bindings(_, ctx, _), do: raise(Error, reason: {:bad_special_form, ctx})
-
-  defp collect_binding_names(parsed) do
-    Enum.flat_map(parsed, fn
-      {:single, name, _} -> [name]
-      {:multi, spec, _} -> spec_names(spec)
-    end)
-  end
-
-  defp spec_names({:fixed, _, names}), do: names
-  defp spec_names({:any, name}), do: [name]
-  defp spec_names({:fixed_rest, _, names, rest}), do: names ++ [rest]
-
   defp init_binding({:single, name, init}, rec_env) do
-    Env.rec_set(rec_env, name, single_value!(eval(init, rec_env)))
+    Env.rec_set(rec_env, name, single_value!(exec(init, rec_env)))
   end
 
   defp init_binding({:multi, spec, init}, rec_env) do
-    values = values_to_list(eval(init, rec_env))
+    values = values_to_list(exec(init, rec_env))
 
     spec
     |> bind_params(values, "define-values")
     |> Enum.each(fn {name, value} -> Env.rec_set(rec_env, name, value) end)
   end
 
-  # `unquote` and `unquote-splicing` only fire at quasi level 1; nested
-  # `quasiquote` raises the level, nested `unquote` lowers it.
-  defp eval_quasiquote_top([datum | []], env) do
-    quasi(datum, env, 1)
+  # Runtime half of quasiquote: walk the template the analyser built,
+  # evaluating unquotes and rebuilding only the non-constant spine.
+  # Head before tail, matching the old left-to-right evaluation order.
+  defp quasi({:qc, datum}, _env), do: datum
+  defp quasi({:qu, expr}, env), do: exec(expr, env)
+
+  defp quasi({:qcons, head, tail}, env) do
+    h = quasi(head, env)
+    [h | quasi(tail, env)]
   end
 
-  defp eval_quasiquote_top(_, _env), do: raise(Error, reason: {:bad_special_form, "quasiquote"})
-
-  defp quasi([{:sym, "unquote"} | [expr | []]], env, 1), do: eval(expr, env)
-
-  defp quasi([{:sym, "unquote"} | [expr | []]], env, n) when n > 1 do
-    Value.list([Value.symbol("unquote"), quasi(expr, env, n - 1)])
+  defp quasi({:qsplice, expr, tail}, env) do
+    spliced = exec(expr, env)
+    rest = quasi(tail, env)
+    splice_append(spliced, rest, "unquote-splicing")
   end
 
-  defp quasi([{:sym, "quasiquote"} | [expr | []]], env, n) do
-    Value.list([Value.symbol("quasiquote"), quasi(expr, env, n + 1)])
+  defp quasi({:qvec, template}, env) do
+    Value.vector(scheme_list_to_elixir(quasi(template, env)))
   end
-
-  defp quasi([head | tail], env, level) do
-    case head do
-      [{:sym, "unquote-splicing"} | [expr | []]] when level == 1 ->
-        spliced = eval(expr, env)
-        rest = quasi(tail, env, level)
-        splice_append(spliced, rest, "unquote-splicing")
-
-      _ ->
-        [quasi(head, env, level) | quasi(tail, env, level)]
-    end
-  end
-
-  defp quasi({:vector, t}, env, level) do
-    list = Value.list(Tuple.to_list(t))
-    Value.vector(scheme_list_to_elixir(quasi(list, env, level)))
-  end
-
-  defp quasi(other, _env, _level), do: other
 
   defp splice_append([], rest, _ctx), do: rest
 
@@ -466,15 +352,8 @@ defmodule Schooner.Eval do
   defp scheme_list_to_elixir([h | t]), do: [h | scheme_list_to_elixir(t)]
 
   # ---------------------------------------------------------------------------
-  # Internal definitions / body splicing
+  # letrec* slot escape detection
   # ---------------------------------------------------------------------------
-
-  # `eval_body/2` is the entry point for evaluating any r7rs body
-  # (lambda, let-family, when/unless, cond/case clauses): it splices
-  # leading internal defines into a `letrec*` and then evaluates the
-  # resulting sequence. Lambda bodies are pre-desugared at closure
-  # creation time so per-application cost stays at zero.
-  defp eval_body(body, env), do: eval_sequence(desugar_body(body), env)
 
   # Walk `value` returning true iff any closure in the tree references
   # `{:rec, ref}` in its captured env. The walk recurses into every
@@ -527,116 +406,6 @@ defmodule Schooner.Eval do
     Enum.any?(0..(tuple_size(tup) - 1)//1, &escapes_rec?(elem(tup, &1), ref))
   end
 
-  # r7rs §5.3.3 lets a body begin with a sequence of `define` forms
-  # followed by a sequence of expressions; the defines splice into a
-  # `letrec*` whose body is the rest of the forms. `desugar_body/1`
-  # performs that rewrite. Forms with no leading defines are returned
-  # unchanged.
-  #
-  # `define` after a non-define form in the same body is a syntax
-  # error, raised here rather than at evaluation time so the whole
-  # body is rejected before any side-effecting init runs.
-  defp desugar_body([]), do: []
-
-  defp desugar_body(body) do
-    case scan_defines(body, []) do
-      {[], _rest} ->
-        body
-
-      {_defs, []} ->
-        raise(Error, reason: :empty_body)
-
-      {defs, rest} ->
-        bindings = build_letrec_bindings(defs)
-        letrec_form = [{:sym, "letrec*"} | [bindings | rest]]
-        [letrec_form | []]
-    end
-  end
-
-  defp scan_defines([], acc), do: {Enum.reverse(acc), []}
-
-  # r7rs §5.3.3: a `(begin <form> ...)` at the head of a body is
-  # spliced into the body in place. This is what lets
-  # `define-record-type` work in an internal-definition position —
-  # the expander emits a `(begin (define ...) (define ...) ...)`
-  # for each record type and the splicing here makes those defines
-  # behave as if they were written at the body level directly.
-  defp scan_defines([[{:sym, "begin"} | inner] | rest], acc) do
-    scan_defines(splice_append(inner, rest, "begin"), acc)
-  end
-
-  defp scan_defines([form | rest], acc) do
-    case parse_internal_define(form) do
-      nil ->
-        check_no_more_defines(rest)
-        {Enum.reverse(acc), [form | rest]}
-
-      binding ->
-        scan_defines(rest, [binding | acc])
-    end
-  end
-
-  defp parse_internal_define([{:sym, "define"} | body]) do
-    case body do
-      [{:sym, name} | [expr | []]] ->
-        {:single, name, expr}
-
-      [[{:sym, name} | params] | body_forms] when body_forms != [] ->
-        {:single, name, [{:sym, "lambda"} | [params | body_forms]]}
-
-      _ ->
-        raise(Error, reason: {:bad_special_form, "define"})
-    end
-  end
-
-  # r7rs §5.3.2: `define-values` in internal-definition position fans
-  # out into a single multi-binding letrec* slot. The producer is
-  # evaluated once, and its values are spread across the formals'
-  # rec slots in lock-step — no mutation, no auxiliary tmp visible to
-  # the user.
-  defp parse_internal_define([{:sym, "define-values"} | body]) do
-    case body do
-      [formals | [expr | []]] ->
-        {:multi, parse_define_values_formals(formals), expr}
-
-      _ ->
-        raise(Error, reason: {:bad_special_form, "define-values"})
-    end
-  end
-
-  defp parse_internal_define(_), do: nil
-
-  defp check_no_more_defines([]), do: :ok
-
-  defp check_no_more_defines([[{:sym, "begin"} | inner] | rest]) do
-    check_no_more_defines(splice_append(inner, rest, "begin"))
-  end
-
-  defp check_no_more_defines([form | rest]) do
-    if parse_internal_define(form) != nil do
-      raise(Error, reason: :define_after_expression)
-    else
-      check_no_more_defines(rest)
-    end
-  end
-
-  defp build_letrec_bindings([]), do: []
-
-  defp build_letrec_bindings([{:single, name, init} | rest]) do
-    binding = [{:sym, name} | [init | []]]
-    [binding | build_letrec_bindings(rest)]
-  end
-
-  # The `{:multi_vals, spec}` head is an Elixir-tagged tuple — Scheme
-  # source can't construct it, so users typing into `letrec*` directly
-  # never collide with this internal binding shape; only the desugarer
-  # emits it. `parse_bindings/3` recognises it and routes the init
-  # through `init_binding/2`'s multi-value path.
-  defp build_letrec_bindings([{:multi, spec, init} | rest]) do
-    binding = [{:multi_vals, spec} | [init | []]]
-    [binding | build_letrec_bindings(rest)]
-  end
-
   # ---------------------------------------------------------------------------
   # guard
   # ---------------------------------------------------------------------------
@@ -648,8 +417,7 @@ defmodule Schooner.Eval do
   # `apply_proc/2` invokes it with the same machinery as a user
   # handler — `with-exception-handler` and `guard` are
   # indistinguishable from the raise side.
-  defp eval_guard([[{:sym, var} | clauses_form] | body], env)
-       when is_binary(var) and body != [] do
+  defp eval_guard(var, clauses, body, env) do
     tag = make_ref()
     handler = build_guard_handler(tag)
     # Snapshot/restore the whole stack rather than `pop`ing once in
@@ -661,7 +429,7 @@ defmodule Schooner.Eval do
     ExceptionState.push(handler)
 
     try do
-      eval_body(body, env)
+      eval_sequence(body, env)
     catch
       # R7RS §6.11: cond clauses run in the guard form's dynamic
       # extent, so the handler only escapes back here with the raw
@@ -671,7 +439,7 @@ defmodule Schooner.Eval do
       :throw, {:schooner_guard, ^tag, raised} ->
         handler_env = Env.extend(env, [{var, raised}])
 
-        case eval_guard_clauses(clauses_form, handler_env) do
+        case eval_guard_clauses(clauses, handler_env) do
           {:matched, value} -> value
           :no_match -> ExceptionState.raise_value(raised)
         end
@@ -680,8 +448,6 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
-
   defp build_guard_handler(tag) do
     Value.primitive("%guard-handler", 1, fn [raised] ->
       throw({:schooner_guard, tag, raised})
@@ -689,11 +455,8 @@ defmodule Schooner.Eval do
   end
 
   defp eval_guard_clauses([], _env), do: :no_match
-
-  defp eval_guard_clauses([[{:sym, "else"} | body] | _rest], env)
-       when body != [] do
-    {:matched, eval_body(body, env)}
-  end
+  defp eval_guard_clauses([{:else, body} | _rest], env), do: {:matched, eval_sequence(body, env)}
+  defp eval_guard_clauses([{:bad, exception} | _rest], _env), do: raise(exception)
 
   defp eval_guard_clauses([clause | rest], env) do
     case eval_guard_clause(clause, env) do
@@ -702,32 +465,28 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard_clauses(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
-
-  defp eval_guard_clause([test | []], env) do
-    case eval(test, env) do
+  defp eval_guard_clause({:test, test}, env) do
+    case exec(test, env) do
       false -> :no_match
       val -> {:matched, val}
     end
   end
 
-  defp eval_guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], env) do
-    case eval(test, env) do
+  defp eval_guard_clause({:arrow, test, proc_expr}, env) do
+    case exec(test, env) do
       false ->
         :no_match
 
       val ->
-        proc = eval(proc_expr, env)
+        proc = exec(proc_expr, env)
         {:matched, apply_proc(proc, [val])}
     end
   end
 
-  defp eval_guard_clause([test | body], env) when body != [] do
-    case eval(test, env) do
+  defp eval_guard_clause({:test_body, test, body}, env) do
+    case exec(test, env) do
       false -> :no_match
-      _ -> {:matched, eval_body(body, env)}
+      _ -> {:matched, eval_sequence(body, env)}
     end
   end
-
-  defp eval_guard_clause(_, _env), do: raise(Error, reason: {:bad_special_form, "guard"})
 end
