@@ -120,6 +120,14 @@ defmodule Schooner.EvalTest do
       assert match?({:arity_mismatch, _, {:exact, 2}, 1}, e.reason)
     end
 
+    test "arity mismatch on fixed lambda reports the full supplied count" do
+      e = assert_raise Error, fn -> run("((lambda (x y) x) 1 2 3 4)") end
+      assert match?({:arity_mismatch, _, {:exact, 2}, 4}, e.reason)
+
+      e = assert_raise Error, fn -> run("((lambda () 1) 1 2)") end
+      assert match?({:arity_mismatch, _, {:exact, 0}, 2}, e.reason)
+    end
+
     test "arity mismatch on dotted-rest lambda raises" do
       e = assert_raise Error, fn -> run("((lambda (a b . r) r) 1)") end
       assert match?({:arity_mismatch, _, {:at_least, 2}, 1}, e.reason)

@@ -228,19 +228,33 @@ defmodule Schooner.Eval do
 
   defp eval_apply(head_expr, args_form, env) do
     proc = single_value!(eval(head_expr, env))
-    args = eval_args(args_form, env, [])
+    args = eval_args(args_form, env)
     apply_proc(proc, args)
   end
 
-  defp eval_args([], _env, acc), do: Enum.reverse(acc)
+  # Body-recursive so the result comes out in source order without a
+  # trailing `Enum.reverse/1`. Argument evaluation is never in tail
+  # position (`apply_proc/2` follows it), so this costs no TCO.
+  defp eval_args([], _env), do: []
 
-  defp eval_args([h | t], env, acc) do
-    eval_args(t, env, [single_value!(eval(h, env)) | acc])
+  defp eval_args([h | t], env) do
+    v = single_value!(eval(h, env))
+    [v | eval_args(t, env)]
   end
 
-  defp eval_args(_, _env, _acc), do: raise(Error, reason: :improper_application)
+  defp eval_args(_, _env), do: raise(Error, reason: :improper_application)
 
+  # Fixed-arity closures are the common case: build the frame map in a
+  # single walk over names and args instead of `length/1` +
+  # `Enum.zip/2` + `Map.new/1`.
   @spec apply_proc(Value.t(), [Value.t()]) :: eval_result()
+  def apply_proc({:closure, {:fixed, _, names} = params, body, env, name}, args) do
+    case zip_frame(names, args, %{}) do
+      :error -> bind_params(params, args, name)
+      frame -> eval_sequence(body, Env.extend_map(env, frame))
+    end
+  end
+
   def apply_proc({:closure, params, body, env, name}, args) do
     new_env = Env.extend(env, bind_params(params, args, name))
     eval_sequence(body, new_env)
@@ -260,6 +274,12 @@ defmodule Schooner.Eval do
   end
 
   def apply_proc(other, _args), do: raise(Error, reason: {:not_a_procedure, other})
+
+  # Returns `:error` on an arity mismatch; the caller falls back to
+  # `bind_params/3`, which raises the canonical error.
+  defp zip_frame([], [], acc), do: acc
+  defp zip_frame([k | ks], [v | vs], acc), do: zip_frame(ks, vs, Map.put(acc, k, v))
+  defp zip_frame(_, _, _), do: :error
 
   defp bind_params({:fixed, n, names}, args, fname) do
     case length(args) do

@@ -106,4 +106,38 @@ defmodule Schooner.Primitives.BasePropertyTest do
 
   defp render({:rational, n, d}), do: "#{n}/#{d}"
   defp render(n) when is_integer(n), do: Integer.to_string(n)
+
+  # The two-integer fast paths in `+ - * = < > <= >=` bypass the general
+  # numeric tower; check they agree with BEAM integer semantics across
+  # fixnum and bignum magnitudes, and with the general path on mixed
+  # exact/inexact operands.
+  defp any_int do
+    one_of([integer(), map(integer(), &(&1 * 1_000_000_000_000_000_000_000))])
+  end
+
+  property "two-integer arithmetic matches BEAM integer arithmetic" do
+    check all(a <- any_int(), b <- any_int()) do
+      assert run("(+ #{a} #{b})") === a + b
+      assert run("(- #{a} #{b})") === a - b
+      assert run("(* #{a} #{b})") === a * b
+    end
+  end
+
+  property "two-integer comparisons match BEAM integer comparisons" do
+    check all(a <- any_int(), b <- one_of([any_int(), constant(a)])) do
+      assert run("(= #{a} #{b})") === (a == b)
+      assert run("(< #{a} #{b})") === a < b
+      assert run("(> #{a} #{b})") === a > b
+      assert run("(<= #{a} #{b})") === a <= b
+      assert run("(>= #{a} #{b})") === a >= b
+    end
+  end
+
+  property "two-integer comparisons agree with the mixed exact/inexact path" do
+    check all(a <- small_int(), b <- small_int()) do
+      for op <- ~w(= < > <= >=) do
+        assert run("(#{op} #{a} #{b})") === run("(#{op} #{a} #{b}.0)")
+      end
+    end
+  end
 end

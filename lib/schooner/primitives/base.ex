@@ -119,6 +119,10 @@ defmodule Schooner.Primitives.Base do
   end
 
   defp add([]), do: 0
+  # Two-integer fast paths for the common binary case; everything else
+  # (floats, rationals, complex, specials, type errors) takes the
+  # general reducer.
+  defp add([a, b]) when is_integer(a) and is_integer(b), do: a + b
   defp add(args), do: reduce_numeric("+", args, 0, &add_pair/2)
 
   defp sub([n]) do
@@ -126,12 +130,15 @@ defmodule Schooner.Primitives.Base do
     negate(n)
   end
 
+  defp sub([a, b]) when is_integer(a) and is_integer(b), do: a - b
+
   defp sub([first | rest]) do
     require_number!("-", first)
     reduce_numeric("-", rest, first, &sub_pair/2)
   end
 
   defp mul([]), do: 1
+  defp mul([a, b]) when is_integer(a) and is_integer(b), do: a * b
   defp mul(args), do: reduce_numeric("*", args, 1, &mul_pair/2)
 
   defp divide([n]) do
@@ -946,10 +953,17 @@ defmodule Schooner.Primitives.Base do
     ]
   end
 
+  # Two-fixnum fast paths skip the variadic type-check and NaN-aware
+  # pairwise loop; everything else falls through to the general path.
+  defp cmp_eq([a, b]) when is_integer(a) and is_integer(b), do: a == b
   defp cmp_eq(args), do: variadic_cmp("=", args, &num_eq/2, &require_number!/2)
+  defp cmp_lt([a, b]) when is_integer(a) and is_integer(b), do: a < b
   defp cmp_lt(args), do: variadic_cmp("<", args, &num_lt/2, &require_real!/2)
+  defp cmp_gt([a, b]) when is_integer(a) and is_integer(b), do: a > b
   defp cmp_gt(args), do: variadic_cmp(">", args, &num_gt/2, &require_real!/2)
+  defp cmp_le([a, b]) when is_integer(a) and is_integer(b), do: a <= b
   defp cmp_le(args), do: variadic_cmp("<=", args, &num_le/2, &require_real!/2)
+  defp cmp_ge([a, b]) when is_integer(a) and is_integer(b), do: a >= b
   defp cmp_ge(args), do: variadic_cmp(">=", args, &num_ge/2, &require_real!/2)
 
   defp variadic_cmp(op, args, pair, type_check) do

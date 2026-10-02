@@ -113,7 +113,7 @@ defmodule Schooner.Env do
   end
 
   defp globals_lookup(ref, name) do
-    case Map.fetch(Process.get(ref), name) do
+    case :maps.find(name, :erlang.get(ref)) do
       {:ok, _} = ok -> ok
       :error -> :error
     end
@@ -127,6 +127,12 @@ defmodule Schooner.Env do
   def define(%__MODULE__{globals: ref} = env, name, value) when is_binary(name) do
     Process.put(ref, Map.put(Process.get(ref), name, value))
     env
+  end
+
+  @doc "Push an already-built lexical frame map on top of `env`."
+  @spec extend_map(t(), %{optional(binary()) => Value.t()}) :: t()
+  def extend_map(%__MODULE__{lex: lex} = env, frame) when is_map(frame) do
+    %{env | lex: [frame | lex]}
   end
 
   @doc "Push a new lexical frame on top of `env`."
