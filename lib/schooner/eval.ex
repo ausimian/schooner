@@ -4,19 +4,25 @@ defmodule Schooner.Eval do
 
   `eval/2` takes a core form as produced by `Schooner.Expander` and
   runs it through `Schooner.Eval.Analyze`, which rewrites the
-  s-expression into a tagged IR; `exec/2` then interprets that IR.
-  `Schooner.compile/2` stores the analysed IR so `run_compiled/2`
-  goes straight to `exec/2`.
+  s-expression into a tagged IR with every variable reference
+  resolved. `compile/1` then turns that IR into a tree of Elixir
+  closures — one `fn env -> ... end` per node, built once — so
+  executing a program is a chain of closure calls with no per-node
+  dispatch. `Schooner.compile/2` stores the analysed IR (plain data,
+  safe to cache or persist) and `run_compiled/2` compiles it to
+  closures on each run.
 
   ## Tail-call invariant
 
-  Every branch of `exec/2`, `apply_proc/2`, and `eval_sequence/2`
-  finishes with a direct tail call to one of those three. Nothing
-  wraps these calls in a `try`, a tuple constructor, a `with`, or any
-  expression that would knock them out of tail position. This is what
-  makes Scheme's proper-tail-call requirement fall out of BEAM's
-  last-call optimisation. **Adding a wrapper around any of these
-  calls breaks the invariant — see `eval_tco_test.exs`.**
+  Every compiled closure and every `apply_proc/2` clause finishes with
+  a direct tail call: the closure for a node in tail position calls
+  the next closure (or `apply_proc/2`) last, and `apply_proc/2` calls
+  a closure's compiled body last. Nothing wraps these calls in a
+  `try`, a tuple constructor, a `with`, or any expression that would
+  knock them out of tail position. This is what makes Scheme's
+  proper-tail-call requirement fall out of BEAM's last-call
+  optimisation. **Adding a wrapper around any of these calls breaks
+  the invariant — see `eval_tco_test.exs`.**
 
   The evaluator only consumes the core forms produced by
   `Schooner.Expander`: `quote`, `if`, `lambda`, top-level `define`,
@@ -57,6 +63,9 @@ defmodule Schooner.Eval do
   """
   @type eval_result :: Value.t() | {:values, [Value.t()]}
 
+  # Called for every argument and procedure head, so inline it into
+  # the compiled closures.
+  @compile {:inline, single_value!: 1}
   @spec single_value!(eval_result()) :: Value.t()
   def single_value!({:values, [v]}), do: v
 
@@ -66,6 +75,9 @@ defmodule Schooner.Eval do
 
   def single_value!(other), do: other
 
+  @typedoc "A compiled IR node: run it against an env to evaluate it."
+  @type code :: (Env.t() -> eval_result())
+
   @doc """
   Analyse and evaluate a single top-level core form.
 
@@ -74,59 +86,161 @@ defmodule Schooner.Eval do
   `Schooner.Environment`).
   """
   @spec eval(Value.t(), Env.t()) :: eval_result()
-  def eval(form, %Env{lex: []} = env), do: exec(Analyze.analyze(form), env)
+  def eval(form, %Env{lex: []} = env), do: compile(Analyze.analyze(form)).(env)
 
   @doc """
-  Evaluate an IR node produced by `Schooner.Eval.Analyze.analyze/1`.
+  Compile and evaluate an IR node produced by
+  `Schooner.Eval.Analyze.analyze/1`.
   """
   @spec exec(Analyze.ir(), Env.t()) :: eval_result()
-  def exec({:lref, depth, index}, %Env{lex: lex}), do: elem(frame_at(lex, depth), index)
+  def exec(ir, env), do: compile(ir).(env)
 
-  def exec({:rref, depth, slot, name, fallback}, %Env{lex: lex} = env) do
-    {:rec, ref} = frame_at(lex, depth)
+  @doc """
+  Compile an IR node into a closure that evaluates it against an env.
+  Child nodes are compiled up front, so the returned closure does no
+  further dispatch on the IR.
+  """
+  @spec compile(Analyze.ir()) :: code()
+  def compile({:const, value}), do: fn _env -> value end
 
-    case :erlang.get(ref) do
-      {:rec_frame, _names, values} -> rec_value!(elem(values, slot), name)
-      :undefined -> exec(fallback, env)
+  # The two shallowest depths cover almost every reference, so match
+  # the frame directly instead of walking the chain.
+  def compile({:lref, 0, index}), do: fn %Env{lex: [frame | _]} -> elem(frame, index) end
+  def compile({:lref, 1, index}), do: fn %Env{lex: [_, frame | _]} -> elem(frame, index) end
+
+  def compile({:lref, depth, index}),
+    do: fn %Env{lex: lex} -> elem(frame_at(lex, depth), index) end
+
+  def compile({:rref, depth, slot, name, fallback}) do
+    fallback = compile(fallback)
+
+    fn %Env{lex: lex} = env ->
+      {:rec, ref} = frame_at(lex, depth)
+
+      case :erlang.get(ref) do
+        {:rec_frame, _names, values} -> rec_value!(elem(values, slot), name)
+        :undefined -> fallback.(env)
+      end
     end
   end
 
-  def exec({:gref, name, marked}, env) do
-    case Env.fetch_global(env, name) do
-      {:ok, value} -> value
-      :error -> resolve_marked_var(marked, name, env)
+  def compile({:gref, name, marked}) do
+    fn %Env{globals: globals} = env ->
+      case :maps.find(name, :erlang.get(globals)) do
+        {:ok, value} -> value
+        :error -> resolve_marked_var(marked, name, env)
+      end
     end
   end
 
-  def exec({:const, value}, _env), do: value
+  def compile({:if, test, then_e, else_e}) do
+    test = compile(test)
+    then_c = compile(then_e)
+    else_c = compile(else_e)
 
-  def exec({:if, test, then_e, else_e}, env) do
-    if Value.truthy?(single_value!(exec(test, env))),
-      do: exec(then_e, env),
-      else: exec(else_e, env)
+    fn env ->
+      case single_value!(test.(env)) do
+        false -> else_c.(env)
+        _ -> then_c.(env)
+      end
+    end
   end
 
-  def exec({:app, head, args}, env) do
-    proc = single_value!(exec(head, env))
-    apply_proc(proc, eval_args(args, env))
+  # Applications are specialised on argument count so the common small
+  # arities build their argument list inline. Head first, then
+  # arguments left to right, as before.
+  def compile({:app, head, args}) do
+    head = compile(head)
+
+    case Enum.map(args, &compile/1) do
+      [] ->
+        fn env -> apply_proc(single_value!(head.(env)), []) end
+
+      [a] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          apply_proc(proc, [single_value!(a.(env))])
+        end
+
+      [a, b] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          x = single_value!(a.(env))
+          apply_proc(proc, [x, single_value!(b.(env))])
+        end
+
+      [a, b, c] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          x = single_value!(a.(env))
+          y = single_value!(b.(env))
+          apply_proc(proc, [x, y, single_value!(c.(env))])
+        end
+
+      codes ->
+        fn env ->
+          proc = single_value!(head.(env))
+          apply_proc(proc, eval_args(codes, env))
+        end
+    end
   end
 
-  def exec({:lambda, params, body, name}, env), do: Value.closure(params, body, env, name)
-
-  def exec({:define, name, expr}, env) do
-    Env.define(env, name, single_value!(exec(expr, env)))
-    :unspecified
+  def compile({:lambda, params, {names, body}, name}) do
+    body = compile_body(body)
+    fn env -> Value.closure(params, {names, body}, env, name) end
   end
 
-  def exec({:define_values, spec, expr}, env), do: eval_define_values(spec, expr, env)
-  def exec({:seq, body}, env), do: eval_sequence(body, env)
+  def compile({:define, name, expr}) do
+    expr = compile(expr)
 
-  def exec({:letrec, names, bindings, body}, env),
-    do: eval_letrec_star(names, bindings, body, env)
+    fn env ->
+      Env.define(env, name, single_value!(expr.(env)))
+      :unspecified
+    end
+  end
 
-  def exec({:quasi, template}, env), do: quasi(template, env)
-  def exec({:guard, var, clauses, body}, env), do: eval_guard(var, clauses, body, env)
-  def exec({:raise, exception}, _env), do: raise(exception)
+  def compile({:define_values, spec, expr}) do
+    expr = compile(expr)
+    fn env -> eval_define_values(spec, expr, env) end
+  end
+
+  def compile({:seq, body}), do: compile_body(body)
+
+  def compile({:letrec, names, bindings, body}) do
+    bindings = Enum.map(bindings, &compile_binding/1)
+    body = compile_body(body)
+    fn env -> eval_letrec_star(names, bindings, body, env) end
+  end
+
+  def compile({:quasi, template}), do: compile_template(template)
+
+  def compile({:guard, names, clauses, body}) do
+    clauses = Enum.map(clauses, &compile_guard_clause/1)
+    body = compile_body(body)
+    fn env -> eval_guard(names, clauses, body, env) end
+  end
+
+  def compile({:raise, exception}), do: fn _env -> raise(exception) end
+
+  # A body (or `begin`) compiles to one closure that runs each form in
+  # order and tail-calls the last.
+  defp compile_body([]), do: fn _env -> :unspecified end
+  defp compile_body([last]), do: compile(last)
+
+  defp compile_body([head | rest]) do
+    head = compile(head)
+    rest = compile_body(rest)
+
+    fn env ->
+      _ = head.(env)
+      rest.(env)
+    end
+  end
+
+  defp compile_binding({:single, slot, init}), do: {:single, slot, compile(init)}
+
+  defp compile_binding({:multi, spec, init, slots}),
+    do: {:multi, spec, compile(init), slots}
 
   # A name that carries a hygiene mark from a macro template but was
   # never bound by an introduced binder is a free reference to the
@@ -181,7 +295,7 @@ defmodule Schooner.Eval do
   # name is installed as a top-level binding.
 
   defp eval_define_values(spec, expr, env) do
-    values = values_to_list(exec(expr, env))
+    values = values_to_list(expr.(env))
 
     spec
     |> bind_params(values, "define-values")
@@ -197,45 +311,34 @@ defmodule Schooner.Eval do
   defp values_to_list(v), do: [v]
 
   # ---------------------------------------------------------------------------
-  # sequence — body of begin / lambda / define-fn
-  # ---------------------------------------------------------------------------
-
-  defp eval_sequence([last | []], env), do: exec(last, env)
-
-  defp eval_sequence([head | rest], env) do
-    _ = exec(head, env)
-    eval_sequence(rest, env)
-  end
-
-  defp eval_sequence([], _env), do: :unspecified
-
-  # ---------------------------------------------------------------------------
   # application
   # ---------------------------------------------------------------------------
 
-  # Body-recursive so the result comes out in source order without a
-  # trailing `Enum.reverse/1`. Argument evaluation is never in tail
-  # position (`apply_proc/2` follows it), so this costs no TCO. An
+  # Argument evaluation for applications with more arguments than the
+  # specialised clauses cover. Body-recursive so the result comes out
+  # in source order without a trailing `Enum.reverse/1`; it is never in
+  # tail position (`apply_proc/2` follows it), so this costs no TCO. An
   # improper argument list was turned into a trailing `{:raise, _}`
   # node by the analyser.
   defp eval_args([], _env), do: []
 
   defp eval_args([h | t], env) do
-    v = single_value!(exec(h, env))
+    v = single_value!(h.(env))
     [v | eval_args(t, env)]
   end
 
-  # A closure's body is `{names, forms}`; application pushes the
-  # positional frame `{names, arg1, arg2, ...}` that the analyser
-  # resolved the body's references against. For the common fixed-arity
-  # case that is a single `List.to_tuple/1`, with the arity check done
-  # on the resulting tuple size.
+  # A closure's body is `{names, code}`, where `code` is the compiled
+  # body; application pushes the positional frame
+  # `{names, arg1, arg2, ...}` that the analyser resolved the body's
+  # references against, then tail-calls `code`. For the common
+  # fixed-arity case the frame is a single `List.to_tuple/1`, with the
+  # arity check done on the resulting tuple size.
   @spec apply_proc(Value.t(), [Value.t()]) :: eval_result()
-  def apply_proc({:closure, {:fixed, n, _}, {names, body}, env, name}, args) do
+  def apply_proc({:closure, {:fixed, n, _}, {names, body}, %Env{lex: lex} = env, name}, args) do
     frame = List.to_tuple([names | args])
 
     if tuple_size(frame) == n + 1 do
-      eval_sequence(body, Env.push_frame(env, frame))
+      body.(%{env | lex: [frame | lex]})
     else
       raise Error, reason: {:arity_mismatch, name, {:exact, n}, length(args)}
     end
@@ -243,7 +346,7 @@ defmodule Schooner.Eval do
 
   def apply_proc({:closure, params, {names, body}, env, name}, args) do
     values = params |> bind_params(args, name) |> Enum.map(&elem(&1, 1))
-    eval_sequence(body, Env.push_frame(env, List.to_tuple([names | values])))
+    body.(Env.push_frame(env, List.to_tuple([names | values])))
   end
 
   def apply_proc({:primitive, name, arity, fun}, args) do
@@ -330,7 +433,7 @@ defmodule Schooner.Eval do
     result =
       try do
         Enum.each(bindings, &init_binding(&1, rec_env))
-        eval_sequence(body, rec_env)
+        body.(rec_env)
       rescue
         e ->
           Env.release_rec(rec_env)
@@ -350,11 +453,11 @@ defmodule Schooner.Eval do
   end
 
   defp init_binding({:single, slot, init}, rec_env) do
-    Env.rec_put(rec_env, slot, single_value!(exec(init, rec_env)))
+    Env.rec_put(rec_env, slot, single_value!(init.(rec_env)))
   end
 
   defp init_binding({:multi, spec, init, slots}, rec_env) do
-    values = values_to_list(exec(init, rec_env))
+    values = values_to_list(init.(rec_env))
 
     spec
     |> bind_params(values, "define-values")
@@ -362,25 +465,36 @@ defmodule Schooner.Eval do
     |> Enum.each(fn {{_name, value}, slot} -> Env.rec_put(rec_env, slot, value) end)
   end
 
-  # Runtime half of quasiquote: walk the template the analyser built,
-  # evaluating unquotes and rebuilding only the non-constant spine.
-  # Head before tail, matching the old left-to-right evaluation order.
-  defp quasi({:qc, datum}, _env), do: datum
-  defp quasi({:qu, expr}, env), do: exec(expr, env)
+  # Quasiquote templates compile to closures that rebuild only the
+  # non-constant spine. Head before tail, matching the old
+  # left-to-right evaluation order.
+  defp compile_template({:qc, datum}), do: fn _env -> datum end
+  defp compile_template({:qu, expr}), do: compile(expr)
 
-  defp quasi({:qcons, head, tail}, env) do
-    h = quasi(head, env)
-    [h | quasi(tail, env)]
+  defp compile_template({:qcons, head, tail}) do
+    head = compile_template(head)
+    tail = compile_template(tail)
+
+    fn env ->
+      h = head.(env)
+      [h | tail.(env)]
+    end
   end
 
-  defp quasi({:qsplice, expr, tail}, env) do
-    spliced = exec(expr, env)
-    rest = quasi(tail, env)
-    splice_append(spliced, rest, "unquote-splicing")
+  defp compile_template({:qsplice, expr, tail}) do
+    expr = compile(expr)
+    tail = compile_template(tail)
+
+    fn env ->
+      spliced = expr.(env)
+      rest = tail.(env)
+      splice_append(spliced, rest, "unquote-splicing")
+    end
   end
 
-  defp quasi({:qvec, template}, env) do
-    Value.vector(scheme_list_to_elixir(quasi(template, env)))
+  defp compile_template({:qvec, template}) do
+    template = compile_template(template)
+    fn env -> Value.vector(scheme_list_to_elixir(template.(env))) end
   end
 
   defp splice_append([], rest, _ctx), do: rest
@@ -472,7 +586,7 @@ defmodule Schooner.Eval do
     ExceptionState.push(handler)
 
     try do
-      eval_sequence(body, env)
+      body.(env)
     catch
       # R7RS §6.11: cond clauses run in the guard form's dynamic
       # extent, so the handler only escapes back here with the raw
@@ -497,8 +611,18 @@ defmodule Schooner.Eval do
     end)
   end
 
+  defp compile_guard_clause({:else, body}), do: {:else, compile_body(body)}
+  defp compile_guard_clause({:bad, _} = bad), do: bad
+  defp compile_guard_clause({:test, test}), do: {:test, compile(test)}
+
+  defp compile_guard_clause({:arrow, test, proc_expr}),
+    do: {:arrow, compile(test), compile(proc_expr)}
+
+  defp compile_guard_clause({:test_body, test, body}),
+    do: {:test_body, compile(test), compile_body(body)}
+
   defp eval_guard_clauses([], _env), do: :no_match
-  defp eval_guard_clauses([{:else, body} | _rest], env), do: {:matched, eval_sequence(body, env)}
+  defp eval_guard_clauses([{:else, body} | _rest], env), do: {:matched, body.(env)}
   defp eval_guard_clauses([{:bad, exception} | _rest], _env), do: raise(exception)
 
   defp eval_guard_clauses([clause | rest], env) do
@@ -509,27 +633,27 @@ defmodule Schooner.Eval do
   end
 
   defp eval_guard_clause({:test, test}, env) do
-    case exec(test, env) do
+    case test.(env) do
       false -> :no_match
       val -> {:matched, val}
     end
   end
 
   defp eval_guard_clause({:arrow, test, proc_expr}, env) do
-    case exec(test, env) do
+    case test.(env) do
       false ->
         :no_match
 
       val ->
-        proc = exec(proc_expr, env)
+        proc = proc_expr.(env)
         {:matched, apply_proc(proc, [val])}
     end
   end
 
   defp eval_guard_clause({:test_body, test, body}, env) do
-    case exec(test, env) do
+    case test.(env) do
       false -> :no_match
-      _ -> {:matched, eval_sequence(body, env)}
+      _ -> {:matched, body.(env)}
     end
   end
 end
