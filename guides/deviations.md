@@ -71,9 +71,11 @@ A variable can be named after a special form or macro keyword:
 `(define if 42) if` returns `42`. Schooner does not always honour
 such a binding, though:
 
-- The core special forms (`quote`, `if`, `lambda`, `define`,
-  `define-values`, `begin`, `letrec*`, `define-record-type`,
-  `guard`) dispatch on the literal symbol. At the head of a form
+- The core special forms (`quote`, `quasiquote`, `if`, `lambda`,
+  `define`, `define-values`, `begin`, `letrec*`,
+  `define-record-type`, `guard`, `define-syntax`, `let-syntax`,
+  `letrec-syntax`, and the unsupported `set!`) dispatch on the
+  literal symbol. At the head of a form
   they are always the special form, even inside a local binding
   of the same name; the binding is visible only as a variable
   reference.
