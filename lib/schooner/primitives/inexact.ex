@@ -12,9 +12,11 @@ defmodule Schooner.Primitives.Inexact do
     * `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, and `log`
       accept complex arguments and return complex.
 
-  Real `(asin x)` and `(acos x)` outside `[-1, 1]` also lift:
-  `(asin x)` returns the same result as `(asin (make-rectangular x 0))`,
-  and likewise for `acos`.
+  For an integer or float `x` outside `[-1, 1]`, `(asin x)` and
+  `(acos x)` also lift: `(asin x)` returns the same result as
+  `(asin (make-rectangular x 0))`, and likewise for `acos`. An exact
+  rational outside that range currently raises (#118).
+
   `(log 0)` returns `-inf.0`; zero is handled explicitly because
   `:math.log/1` raises on it. `(log -inf.0)` raises.
   """
