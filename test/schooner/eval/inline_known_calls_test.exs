@@ -88,7 +88,7 @@ defmodule Schooner.Eval.InlineKnownCallsTest do
       assert eval!("(define (g < a b) (< a b)) (g > 1 2)") == false
     end
 
-    test "a macro-introduced operator is inlined through its base name" do
+    test "a macro-introduced operator still means the standard procedure" do
       assert eval!("""
              (define-syntax inc (syntax-rules () ((_ x) (+ x 1))))
              (inc 41)
