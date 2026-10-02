@@ -19,10 +19,14 @@ defmodule Schooner.Expander do
 
   ## Top-level vs. internal `define-syntax`
 
-  Only top-level `define-syntax` is supported, including inside a
-  top-level `begin`. A `define-syntax` anywhere else raises
-  `Schooner.Eval.Error` with reason `:nested_define_syntax_unsupported`;
-  `let-syntax` and `letrec-syntax` cover local macro definitions.
+  Only top-level `define-syntax` is supported. Inside a top-level
+  `begin`, a macro is visible to the rest of that `begin`, but it
+  stays visible after the `begin` only if the `begin` contains
+  nothing but syntax definitions: a `begin` that also holds an
+  ordinary form drops its macros when it ends. A `define-syntax`
+  anywhere else raises `Schooner.Eval.Error` with reason
+  `:nested_define_syntax_unsupported`; `let-syntax` and
+  `letrec-syntax` cover local macro definitions.
   """
 
   alias Schooner.Eval.Error
