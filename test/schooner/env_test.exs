@@ -2,6 +2,8 @@ defmodule Schooner.EnvTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Env
+  alias Schooner.Eval
+  alias Schooner.Eval.Analyze
   alias Schooner.Value
 
   test "new/0 returns an env with no lexical frames" do
@@ -51,6 +53,38 @@ defmodule Schooner.EnvTest do
     assert Env.lookup(base, "later") == {:ok, 42}
   end
 
+  describe "global cells" do
+    test "a cell exists before its name is defined and sees the later define" do
+      env = Env.new()
+      cell = Env.global_cell(env.globals, "later")
+      assert Env.lookup(env, "later") == :error
+      assert Env.global_cell(env.globals, "later") == cell
+
+      Env.define(env, "later", 7)
+      assert Process.get(cell) == 7
+      assert Env.lookup(env, "later") == {:ok, 7}
+    end
+
+    test "a compiled reference made before the define reads the defined value" do
+      env = Env.new()
+
+      code =
+        Value.symbol("x") |> Analyze.analyze() |> Eval.compile(env.globals)
+
+      e = assert_raise Eval.Error, fn -> code.(env) end
+      assert e.reason == {:unbound, "x"}
+
+      Env.define(env, "x", 1)
+      assert code.(env) == 1
+      Env.define(env, "x", 2)
+      assert code.(env) == 2
+    end
+
+    test "forward references between top-level procedures resolve" do
+      assert Schooner.run!("(define (f) (g)) (define (g) 'ok) (f)") == Value.symbol("ok")
+    end
+  end
+
   test "two envs created independently do not share globals" do
     a = Env.new() |> Env.define("k", 1)
     b = Env.new()
@@ -73,5 +107,32 @@ defmodule Schooner.EnvTest do
     after_two_pops = Env.pop(after_one_pop)
     assert Env.lookup(after_two_pops, "x") == :error
     assert Env.lookup(after_two_pops, "g") == {:ok, :global}
+  end
+
+  test "lookup/2 resolves names in positional frames, last duplicate winning" do
+    env =
+      Env.new()
+      |> Env.define("g", :global)
+      |> Env.push_frame({{"a", "b", "a"}, 1, 2, 3})
+
+    assert Env.lookup(env, "a") == {:ok, 3}
+    assert Env.lookup(env, "b") == {:ok, 2}
+    assert Env.lookup(env, "g") == {:ok, :global}
+    assert Env.lookup(env, "missing") == :error
+  end
+
+  test "lookup/2 sees recursive frames, including uninitialised slots" do
+    env = Env.new() |> Env.extend_rec(["f", "g", "f"])
+
+    assert Env.lookup(env, "f") == {:uninitialised, "f"}
+
+    Env.rec_set(env, "f", :ff)
+    Env.rec_put(env, 1, :gg)
+
+    assert Env.lookup(env, "f") == {:ok, :ff}
+    assert Env.lookup(env, "g") == {:ok, :gg}
+
+    Env.release_rec(env)
+    assert Env.lookup(env, "f") == :error
   end
 end

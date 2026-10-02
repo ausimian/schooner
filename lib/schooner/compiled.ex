@@ -3,13 +3,15 @@ defmodule Schooner.Compiled do
   Opaque artifact produced by `Schooner.compile/2` and consumed by
   `Schooner.run_compiled/2`.
 
-  A `%Compiled{}` holds the **post-expansion core AST** of a program
+  A `%Compiled{}` holds the **analysed core IR** of a program
   together with the **runtime variable bindings** that the program's
   `(import ...)` declarations resolved to at compile time. Macros are
-  already gone from the AST — `let`, `cond`, `when`, `case`, etc.
-  have been rewritten into `quote` / `if` / `lambda` / `define` /
-  `define-values` / `begin` / `letrec*` / `quasiquote` / application
-  / variable references.
+  already gone — `let`, `cond`, `when`, `case`, etc. have been
+  rewritten into `quote` / `if` / `lambda` / `define` /
+  `define-values` / `begin` / `letrec*` / `quasiquote` / `guard` /
+  application / variable references — and those core forms have been
+  pre-analysed into the evaluator's tagged IR, so lambda parameter
+  parsing and body desugaring are not repeated per run.
 
   ## Reuse semantics
 
@@ -35,25 +37,25 @@ defmodule Schooner.Compiled do
   (the v2.0 evaluator rewrite is the seam this opacity protects).
   """
 
+  alias Schooner.Eval.Analyze
   alias Schooner.Library
-  alias Schooner.Value
 
   @enforce_keys [:program, :var_bindings]
   defstruct [:program, :var_bindings]
 
   @opaque t :: %__MODULE__{
-            program: [Value.t()],
+            program: [Analyze.ir()],
             var_bindings: %{binary() => Library.export()}
           }
 
   @doc false
-  @spec new([Value.t()], %{binary() => Library.export()}) :: t()
+  @spec new([Analyze.ir()], %{binary() => Library.export()}) :: t()
   def new(program, var_bindings) when is_list(program) and is_map(var_bindings) do
     %__MODULE__{program: program, var_bindings: var_bindings}
   end
 
   @doc false
-  @spec program(t()) :: [Value.t()]
+  @spec program(t()) :: [Analyze.ir()]
   def program(%__MODULE__{program: program}), do: program
 
   @doc false
