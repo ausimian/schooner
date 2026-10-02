@@ -24,7 +24,7 @@ defmodule Schooner.EvalInternalDefinesTest do
   defp count_rec_slots do
     Process.get_keys()
     |> Enum.count(fn k ->
-      is_reference(k) and match?({:rec_frame, _}, Process.get(k))
+      is_reference(k) and match?({:rec_frame, _names, _values}, Process.get(k))
     end)
   end
 

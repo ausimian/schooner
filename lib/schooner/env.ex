@@ -4,13 +4,13 @@ defmodule Schooner.Env do
 
   An environment is a chain of lexical frames innermost-first plus a
   *globals* slot identified by a process-dictionary key (a fresh
-  reference). Lexical frames are immutable maps; new frames are
-  pushed by `extend/2`. The globals slot is mutable in the strict
-  sense — `define/3` writes to it — so closures that captured an env
-  see top-level definitions added after they were created. This is
-  the standard `letrec`-style knot-tying applied to the top-level
-  frame: closures reference the frame by identity, not by
-  value-at-bind-time.
+  reference). Lexical frames are immutable; new frames are pushed by
+  `extend/2` (or, inside the evaluator, `push_frame/2`). The globals
+  slot is mutable in the strict sense — `define/3` writes to it — so
+  closures that captured an env see top-level definitions added after
+  they were created. This is the standard `letrec`-style knot-tying
+  applied to the top-level frame: closures reference the frame by
+  identity, not by value-at-bind-time.
 
   Globals are stored as a Map on the process heap, not in `:ets`, so
   consecutive lookups of the same name return the *same* heap term.
@@ -22,13 +22,26 @@ defmodule Schooner.Env do
   reclaimed when that process exits, so per-execution sandboxing
   falls out of the BEAM's process model.
 
+  ## Frame shapes
+
+  The evaluator resolves every lexical variable reference to a
+  `{depth, slot}` address at analysis time (see
+  `Schooner.Eval.Analyze`), so the frames it pushes are *positional*:
+  a tuple whose element 0 is a tuple of the frame's names and whose
+  remaining elements are the values in the same order. The names are
+  carried so `lookup/2` can still resolve by name; the evaluator
+  itself only indexes.
+
+  `extend/2` pushes a name → value map frame instead. Both shapes, and
+  the recursive frames below, are understood by `lookup/2`.
+
   ## Recursive lexical frames
 
   `letrec`, `letrec*`, named `let`, and the `letrec*` produced by
   internal-define splicing each push a *recursive* frame. A recursive
-  frame is a map of name → value backed by a process-dictionary slot
-  keyed by `make_ref/0`, so closures captured during init evaluation
-  see later bindings via frame identity.
+  frame is a process-dictionary slot keyed by `make_ref/0`, holding the
+  frame's names and a tuple of values, so closures captured during
+  init evaluation see later bindings via frame identity.
 
   Each such frame is released by `release_rec/1` when the body
   finishes — *unless* the body's return value carries a closure whose
@@ -54,7 +67,7 @@ defmodule Schooner.Env do
   @enforce_keys [:globals, :lex]
   defstruct [:globals, :lex]
 
-  @type frame :: %{optional(binary()) => Value.t()} | {:rec, reference()}
+  @type frame :: %{optional(binary()) => Value.t()} | tuple() | {:rec, reference()}
   @type t :: %__MODULE__{globals: reference(), lex: [frame()]}
   @type lookup_result :: {:ok, Value.t()} | :error | {:uninitialised, binary()}
 
@@ -96,21 +109,33 @@ defmodule Schooner.Env do
       nil ->
         lex_lookup(rest, name)
 
-      {:rec_frame, frame} ->
-        case Map.fetch(frame, name) do
-          {:ok, @rec_uninitialised} -> {:uninitialised, name}
-          {:ok, _} = ok -> ok
-          :error -> lex_lookup(rest, name)
+      {:rec_frame, names, values} ->
+        case rec_slot(names, name) do
+          nil -> lex_lookup(rest, name)
+          i -> rec_value(elem(values, i), name)
         end
     end
   end
 
-  defp lex_lookup([frame | rest], name) do
+  defp lex_lookup([frame | rest], name) when is_map(frame) do
     case Map.fetch(frame, name) do
       {:ok, _} = ok -> ok
       :error -> lex_lookup(rest, name)
     end
   end
+
+  # Positional frame: `{names, v1, v2, ...}`. Duplicate names resolve
+  # to the last occurrence, matching the map-frame semantics of
+  # binding the same name twice.
+  defp lex_lookup([frame | rest], name) when is_tuple(frame) do
+    case last_index(elem(frame, 0), name) do
+      nil -> lex_lookup(rest, name)
+      i -> {:ok, elem(frame, i + 1)}
+    end
+  end
+
+  defp rec_value(@rec_uninitialised, name), do: {:uninitialised, name}
+  defp rec_value(value, _name), do: {:ok, value}
 
   defp globals_lookup(ref, name) do
     case :maps.find(name, :erlang.get(ref)) do
@@ -118,6 +143,10 @@ defmodule Schooner.Env do
       :error -> :error
     end
   end
+
+  @doc false
+  @spec fetch_global(t(), binary()) :: {:ok, Value.t()} | :error
+  def fetch_global(%__MODULE__{globals: ref}, name), do: globals_lookup(ref, name)
 
   @doc """
   Add or replace a top-level binding. Visible to every closure that
@@ -129,16 +158,18 @@ defmodule Schooner.Env do
     env
   end
 
-  @doc "Push an already-built lexical frame map on top of `env`."
-  @spec extend_map(t(), %{optional(binary()) => Value.t()}) :: t()
-  def extend_map(%__MODULE__{lex: lex} = env, frame) when is_map(frame) do
-    %{env | lex: [frame | lex]}
-  end
-
   @doc "Push a new lexical frame on top of `env`."
   @spec extend(t(), [{binary(), Value.t()}]) :: t()
   def extend(%__MODULE__{lex: lex} = env, bindings) do
     %{env | lex: [Map.new(bindings) | lex]}
+  end
+
+  @doc false
+  # Push a positional frame `{names_tuple, v1, v2, ...}`. Used by the
+  # evaluator, whose variable references are pre-resolved to slots.
+  @spec push_frame(t(), tuple()) :: t()
+  def push_frame(%__MODULE__{lex: lex} = env, frame) when is_tuple(frame) do
+    %{env | lex: [frame | lex]}
   end
 
   @doc """
@@ -149,26 +180,39 @@ defmodule Schooner.Env do
   process-dictionary slot keyed by a fresh reference; the slot must
   be released with `release_rec/1` once the binding form's body has
   finished evaluating.
+
+  Duplicate names share one slot.
   """
   @spec extend_rec(t(), [binary()]) :: t()
   def extend_rec(%__MODULE__{lex: lex} = env, names) when is_list(names) do
+    names = Enum.uniq(names)
+    true = Enum.all?(names, &is_binary/1)
     ref = make_ref()
-
-    Process.put(
-      ref,
-      {:rec_frame, Map.new(names, fn name when is_binary(name) -> {name, @rec_uninitialised} end)}
-    )
-
+    values = :erlang.make_tuple(length(names), @rec_uninitialised)
+    Process.put(ref, {:rec_frame, List.to_tuple(names), values})
     %{env | lex: [{:rec, ref} | lex]}
   end
 
   @doc "Set a binding in the topmost recursive frame on `env`."
   @spec rec_set(t(), binary(), Value.t()) :: t()
   def rec_set(%__MODULE__{lex: [{:rec, ref} | _]} = env, name, value) when is_binary(name) do
-    {:rec_frame, frame} = Process.get(ref)
-    Process.put(ref, {:rec_frame, Map.put(frame, name, value)})
+    {:rec_frame, names, _} = Process.get(ref)
+    rec_put(env, rec_slot(names, name), value)
+  end
+
+  @doc false
+  # Set slot `index` (0-based, in `extend_rec/2`'s de-duplicated name
+  # order) of the topmost recursive frame on `env`.
+  @spec rec_put(t(), non_neg_integer(), Value.t()) :: t()
+  def rec_put(%__MODULE__{lex: [{:rec, ref} | _]} = env, index, value) do
+    {:rec_frame, names, values} = :erlang.get(ref)
+    :erlang.put(ref, {:rec_frame, names, put_elem(values, index, value)})
     env
   end
+
+  @doc false
+  @spec rec_uninitialised() :: atom()
+  def rec_uninitialised, do: @rec_uninitialised
 
   @doc """
   Release the topmost recursive frame on `env`, deleting the
@@ -185,4 +229,20 @@ defmodule Schooner.Env do
   @doc "Pop the topmost lexical frame on `env`."
   @spec pop(t()) :: t()
   def pop(%__MODULE__{lex: [_top | rest]} = env), do: %{env | lex: rest}
+
+  defp rec_slot(names, name), do: first_index(names, name, 0, tuple_size(names))
+
+  defp first_index(_names, _name, i, n) when i == n, do: nil
+
+  defp first_index(names, name, i, n) do
+    if elem(names, i) == name, do: i, else: first_index(names, name, i + 1, n)
+  end
+
+  defp last_index(names, name), do: last_index(names, name, tuple_size(names) - 1)
+
+  defp last_index(_names, _name, -1), do: nil
+
+  defp last_index(names, name, i) do
+    if elem(names, i) == name, do: i, else: last_index(names, name, i - 1)
+  end
 end
