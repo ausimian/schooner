@@ -37,9 +37,10 @@ defmodule Schooner.Eval do
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
-  alias Schooner.Expander.SyntaxRules
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Value
+
+  @rec_uninitialised Env.rec_uninitialised()
 
   @doc """
   Coerce a multi-value to a single value. Auto-unwraps a 1-element
@@ -66,20 +67,34 @@ defmodule Schooner.Eval do
   def single_value!(other), do: other
 
   @doc """
-  Analyse and evaluate a single core form.
+  Analyse and evaluate a single top-level core form.
+
+  Variable references are resolved against the empty lexical scope, so
+  `env` must have no lexical frames (an env from `Env.new/0` or a
+  `Schooner.Environment`).
   """
   @spec eval(Value.t(), Env.t()) :: eval_result()
-  def eval(form, env), do: exec(Analyze.analyze(form), env)
+  def eval(form, %Env{lex: []} = env), do: exec(Analyze.analyze(form), env)
 
   @doc """
   Evaluate an IR node produced by `Schooner.Eval.Analyze.analyze/1`.
   """
   @spec exec(Analyze.ir(), Env.t()) :: eval_result()
-  def exec({:ref, name}, env) do
-    case Env.lookup(env, name) do
+  def exec({:lref, depth, index}, %Env{lex: lex}), do: elem(frame_at(lex, depth), index)
+
+  def exec({:rref, depth, slot, name, fallback}, %Env{lex: lex} = env) do
+    {:rec, ref} = frame_at(lex, depth)
+
+    case :erlang.get(ref) do
+      {:rec_frame, _names, values} -> rec_value!(elem(values, slot), name)
+      :undefined -> exec(fallback, env)
+    end
+  end
+
+  def exec({:gref, name, marked}, env) do
+    case Env.fetch_global(env, name) do
       {:ok, value} -> value
-      {:uninitialised, n} -> raise Error, reason: {:rec_uninitialised, n}
-      :error -> resolve_marked_var(env, name)
+      :error -> resolve_marked_var(marked, name, env)
     end
   end
 
@@ -115,16 +130,44 @@ defmodule Schooner.Eval do
 
   # A name that carries a hygiene mark from a macro template but was
   # never bound by an introduced binder is a free reference to the
-  # unmarked base name — usually a runtime primitive like `+`. Fall
-  # back to the base name before declaring it unbound.
-  defp resolve_marked_var(env, name) do
-    with {:ok, base} <- SyntaxRules.strip_mark(name),
-         {:ok, value} <- Env.lookup(env, base) do
-      value
-    else
-      _ -> raise Error, reason: {:unbound, name}
+  # unmarked base name — usually a runtime primitive like `+`. The
+  # analyser pre-resolved that base name; any failure to find it
+  # (unbound, or an uninitialised letrec slot) reports the original
+  # marked name as unbound.
+  defp resolve_marked_var(nil, name, _env), do: raise(Error, reason: {:unbound, name})
+
+  defp resolve_marked_var(base_ref, name, env) do
+    case lookup_soft(base_ref, env) do
+      {:ok, value} -> value
+      :error -> raise Error, reason: {:unbound, name}
     end
   end
+
+  defp lookup_soft({:lref, depth, index}, %Env{lex: lex}),
+    do: {:ok, elem(frame_at(lex, depth), index)}
+
+  defp lookup_soft({:rref, depth, slot, _name, fallback}, %Env{lex: lex} = env) do
+    {:rec, ref} = frame_at(lex, depth)
+
+    case :erlang.get(ref) do
+      {:rec_frame, _names, values} ->
+        case elem(values, slot) do
+          @rec_uninitialised -> :error
+          value -> {:ok, value}
+        end
+
+      :undefined ->
+        lookup_soft(fallback, env)
+    end
+  end
+
+  defp lookup_soft({:gref, name, _marked}, env), do: Env.fetch_global(env, name)
+
+  defp rec_value!(@rec_uninitialised, name), do: raise(Error, reason: {:rec_uninitialised, name})
+  defp rec_value!(value, _name), do: value
+
+  defp frame_at([frame | _], 0), do: frame
+  defp frame_at([_ | rest], depth), do: frame_at(rest, depth - 1)
 
   # ---------------------------------------------------------------------------
   # define-values — top-level
@@ -182,20 +225,25 @@ defmodule Schooner.Eval do
     [v | eval_args(t, env)]
   end
 
-  # Fixed-arity closures are the common case: build the frame map in a
-  # single walk over names and args instead of `length/1` +
-  # `Enum.zip/2` + `Map.new/1`.
+  # A closure's body is `{names, forms}`; application pushes the
+  # positional frame `{names, arg1, arg2, ...}` that the analyser
+  # resolved the body's references against. For the common fixed-arity
+  # case that is a single `List.to_tuple/1`, with the arity check done
+  # on the resulting tuple size.
   @spec apply_proc(Value.t(), [Value.t()]) :: eval_result()
-  def apply_proc({:closure, {:fixed, _, names} = params, body, env, name}, args) do
-    case zip_frame(names, args, %{}) do
-      :error -> bind_params(params, args, name)
-      frame -> eval_sequence(body, Env.extend_map(env, frame))
+  def apply_proc({:closure, {:fixed, n, _}, {names, body}, env, name}, args) do
+    frame = List.to_tuple([names | args])
+
+    if tuple_size(frame) == n + 1 do
+      eval_sequence(body, Env.push_frame(env, frame))
+    else
+      raise Error, reason: {:arity_mismatch, name, {:exact, n}, length(args)}
     end
   end
 
-  def apply_proc({:closure, params, body, env, name}, args) do
-    new_env = Env.extend(env, bind_params(params, args, name))
-    eval_sequence(body, new_env)
+  def apply_proc({:closure, params, {names, body}, env, name}, args) do
+    values = params |> bind_params(args, name) |> Enum.map(&elem(&1, 1))
+    eval_sequence(body, Env.push_frame(env, List.to_tuple([names | values])))
   end
 
   def apply_proc({:primitive, name, arity, fun}, args) do
@@ -212,12 +260,6 @@ defmodule Schooner.Eval do
   end
 
   def apply_proc(other, _args), do: raise(Error, reason: {:not_a_procedure, other})
-
-  # Returns `:error` on an arity mismatch; the caller falls back to
-  # `bind_params/3`, which raises the canonical error.
-  defp zip_frame([], [], acc), do: acc
-  defp zip_frame([k | ks], [v | vs], acc), do: zip_frame(ks, vs, Map.put(acc, k, v))
-  defp zip_frame(_, _, _), do: :error
 
   defp bind_params({:fixed, n, names}, args, fname) do
     case length(args) do
@@ -307,16 +349,17 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp init_binding({:single, name, init}, rec_env) do
-    Env.rec_set(rec_env, name, single_value!(exec(init, rec_env)))
+  defp init_binding({:single, slot, init}, rec_env) do
+    Env.rec_put(rec_env, slot, single_value!(exec(init, rec_env)))
   end
 
-  defp init_binding({:multi, spec, init}, rec_env) do
+  defp init_binding({:multi, spec, init, slots}, rec_env) do
     values = values_to_list(exec(init, rec_env))
 
     spec
     |> bind_params(values, "define-values")
-    |> Enum.each(fn {name, value} -> Env.rec_set(rec_env, name, value) end)
+    |> Enum.zip(slots)
+    |> Enum.each(fn {{_name, value}, slot} -> Env.rec_put(rec_env, slot, value) end)
   end
 
   # Runtime half of quasiquote: walk the template the analyser built,
@@ -417,7 +460,7 @@ defmodule Schooner.Eval do
   # `apply_proc/2` invokes it with the same machinery as a user
   # handler — `with-exception-handler` and `guard` are
   # indistinguishable from the raise side.
-  defp eval_guard(var, clauses, body, env) do
+  defp eval_guard(names, clauses, body, env) do
     tag = make_ref()
     handler = build_guard_handler(tag)
     # Snapshot/restore the whole stack rather than `pop`ing once in
@@ -437,7 +480,7 @@ defmodule Schooner.Eval do
       # unwound past any parameterize/handler frames between the raise
       # site and this guard.
       :throw, {:schooner_guard, ^tag, raised} ->
-        handler_env = Env.extend(env, [{var, raised}])
+        handler_env = Env.push_frame(env, {names, raised})
 
         case eval_guard_clauses(clauses, handler_env) do
           {:matched, value} -> value

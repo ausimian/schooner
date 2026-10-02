@@ -74,4 +74,31 @@ defmodule Schooner.EnvTest do
     assert Env.lookup(after_two_pops, "x") == :error
     assert Env.lookup(after_two_pops, "g") == {:ok, :global}
   end
+
+  test "lookup/2 resolves names in positional frames, last duplicate winning" do
+    env =
+      Env.new()
+      |> Env.define("g", :global)
+      |> Env.push_frame({{"a", "b", "a"}, 1, 2, 3})
+
+    assert Env.lookup(env, "a") == {:ok, 3}
+    assert Env.lookup(env, "b") == {:ok, 2}
+    assert Env.lookup(env, "g") == {:ok, :global}
+    assert Env.lookup(env, "missing") == :error
+  end
+
+  test "lookup/2 sees recursive frames, including uninitialised slots" do
+    env = Env.new() |> Env.extend_rec(["f", "g", "f"])
+
+    assert Env.lookup(env, "f") == {:uninitialised, "f"}
+
+    Env.rec_set(env, "f", :ff)
+    Env.rec_put(env, 1, :gg)
+
+    assert Env.lookup(env, "f") == {:ok, :ff}
+    assert Env.lookup(env, "g") == {:ok, :gg}
+
+    Env.release_rec(env)
+    assert Env.lookup(env, "f") == :error
+  end
 end

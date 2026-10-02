@@ -11,6 +11,36 @@ defmodule Schooner.Eval.Analyze do
   # work once here leaves `exec/2` with a single atom-tag dispatch per
   # node and makes closure creation a tuple build.
   #
+  # ## Lexical addressing
+  #
+  # Analysis threads a compile-time *scope* — a list of frames that
+  # mirrors, one for one, the frames `exec/2` will push at run time:
+  #
+  #   * `{:pos, names}` for a closure's parameters and a `guard`
+  #     handler's variable. The run-time frame is the tuple
+  #     `{names_tuple, v1, v2, ...}`.
+  #   * `{:rec, names}` for a `letrec*` frame. The run-time frame is a
+  #     process-dictionary slot holding a values tuple.
+  #
+  # Each variable reference is resolved against that scope to
+  #
+  #   * `{:lref, depth, index}` — element `index` of the positional
+  #     frame `depth` levels up;
+  #   * `{:rref, depth, slot, name, fallback}` — slot `slot` of the
+  #     recursive frame `depth` levels up. `fallback` is the same name
+  #     resolved in the scope *below* that frame, used if the frame's
+  #     slot has already been released (see `Schooner.Env`), which is
+  #     where the old by-name walk would have continued;
+  #   * `{:gref, name, marked}` — a top-level binding. `marked` is the
+  #     hygiene fallback: when `name` carries a macro mark and no
+  #     binding exists for it, the old evaluator retried with the mark
+  #     stripped, so `marked` is that base name resolved against the
+  #     full scope (or `nil` for an unmarked name).
+  #
+  # Top-level forms are analysed against the empty scope, so
+  # `Eval.eval/2` and compiled programs must run against an env with no
+  # lexical frames — which every caller does.
+  #
   # ## Error timing
   #
   # A malformed core form must fail when (and only when) evaluation
@@ -30,6 +60,7 @@ defmodule Schooner.Eval.Analyze do
   # the earlier work still happens first.
 
   alias Schooner.Eval.Error
+  alias Schooner.Expander.SyntaxRules
   alias Schooner.Value
 
   @type params ::
@@ -37,7 +68,11 @@ defmodule Schooner.Eval.Analyze do
           | {:any, binary()}
           | {:fixed_rest, non_neg_integer(), [binary()], binary()}
 
-  @type binding :: {:single, binary(), ir()} | {:multi, params(), ir()}
+  @type scope :: [{:pos, %{binary() => pos_integer()}} | {:rec, %{binary() => non_neg_integer()}}]
+
+  @type binding ::
+          {:single, non_neg_integer(), ir()}
+          | {:multi, params(), ir(), [non_neg_integer()]}
 
   @type guard_clause ::
           {:else, [ir()]}
@@ -53,48 +88,111 @@ defmodule Schooner.Eval.Analyze do
           | {:qsplice, ir(), template()}
           | {:qvec, template()}
 
+  @type ref ::
+          {:lref, non_neg_integer(), pos_integer()}
+          | {:rref, non_neg_integer(), non_neg_integer(), binary(), ref()}
+          | {:gref, binary(), ref() | nil}
+
   @type ir ::
           {:const, Value.t()}
-          | {:ref, binary()}
+          | ref()
           | {:if, ir(), ir(), ir()}
           | {:app, ir(), [ir()]}
-          | {:lambda, params(), [ir()], binary() | nil}
+          | {:lambda, params(), {tuple(), [ir()]}, binary() | nil}
           | {:define, binary(), ir()}
           | {:define_values, params(), ir()}
           | {:seq, [ir()]}
           | {:letrec, [binary()], [binding()], [ir()]}
           | {:quasi, template()}
-          | {:guard, binary(), [guard_clause()], [ir()]}
+          | {:guard, {binary()}, [guard_clause()], [ir()]}
           | {:raise, Exception.t()}
 
   @doc false
   @spec analyze(Value.t()) :: ir()
-  def analyze(form) do
-    analyze_form(form)
+  def analyze(form), do: analyze(form, [])
+
+  @spec analyze(Value.t(), scope()) :: ir()
+  defp analyze(form, scope) do
+    analyze_form(form, scope)
   rescue
     e in Error -> {:raise, e}
   end
 
-  defp analyze_form({:sym, name}), do: {:ref, name}
-  defp analyze_form([]), do: raise(Error, reason: :empty_application)
-  defp analyze_form([{:sym, "quote"} | tail]), do: analyze_quote(tail)
-  defp analyze_form([{:sym, "if"} | tail]), do: analyze_if(tail)
-  defp analyze_form([{:sym, "lambda"} | tail]), do: analyze_lambda(tail)
-  defp analyze_form([{:sym, "define"} | tail]), do: analyze_define(tail)
-  defp analyze_form([{:sym, "define-values"} | tail]), do: analyze_define_values(tail)
-  defp analyze_form([{:sym, "begin"} | tail]), do: {:seq, Enum.map(tail, &analyze/1)}
-  defp analyze_form([{:sym, "letrec*"} | tail]), do: analyze_letrec_star(tail)
-  defp analyze_form([{:sym, "quasiquote"} | tail]), do: analyze_quasiquote(tail)
-  defp analyze_form([{:sym, "guard"} | tail]), do: analyze_guard(tail)
-  defp analyze_form([head | tail]), do: {:app, analyze(head), analyze_args(tail)}
-  defp analyze_form(value), do: {:const, value}
+  defp analyze_form({:sym, name}, scope), do: resolve(name, scope)
+  defp analyze_form([], _scope), do: raise(Error, reason: :empty_application)
+  defp analyze_form([{:sym, "quote"} | tail], _scope), do: analyze_quote(tail)
+  defp analyze_form([{:sym, "if"} | tail], scope), do: analyze_if(tail, scope)
+  defp analyze_form([{:sym, "lambda"} | tail], scope), do: analyze_lambda(tail, scope)
+  defp analyze_form([{:sym, "define"} | tail], scope), do: analyze_define(tail, scope)
+
+  defp analyze_form([{:sym, "define-values"} | tail], scope),
+    do: analyze_define_values(tail, scope)
+
+  defp analyze_form([{:sym, "begin"} | tail], scope), do: {:seq, analyze_all(tail, scope)}
+  defp analyze_form([{:sym, "letrec*"} | tail], scope), do: analyze_letrec_star(tail, scope)
+  defp analyze_form([{:sym, "quasiquote"} | tail], scope), do: analyze_quasiquote(tail, scope)
+  defp analyze_form([{:sym, "guard"} | tail], scope), do: analyze_guard(tail, scope)
+
+  defp analyze_form([head | tail], scope),
+    do: {:app, analyze(head, scope), analyze_args(tail, scope)}
+
+  defp analyze_form(value, _scope), do: {:const, value}
+
+  defp analyze_all(forms, scope), do: Enum.map(forms, &analyze(&1, scope))
 
   # The old evaluator evaluated each argument and only then tripped on
   # a non-list tail, so the raise goes in the argument position after
   # the last proper element.
-  defp analyze_args([]), do: []
-  defp analyze_args([h | t]), do: [analyze(h) | analyze_args(t)]
-  defp analyze_args(_), do: [{:raise, Error.exception(reason: :improper_application)}]
+  defp analyze_args([], _scope), do: []
+  defp analyze_args([h | t], scope), do: [analyze(h, scope) | analyze_args(t, scope)]
+  defp analyze_args(_, _scope), do: [{:raise, Error.exception(reason: :improper_application)}]
+
+  # ---------------------------------------------------------------------------
+  # Variable resolution
+  # ---------------------------------------------------------------------------
+
+  defp resolve(name, scope), do: resolve(name, scope, 0, scope, true)
+
+  defp resolve(name, [], _depth, full, marked?) do
+    {:gref, name, if(marked?, do: marked_fallback(name, full))}
+  end
+
+  defp resolve(name, [{:pos, slots} | rest], depth, full, marked?) do
+    case slots do
+      %{^name => index} -> {:lref, depth, index}
+      _ -> resolve(name, rest, depth + 1, full, marked?)
+    end
+  end
+
+  defp resolve(name, [{:rec, slots} | rest], depth, full, marked?) do
+    case slots do
+      %{^name => slot} ->
+        {:rref, depth, slot, name, resolve(name, rest, depth + 1, full, marked?)}
+
+      _ ->
+        resolve(name, rest, depth + 1, full, marked?)
+    end
+  end
+
+  # A name that carries a hygiene mark from a macro template but was
+  # never bound by an introduced binder is a free reference to the
+  # unmarked base name — usually a runtime primitive like `+`. The base
+  # is looked up from the top of the scope, and does not itself get a
+  # second marked fallback.
+  defp marked_fallback(name, full) do
+    case SyntaxRules.strip_mark(name) do
+      {:ok, base} -> resolve(base, full, 0, full, false)
+      _ -> nil
+    end
+  end
+
+  # Positional frames hold their names in element 0, so values start at
+  # element 1. A duplicated name resolves to its last occurrence, as a
+  # map-built frame would.
+  defp pos_frame(names) do
+    slots = names |> Enum.with_index(1) |> Map.new()
+    {{:pos, slots}, List.to_tuple(names)}
+  end
 
   # ---------------------------------------------------------------------------
   # quote / if / lambda
@@ -103,25 +201,31 @@ defmodule Schooner.Eval.Analyze do
   defp analyze_quote([datum | []]), do: {:const, datum}
   defp analyze_quote(_), do: raise(Error, reason: {:bad_special_form, "quote"})
 
-  defp analyze_if([test | [then_e | []]]) do
-    {:if, analyze(test), analyze(then_e), {:const, :unspecified}}
+  defp analyze_if([test | [then_e | []]], scope) do
+    {:if, analyze(test, scope), analyze(then_e, scope), {:const, :unspecified}}
   end
 
-  defp analyze_if([test | [then_e | [else_e | []]]]) do
-    {:if, analyze(test), analyze(then_e), analyze(else_e)}
+  defp analyze_if([test | [then_e | [else_e | []]]], scope) do
+    {:if, analyze(test, scope), analyze(then_e, scope), analyze(else_e, scope)}
   end
 
-  defp analyze_if(_), do: raise(Error, reason: {:bad_special_form, "if"})
+  defp analyze_if(_, _scope), do: raise(Error, reason: {:bad_special_form, "if"})
 
-  defp analyze_lambda([_params_form | []]) do
+  defp analyze_lambda([_params_form | []], _scope) do
     raise(Error, reason: {:bad_special_form, "lambda"})
   end
 
-  defp analyze_lambda([params_form | body]) do
-    {:lambda, parse_params(params_form), analyze_body(body), nil}
-  end
+  defp analyze_lambda([params_form | body], scope), do: lambda(params_form, body, nil, scope)
+  defp analyze_lambda(_, _scope), do: raise(Error, reason: {:bad_special_form, "lambda"})
 
-  defp analyze_lambda(_), do: raise(Error, reason: {:bad_special_form, "lambda"})
+  # The closure body carries the frame's names tuple alongside the
+  # analysed forms so application can build the positional frame
+  # without converting the parameter list each call.
+  defp lambda(params_form, body, name, scope) do
+    params = parse_params(params_form)
+    {frame, names} = pos_frame(spec_names(params))
+    {:lambda, params, {names, analyze_body(body, [frame | scope])}, name}
+  end
 
   defp parse_params({:sym, name}), do: {:any, name}
   defp parse_params([]), do: {:fixed, 0, []}
@@ -140,27 +244,34 @@ defmodule Schooner.Eval.Analyze do
 
   defp collect_params(_, _, _), do: raise(Error, reason: :invalid_params)
 
+  defp spec_names({:fixed, _, names}), do: names
+  defp spec_names({:any, name}), do: [name]
+  defp spec_names({:fixed_rest, _, names, rest}), do: names ++ [rest]
+
   # ---------------------------------------------------------------------------
   # define / define-values
   # ---------------------------------------------------------------------------
 
-  defp analyze_define([{:sym, name} | [expr | []]]), do: {:define, name, analyze(expr)}
+  defp analyze_define([{:sym, name} | [expr | []]], scope) do
+    {:define, name, analyze(expr, scope)}
+  end
 
-  defp analyze_define([[{:sym, _name} | _params] | []]) do
+  defp analyze_define([[{:sym, _name} | _params] | []], _scope) do
     raise(Error, reason: {:bad_special_form, "define"})
   end
 
-  defp analyze_define([[{:sym, name} | params_form] | body]) do
-    {:define, name, {:lambda, parse_params(params_form), analyze_body(body), name}}
+  defp analyze_define([[{:sym, name} | params_form] | body], scope) do
+    {:define, name, lambda(params_form, body, name, scope)}
   end
 
-  defp analyze_define(_), do: raise(Error, reason: {:bad_special_form, "define"})
+  defp analyze_define(_, _scope), do: raise(Error, reason: {:bad_special_form, "define"})
 
-  defp analyze_define_values([formals | [expr | []]]) do
-    {:define_values, parse_define_values_formals(formals), analyze(expr)}
+  defp analyze_define_values([formals | [expr | []]], scope) do
+    {:define_values, parse_define_values_formals(formals), analyze(expr, scope)}
   end
 
-  defp analyze_define_values(_), do: raise(Error, reason: {:bad_special_form, "define-values"})
+  defp analyze_define_values(_, _scope),
+    do: raise(Error, reason: {:bad_special_form, "define-values"})
 
   defp parse_define_values_formals(formals) do
     parse_params(formals)
@@ -171,13 +282,32 @@ defmodule Schooner.Eval.Analyze do
   # ---------------------------------------------------------------------------
   # letrec*
   # ---------------------------------------------------------------------------
+  #
+  # Shapes are checked and names collected before any init is analysed,
+  # because the inits are analysed inside the new recursive frame. Each
+  # distinct name gets one slot (first occurrence order, matching
+  # `Env.extend_rec/2`); a binding records the slot(s) it writes.
 
-  defp analyze_letrec_star([bindings_form | body]) when body != [] do
+  defp analyze_letrec_star([bindings_form | body], scope) when body != [] do
     parsed = parse_bindings(bindings_form, [])
-    {:letrec, collect_binding_names(parsed), parsed, analyze_deferred_body(body)}
+    names = parsed |> Enum.flat_map(&binding_names/1) |> Enum.uniq()
+    slots = names |> Enum.with_index() |> Map.new()
+    rec_scope = [{:rec, slots} | scope]
+
+    bindings =
+      Enum.map(parsed, fn
+        {:single, name, init} ->
+          {:single, Map.fetch!(slots, name), analyze(init, rec_scope)}
+
+        {:multi, spec, init} ->
+          targets = Enum.map(spec_names(spec), &Map.fetch!(slots, &1))
+          {:multi, spec, analyze(init, rec_scope), targets}
+      end)
+
+    {:letrec, names, bindings, analyze_deferred_body(body, rec_scope)}
   end
 
-  defp analyze_letrec_star(_), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+  defp analyze_letrec_star(_, _scope), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
   # `letrec*` bindings are normally `(name init)`. The body desugarer
   # emits a second internal-only shape, `{:multi_vals, params_spec}`
@@ -189,25 +319,17 @@ defmodule Schooner.Eval.Analyze do
   defp parse_bindings([], acc), do: Enum.reverse(acc)
 
   defp parse_bindings([[{:sym, name} | [init | []]] | rest], acc) do
-    parse_bindings(rest, [{:single, name, analyze(init)} | acc])
+    parse_bindings(rest, [{:single, name, init} | acc])
   end
 
   defp parse_bindings([[{:multi_vals, spec} | [init | []]] | rest], acc) do
-    parse_bindings(rest, [{:multi, spec, analyze(init)} | acc])
+    parse_bindings(rest, [{:multi, spec, init} | acc])
   end
 
   defp parse_bindings(_, _), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
-  defp collect_binding_names(parsed) do
-    Enum.flat_map(parsed, fn
-      {:single, name, _} -> [name]
-      {:multi, spec, _} -> spec_names(spec)
-    end)
-  end
-
-  defp spec_names({:fixed, _, names}), do: names
-  defp spec_names({:any, name}), do: [name]
-  defp spec_names({:fixed_rest, _, names, rest}), do: names ++ [rest]
+  defp binding_names({:single, name, _}), do: [name]
+  defp binding_names({:multi, spec, _}), do: spec_names(spec)
 
   # ---------------------------------------------------------------------------
   # quasiquote
@@ -219,37 +341,39 @@ defmodule Schooner.Eval.Analyze do
   # `unquote-splicing` only fire at quasi level 1; nested `quasiquote`
   # raises the level, nested `unquote` lowers it.
 
-  defp analyze_quasiquote([datum | []]), do: {:quasi, template(datum, 1)}
-  defp analyze_quasiquote(_), do: raise(Error, reason: {:bad_special_form, "quasiquote"})
+  defp analyze_quasiquote([datum | []], scope), do: {:quasi, template(datum, 1, scope)}
 
-  defp template([{:sym, "unquote"} | [expr | []]], 1), do: {:qu, analyze(expr)}
+  defp analyze_quasiquote(_, _scope),
+    do: raise(Error, reason: {:bad_special_form, "quasiquote"})
 
-  defp template([{:sym, "unquote"} | [expr | []]], n) when n > 1 do
-    qlist([{:qc, Value.symbol("unquote")}, template(expr, n - 1)])
+  defp template([{:sym, "unquote"} | [expr | []]], 1, scope), do: {:qu, analyze(expr, scope)}
+
+  defp template([{:sym, "unquote"} | [expr | []]], n, scope) when n > 1 do
+    qlist([{:qc, Value.symbol("unquote")}, template(expr, n - 1, scope)])
   end
 
-  defp template([{:sym, "quasiquote"} | [expr | []]], n) do
-    qlist([{:qc, Value.symbol("quasiquote")}, template(expr, n + 1)])
+  defp template([{:sym, "quasiquote"} | [expr | []]], n, scope) do
+    qlist([{:qc, Value.symbol("quasiquote")}, template(expr, n + 1, scope)])
   end
 
-  defp template([head | tail], level) do
+  defp template([head | tail], level, scope) do
     case head do
       [{:sym, "unquote-splicing"} | [expr | []]] when level == 1 ->
-        {:qsplice, analyze(expr), template(tail, level)}
+        {:qsplice, analyze(expr, scope), template(tail, level, scope)}
 
       _ ->
-        qcons(template(head, level), template(tail, level))
+        qcons(template(head, level, scope), template(tail, level, scope))
     end
   end
 
-  defp template({:vector, t}, level) do
-    case template(Value.list(Tuple.to_list(t)), level) do
+  defp template({:vector, t}, level, scope) do
+    case template(Value.list(Tuple.to_list(t)), level, scope) do
       {:qc, list} -> {:qc, Value.vector(list)}
       other -> {:qvec, other}
     end
   end
 
-  defp template(other, _level), do: {:qc, other}
+  defp template(other, _level, _scope), do: {:qc, other}
 
   defp qlist([]), do: {:qc, []}
   defp qlist([h | t]), do: qcons(h, qlist(t))
@@ -265,34 +389,40 @@ defmodule Schooner.Eval.Analyze do
   # them. A malformed clause (or improper clause list) becomes a
   # `{:bad, exception}` entry that raises only if the clause walk
   # reaches it, and an `else` clause ends the list since nothing after
-  # it was ever inspected.
+  # it was ever inspected. The body runs in the guard's own scope; the
+  # clauses run in a one-slot frame binding the condition variable.
 
-  defp analyze_guard([[{:sym, var} | clauses_form] | body]) when is_binary(var) and body != [] do
-    {:guard, var, guard_clauses(clauses_form), analyze_deferred_body(body)}
+  defp analyze_guard([[{:sym, var} | clauses_form] | body], scope)
+       when is_binary(var) and body != [] do
+    {frame, names} = pos_frame([var])
+    clauses = guard_clauses(clauses_form, [frame | scope])
+    {:guard, names, clauses, analyze_deferred_body(body, scope)}
   end
 
-  defp analyze_guard(_), do: raise(Error, reason: {:bad_special_form, "guard"})
+  defp analyze_guard(_, _scope), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp guard_clauses([]), do: []
+  defp guard_clauses([], _scope), do: []
 
-  defp guard_clauses([[{:sym, "else"} | body] | _rest]) when body != [] do
-    [{:else, analyze_deferred_body(body)}]
+  defp guard_clauses([[{:sym, "else"} | body] | _rest], scope) when body != [] do
+    [{:else, analyze_deferred_body(body, scope)}]
   end
 
-  defp guard_clauses([clause | rest]), do: [guard_clause(clause) | guard_clauses(rest)]
-  defp guard_clauses(_), do: [bad_guard()]
+  defp guard_clauses([clause | rest], scope),
+    do: [guard_clause(clause, scope) | guard_clauses(rest, scope)]
 
-  defp guard_clause([test | []]), do: {:test, analyze(test)}
+  defp guard_clauses(_, _scope), do: [bad_guard()]
 
-  defp guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]]) do
-    {:arrow, analyze(test), analyze(proc_expr)}
+  defp guard_clause([test | []], scope), do: {:test, analyze(test, scope)}
+
+  defp guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], scope) do
+    {:arrow, analyze(test, scope), analyze(proc_expr, scope)}
   end
 
-  defp guard_clause([test | body]) when body != [] do
-    {:test_body, analyze(test), analyze_deferred_body(body)}
+  defp guard_clause([test | body], scope) when body != [] do
+    {:test_body, analyze(test, scope), analyze_deferred_body(body, scope)}
   end
 
-  defp guard_clause(_), do: bad_guard()
+  defp guard_clause(_, _scope), do: bad_guard()
 
   defp bad_guard, do: {:bad, Error.exception(reason: {:bad_special_form, "guard"})}
 
@@ -302,11 +432,11 @@ defmodule Schooner.Eval.Analyze do
 
   # A body whose desugaring errors fail the enclosing node (lambda,
   # define-fn): the old evaluator desugared these at closure creation.
-  defp analyze_body(body), do: body |> desugar_body() |> Enum.map(&analyze/1)
+  defp analyze_body(body, scope), do: body |> desugar_body() |> analyze_all(scope)
 
   # A body whose desugaring errors surface only once the body runs.
-  defp analyze_deferred_body(body) do
-    analyze_body(body)
+  defp analyze_deferred_body(body, scope) do
+    analyze_body(body, scope)
   rescue
     e in Error -> [{:raise, e}]
   end
