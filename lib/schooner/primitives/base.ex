@@ -74,6 +74,26 @@ defmodule Schooner.Primitives.Base do
       multi_value_specs()
   end
 
+  @doc false
+  # The binary arithmetic and comparison procedures `Schooner.Eval`
+  # inlines for two integer arguments, keyed by their `(scheme base)`
+  # name. Each value is the same fun the primitive table holds, so the
+  # evaluator can tell by fun identity whether a call site's procedure
+  # is still the standard one.
+  @spec inlined() :: %{binary() => fun()}
+  def inlined do
+    %{
+      "+" => &add/1,
+      "-" => &sub/1,
+      "*" => &mul/1,
+      "=" => &cmp_eq/1,
+      "<" => &cmp_lt/1,
+      ">" => &cmp_gt/1,
+      "<=" => &cmp_le/1,
+      ">=" => &cmp_ge/1
+    }
+  end
+
   # ---------------------------------------------------------------------------
   # Arithmetic
   # ---------------------------------------------------------------------------

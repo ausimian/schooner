@@ -44,6 +44,7 @@ defmodule Schooner.Eval do
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
   alias Schooner.Primitive.Error, as: PError
+  alias Schooner.Primitives.Base
   alias Schooner.Value
 
   @rec_uninitialised Env.rec_uninitialised()
@@ -146,10 +147,156 @@ defmodule Schooner.Eval do
     end
   end
 
+  # A two-argument call through a global named like one of the inlined
+  # arithmetic or comparison primitives. The head is still looked up
+  # on every call, so a redefinition or shadowing is honoured; the
+  # integer operation runs inline only when the looked-up procedure is
+  # the standard one. A marked (macro-introduced) name is matched on
+  # its base name, since that is what it falls back to.
+  def compile({:app, {:gref, name, marked} = head, [a, b]} = node) do
+    op = inline_name(name, marked)
+
+    case Map.fetch(Base.inlined(), op) do
+      {:ok, fun} -> compile_inline(op, fun, compile(head), a, b)
+      :error -> compile_app(node)
+    end
+  end
+
+  def compile({:app, _head, _args} = node), do: compile_app(node)
+
+  def compile({:lambda, params, {names, body}, name}) do
+    body = compile_body(body)
+    fn env -> Value.closure(params, {names, body}, env, name) end
+  end
+
+  def compile({:define, name, expr}) do
+    expr = compile(expr)
+
+    fn env ->
+      Env.define(env, name, single_value!(expr.(env)))
+      :unspecified
+    end
+  end
+
+  def compile({:define_values, spec, expr}) do
+    expr = compile(expr)
+    fn env -> eval_define_values(spec, expr, env) end
+  end
+
+  def compile({:seq, body}), do: compile_body(body)
+
+  def compile({:letrec, names, bindings, body}) do
+    bindings = Enum.map(bindings, &compile_binding/1)
+    body = compile_body(body)
+    fn env -> eval_letrec_star(names, bindings, body, env) end
+  end
+
+  # A `letrec*` whose lambdas are only ever called directly (see
+  # `Schooner.Eval.Analyze`) never materialises them as closures. Its
+  # frame is `{{}, body_0, body_1, ...}`: an empty names tuple, so
+  # by-name lookup passes over it, followed by each lambda's compiled
+  # body. The frame is built once, here.
+  def compile({:fixrec, lambdas, body}) do
+    frame = List.to_tuple([{} | Enum.map(lambdas, fn {_names, b} -> compile_body(b) end)])
+    body = compile_body(body)
+    fn %Env{lex: lex} = env -> body.(%{env | lex: [frame | lex]}) end
+  end
+
+  # A direct call to lambda `slot` of the `:fixrec` frame `depth`
+  # levels up. The callee's frame goes on top of the `:fixrec` frame,
+  # exactly where `apply_proc/2` would have put it on top of the
+  # closure's env, and the compiled body is tail-called.
+  def compile({:known_call, depth, slot, names, args}) do
+    index = slot + 1
+
+    case Enum.map(args, &compile/1) do
+      [a] ->
+        fn %Env{lex: lex} = env ->
+          x = single_value!(a.(env))
+          [fix | _] = rest = drop_frames(lex, depth)
+          elem(fix, index).(%{env | lex: [{names, x} | rest]})
+        end
+
+      [a, b] ->
+        fn %Env{lex: lex} = env ->
+          x = single_value!(a.(env))
+          y = single_value!(b.(env))
+          [fix | _] = rest = drop_frames(lex, depth)
+          elem(fix, index).(%{env | lex: [{names, x, y} | rest]})
+        end
+
+      [a, b, c] ->
+        fn %Env{lex: lex} = env ->
+          x = single_value!(a.(env))
+          y = single_value!(b.(env))
+          z = single_value!(c.(env))
+          [fix | _] = rest = drop_frames(lex, depth)
+          elem(fix, index).(%{env | lex: [{names, x, y, z} | rest]})
+        end
+
+      codes ->
+        fn %Env{lex: lex} = env ->
+          frame = List.to_tuple([names | eval_args(codes, env)])
+          [fix | _] = rest = drop_frames(lex, depth)
+          elem(fix, index).(%{env | lex: [frame | rest]})
+        end
+    end
+  end
+
+  def compile({:quasi, template}), do: compile_template(template)
+
+  def compile({:guard, names, clauses, body}) do
+    clauses = Enum.map(clauses, &compile_guard_clause/1)
+    body = compile_body(body)
+    fn env -> eval_guard(names, clauses, body, env) end
+  end
+
+  def compile({:raise, exception}), do: fn _env -> raise(exception) end
+
+  defp inline_name(name, {:gref, base, nil}) do
+    if Map.has_key?(Base.inlined(), name), do: name, else: base
+  end
+
+  defp inline_name(name, _marked), do: name
+
+  # One clause per inlined primitive, so each closure carries its own
+  # BEAM operator. Head first, then arguments left to right, as for any
+  # application; anything but the standard procedure applied to two
+  # integers takes the ordinary `apply_proc/2` path.
+  for {name, op} <- [
+        {"+", :+},
+        {"-", :-},
+        {"*", :*},
+        {"=", :"=:="},
+        {"<", :<},
+        {">", :>},
+        {"<=", :"=<"},
+        {">=", :>=}
+      ] do
+    defp compile_inline(unquote(name), fun, head, a, b) do
+      a = compile(a)
+      b = compile(b)
+
+      fn env ->
+        proc = single_value!(head.(env))
+        x = single_value!(a.(env))
+        y = single_value!(b.(env))
+
+        case proc do
+          {:primitive, _, _, ^fun} when is_integer(x) and is_integer(y) ->
+            :erlang.unquote(op)(x, y)
+
+          _ ->
+            apply_proc(proc, [x, y])
+        end
+      end
+    end
+  end
+
   # Applications are specialised on argument count so the common small
   # arities build their argument list inline. Head first, then
   # arguments left to right, as before.
-  def compile({:app, head, args}) do
+  defp compile_app({:app, head, args}) do
     head = compile(head)
 
     case Enum.map(args, &compile/1) do
@@ -184,43 +331,6 @@ defmodule Schooner.Eval do
         end
     end
   end
-
-  def compile({:lambda, params, {names, body}, name}) do
-    body = compile_body(body)
-    fn env -> Value.closure(params, {names, body}, env, name) end
-  end
-
-  def compile({:define, name, expr}) do
-    expr = compile(expr)
-
-    fn env ->
-      Env.define(env, name, single_value!(expr.(env)))
-      :unspecified
-    end
-  end
-
-  def compile({:define_values, spec, expr}) do
-    expr = compile(expr)
-    fn env -> eval_define_values(spec, expr, env) end
-  end
-
-  def compile({:seq, body}), do: compile_body(body)
-
-  def compile({:letrec, names, bindings, body}) do
-    bindings = Enum.map(bindings, &compile_binding/1)
-    body = compile_body(body)
-    fn env -> eval_letrec_star(names, bindings, body, env) end
-  end
-
-  def compile({:quasi, template}), do: compile_template(template)
-
-  def compile({:guard, names, clauses, body}) do
-    clauses = Enum.map(clauses, &compile_guard_clause/1)
-    body = compile_body(body)
-    fn env -> eval_guard(names, clauses, body, env) end
-  end
-
-  def compile({:raise, exception}), do: fn _env -> raise(exception) end
 
   # A body (or `begin`) compiles to one closure that runs each form in
   # order and tail-calls the last.
@@ -282,6 +392,9 @@ defmodule Schooner.Eval do
 
   defp frame_at([frame | _], 0), do: frame
   defp frame_at([_ | rest], depth), do: frame_at(rest, depth - 1)
+
+  defp drop_frames(lex, 0), do: lex
+  defp drop_frames([_ | rest], depth), do: drop_frames(rest, depth - 1)
 
   # ---------------------------------------------------------------------------
   # define-values — top-level
