@@ -15,6 +15,11 @@ defmodule Schooner.Eval.Error do
     %__MODULE__{reason: reason, message: format(reason)}
   end
 
+  defp format({:unknown_import_identifier, modifier, name, library}) do
+    "import modifier `#{modifier}`: identifier `#{name}` is not exported by the inner " <>
+      "import set for library #{Schooner.Library.render_name(library)}"
+  end
+
   defp format({:unbound, name}), do: "unbound variable: #{name}"
   defp format(:empty_application), do: "() is not a valid expression"
   defp format({:not_a_procedure, value}), do: "not a procedure: #{inspect(value)}"

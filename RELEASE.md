@@ -30,6 +30,10 @@
 
 ### Fixed
 
+- Import modifiers `only`, `except`, and `rename` now reject identifiers
+  absent from the inner import set. Scripts that previously imported an
+  unknown name silently now fail with a script error.
+
 - Library sources loaded without a base directory now reject absolute
   include paths as well as relative ones. Load from a file or pass
   `:base_dir` to confine includes to the library root directory.

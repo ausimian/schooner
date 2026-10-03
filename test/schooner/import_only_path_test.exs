@@ -72,6 +72,50 @@ defmodule Schooner.ImportOnlyPathTest do
     end
   end
 
+  describe "import modifier validation" do
+    for entry <- [:run, :eval, :compile],
+        {label, spec, modifier, name, library} <- [
+          {"only", "(only (scheme base) car lenght)", "only", "lenght", ["scheme", "base"]},
+          {"except", "(except (scheme char) char-upcse)", "except", "char-upcse",
+           ["scheme", "char"]},
+          {"rename", "(rename (scheme char) (char-upcse up))", "rename", "char-upcse",
+           ["scheme", "char"]},
+          {"only with prefix", "(only (prefix (scheme base) b:) car)", "only", "car",
+           ["scheme", "base"]},
+          {"except with rename", "(except (rename (scheme base) (car head)) car)", "except",
+           "car", ["scheme", "base"]}
+        ] do
+      test "#{entry} rejects unknown names in #{label} before evaluating the body" do
+        source = "(import (scheme base) #{unquote(spec)}) 42"
+
+        result =
+          case unquote(entry) do
+            :run -> Schooner.run(source)
+            :eval -> Schooner.eval(source, Env.new())
+            :compile -> Schooner.compile(source, Schooner.Environment.new())
+          end
+
+        assert {:error, %EvalError{reason: reason}} = result
+
+        assert reason ==
+                 {:unknown_import_identifier, unquote(modifier), unquote(name), unquote(library)}
+      end
+    end
+
+    test "valid names still work through run and eval" do
+      for {source, expected} <- [
+            {"(import (only (prefix (scheme base) b:) b:car)) (b:car '(7 8))", 7},
+            {"(import (except (rename (only (scheme base) car cdr) (car head)) cdr)) " <>
+               "(head '(7 8))", 7},
+            {"(import (scheme base) (rename (except (scheme char) char-downcase) " <>
+               "(char-upcase up))) (up #\\a)", {:char, ?A}}
+          ] do
+        assert Schooner.run(source) == {:ok, expected}
+        assert Schooner.eval(source, Env.new()) == {:ok, expected}
+      end
+    end
+  end
+
   describe "Schooner.eval/3 :implicit_imports option" do
     test ":implicit_imports defaults to :none" do
       assert_raise EvalError, fn ->
