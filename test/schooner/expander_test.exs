@@ -6,6 +6,9 @@ defmodule Schooner.ExpanderTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Eval.Error
+  alias Schooner.Expander
+  alias Schooner.Expander.SyntaxEnv
+  alias Schooner.Reader
   alias Schooner.Value
 
   defp run(source), do: Schooner.run!(source)
@@ -383,6 +386,56 @@ defmodule Schooner.ExpanderTest do
   end
 
   describe "top-level (begin (define-syntax ...) ...) splices through expand_top_begin" do
+    test "syntax-only begin" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run("(import (scheme base)) (begin #{macro}) (m 1)") == {:ok, 2}
+    end
+
+    test "macro use inside a mixed begin" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run("(import (scheme base)) (begin #{macro} (m 1))") == {:ok, 2}
+    end
+
+    test "macro use after a mixed begin" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run("(import (scheme base)) (begin #{macro} 0) (m 1)") == {:ok, 2}
+    end
+
+    test "macro use after nested mixed begins" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run("(import (scheme base)) (begin (begin #{macro} 0) 1) (m 1)") == {:ok, 2}
+    end
+
+    test "macro use within the outer begin after a nested mixed begin" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run("(import (scheme base)) (begin (begin #{macro} 0) (m 1))") == {:ok, 2}
+    end
+
+    test "macro use in a later define" do
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert Schooner.run(
+               "(import (scheme base)) (begin #{macro} 0) (define result (m 1)) result"
+             ) == {:ok, 2}
+    end
+
+    test "syntax-only begins emit no runtime forms and preserve the syntax env" do
+      forms =
+        Reader.read_string("""
+        (begin (begin (define-syntax m (syntax-rules () ((_ x) (+ x 1))))))
+        """)
+
+      env = Expander.bootstrap_env()
+      assert Expander.expand_program(forms, env) == []
+      assert {[], syntax_env} = Expander.expand_program_with_env(forms, env)
+      assert {:macro, _} = SyntaxEnv.lookup(syntax_env, "m")
+    end
+
     test "macro defined inside top-level begin is usable afterwards" do
       assert run("""
              (begin

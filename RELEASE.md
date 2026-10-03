@@ -30,6 +30,10 @@
 
 ### Fixed
 
+- Macros defined inside top-level `begin` forms now remain visible to
+  later forms even when the `begin` also contains ordinary forms,
+  including nested `begin` forms and compiled programs.
+
 - Import modifiers `only`, `except`, and `rename` now reject identifiers
   absent from the inner import set. Scripts that previously imported an
   unknown name silently now fail with a script error.
