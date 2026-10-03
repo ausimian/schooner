@@ -30,6 +30,10 @@
 
 ### Fixed
 
+- Library sources loaded without a base directory now reject absolute
+  include paths as well as relative ones. Load from a file or pass
+  `:base_dir` to confine includes to the library root directory.
+
 - Tail loops with internal definitions, including bodies that create
   callbacks, no longer grow the stack or allocate recursive
   process-dictionary slots when binding targets are distinct and

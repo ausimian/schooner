@@ -27,8 +27,9 @@ defmodule Schooner.Library.Loader do
 
   When a base directory is known (from `load_file/2` or the
   `:base_dir` option), include paths, relative or absolute, that
-  resolve outside it are rejected. Without one, relative include
-  paths are an error and absolute paths are not checked.
+  resolve outside it are rejected. Nested includes retain this root
+  even when their resolution directory changes. Without a base
+  directory, both relative and absolute include paths are an error.
 
   ## Diagnostics
 
@@ -141,8 +142,9 @@ defmodule Schooner.Library.Loader do
   Options:
 
     * `:base_dir` — directory used to resolve relative `(include …)` and
-      `(include-library-declarations …)` paths. Defaults to `nil`,
-      which makes relative includes an error.
+      `(include-library-declarations …)` paths and confine all include
+      paths. Defaults to `nil`, which rejects both relative and absolute
+      includes.
     * `:path` — file path threaded into diagnostics. Defaults to `nil`
       (anonymous source).
   """
@@ -268,17 +270,15 @@ defmodule Schooner.Library.Loader do
         check_within_root(Path.expand(path), path, root_dir, ctx, pos)
 
       base_dir == nil ->
-        raise ArgumentError,
-              "#{format_at(ctx, pos)}cannot resolve relative include path #{inspect(path)} " <>
-                "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
-                "to Loader.load_string/3"
+        no_base_dir!(path, ctx, pos)
 
       true ->
         check_within_root(Path.expand(path, base_dir), path, root_dir, ctx, pos)
     end
   end
 
-  defp check_within_root(resolved, _original, nil, _ctx, _pos), do: resolved
+  defp check_within_root(_resolved, original, nil, ctx, pos),
+    do: no_base_dir!(original, ctx, pos)
 
   defp check_within_root(resolved, original, root_dir, ctx, pos) do
     if resolved == root_dir or String.starts_with?(resolved, root_dir <> "/") do
@@ -288,6 +288,13 @@ defmodule Schooner.Library.Loader do
             "#{format_at(ctx, pos)}include path #{inspect(original)} resolves outside the " <>
               "library root directory"
     end
+  end
+
+  defp no_base_dir!(path, ctx, pos) do
+    raise ArgumentError,
+          "#{format_at(ctx, pos)}cannot resolve include path #{inspect(path)} " <>
+            "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
+            "to Loader.load_string/3"
   end
 
   # `with_positions?` controls which reader API the file goes through.
