@@ -281,13 +281,20 @@ defmodule Schooner.Library.Loader do
     do: no_base_dir!(original, ctx, pos)
 
   defp check_within_root(resolved, original, root_dir, ctx, pos) do
-    if resolved == root_dir or String.starts_with?(resolved, root_dir <> "/") do
+    if within_root?(resolved, root_dir) do
       resolved
     else
       raise ArgumentError,
             "#{format_at(ctx, pos)}include path #{inspect(original)} resolves outside the " <>
               "library root directory"
     end
+  end
+
+  # `Path.expand/1` keeps the trailing separator of a filesystem root
+  # (`"/"`, `"C:/"`), so only add one when the root lacks it.
+  defp within_root?(resolved, root_dir) do
+    prefix = if String.ends_with?(root_dir, "/"), do: root_dir, else: root_dir <> "/"
+    resolved == root_dir or String.starts_with?(resolved, prefix)
   end
 
   defp no_base_dir!(path, ctx, pos) do

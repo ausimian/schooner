@@ -773,6 +773,23 @@ defmodule Schooner.Library.LoaderTest do
     end
 
     @tag :tmp_dir
+    test "a filesystem-root base directory allows includes beneath it", %{tmp_dir: dir} do
+      body_path = Path.join(dir, "root_body.scm")
+      File.write!(body_path, "(define nine 9)")
+
+      source = """
+      (define-library (root-include)
+        (import (scheme base))
+        (export nine)
+        (include "#{body_path}"))
+      """
+
+      reg = Loader.load_string(source, standard(), base_dir: "/")
+      lib = Library.fetch!(reg, ["root-include"])
+      assert {:var, 9} = Map.fetch!(lib.exports, "nine")
+    end
+
+    @tag :tmp_dir
     test "absolute include path outside the entry-point directory is rejected", %{tmp_dir: dir} do
       sub = Path.join(dir, "sub")
       File.mkdir_p!(sub)
