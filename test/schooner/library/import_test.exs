@@ -156,6 +156,54 @@ defmodule Schooner.Library.ImportTest do
       assert err.reason == {:unknown_import_identifier, "except", "car", ["scheme", "base"]}
     end
 
+    test "rename takes every binding from the original inner import set" do
+      registry = test_registry()
+      original = LibImport.resolve([datum("(only (scheme base) car cdr cons)")], registry)
+
+      for {spec, names} <- [
+            {"(rename (only (scheme base) car cdr) (car cdr) (cdr car))",
+             [{"car", "cdr"}, {"cdr", "car"}]},
+            {"(rename (only (scheme base) car cdr cons) (car cdr) (cdr cons) (cons car))",
+             [{"car", "cons"}, {"cdr", "car"}, {"cons", "cdr"}]},
+            {"(rename (only (scheme base) car cdr) (car head) (cdr tail))",
+             [{"head", "car"}, {"tail", "cdr"}]},
+            {"(only (rename (prefix (only (scheme base) car cdr) b:) " <>
+               "(b:car b:cdr) (b:cdr b:car)) b:car b:cdr)", [{"b:car", "cdr"}, {"b:cdr", "car"}]},
+            {"(rename (only (scheme base) car cdr) (car car))", [{"car", "car"}, {"cdr", "cdr"}]}
+          ] do
+        bindings = LibImport.resolve([datum(spec)], registry)
+        expected = Map.new(names, fn {new, old} -> {new, Map.fetch!(original, old)} end)
+        assert bindings == expected
+      end
+    end
+
+    for {label, spec, reason, identifiers} <- [
+          {"duplicate targets", "(rename (scheme base) (car x) (cdr x))",
+           {:duplicate_import_identifier, "rename", "x", ["scheme", "base"]}, ["x"]},
+          {"retained exports", "(rename (only (scheme base) car cdr) (car cdr))",
+           {:import_identifier_collision, "rename", "car", "cdr", ["scheme", "base"]},
+           ["car", "cdr"]},
+          {"prefixed retained exports",
+           "(rename (only (prefix (scheme base) b:) b:car b:cdr) (b:car b:cdr))",
+           {:import_identifier_collision, "rename", "b:car", "b:cdr", ["scheme", "base"]},
+           ["b:car", "b:cdr"]}
+        ] do
+      test "rename rejects #{label}" do
+        err =
+          assert_raise EvalError, fn ->
+            LibImport.resolve([datum(unquote(spec))], test_registry())
+          end
+
+        assert err.reason == unquote(Macro.escape(reason))
+        assert err.message =~ "rename"
+        assert err.message =~ "(scheme base)"
+
+        for identifier <- unquote(identifiers) do
+          assert err.message =~ identifier
+        end
+      end
+    end
+
     test "rename validates all old names against the original inner set" do
       err =
         assert_raise EvalError, fn ->

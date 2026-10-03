@@ -20,6 +20,16 @@ defmodule Schooner.Eval.Error do
       "import set for library #{Schooner.Library.render_name(library)}"
   end
 
+  defp format({:duplicate_import_identifier, modifier, name, library}) do
+    "import modifier `#{modifier}`: multiple clauses target identifier `#{name}` " <>
+      "in the import set for library #{Schooner.Library.render_name(library)}"
+  end
+
+  defp format({:import_identifier_collision, modifier, old, new, library}) do
+    "import modifier `#{modifier}`: renaming identifier `#{old}` to `#{new}` would overwrite " <>
+      "an export retained by the inner import set for library #{Schooner.Library.render_name(library)}"
+  end
+
   defp format({:unbound, name}), do: "unbound variable: #{name}"
   defp format(:empty_application), do: "() is not a valid expression"
   defp format({:not_a_procedure, value}), do: "not a procedure: #{inspect(value)}"
