@@ -247,14 +247,20 @@ which will turn the rule into a hard runtime barrier.
 
 ## Error mapping
 
-An error raised in host code either reaches the script's
-exception handlers or bypasses them and surfaces to the embedder,
-depending on its type.
+An error from host code either reaches the script's exception
+handlers or bypasses them and surfaces to the embedder, depending
+on how it is raised.
 
 ### Host raises a Scheme-catchable error
 
 When you want the script's `with-exception-handler` / `guard` to
-see the error, raise a Scheme exception via `Schooner.Error`:
+see the error, pass the value to
+`Schooner.Eval.ExceptionState.raise_value/1`. That is the path
+Scheme's own `raise` takes: it calls the innermost handler, and
+with no handler installed it surfaces to the embedder as
+`Schooner.Error`. Raising `Schooner.Error` directly with
+`Kernel.raise/2` does **not** reach Scheme handlers; it unwinds
+past them, and `Schooner.eval/2` returns it as `{:error, _}`.
 
 ```elixir
 defp query([conn, sql]) do
@@ -266,13 +272,13 @@ defp query([conn, sql]) do
       Host.list(Enum.map(rows, &row_to_scheme/1))
 
     {:error, reason} ->
-      raise Schooner.Error,
-        value:
-          Schooner.Value.error_object(
-            :user,
-            Host.string("db query failed"),
-            [Host.foreign(reason)]
-          )
+      Schooner.Eval.ExceptionState.raise_value(
+        Schooner.Value.error_object(
+          :user,
+          Host.string("db query failed"),
+          [Host.foreign(reason)]
+        )
+      )
   end
 end
 ```
@@ -294,7 +300,7 @@ exceptions, or land in the `{:error, _}` arm of `Schooner.eval/2`.
 
 This is deliberate: a sandboxed script must not be able to paper
 over its own type errors. If you want a host primitive to
-produce a *script-catchable* failure, use the `Schooner.Error`
+produce a *script-catchable* failure, use the `raise_value/1`
 pattern above; if you want it to be a host-side bug report,
 use `Schooner.Host.TypeError` (which is what the assertion
 helpers produce automatically).

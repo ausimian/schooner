@@ -106,11 +106,13 @@ Three settings bound the task:
   the cap, the BEAM kills it. A runaway `(make-vector
   1000000000)` allocates a single BEAM tuple, hits the cap, and
   goes down. The host process is unaffected. Keep
-  `include_shared_binaries: true` (OTP 27 and later): Scheme
-  strings and bytevectors are binaries, and large ones live off
-  the process heap, so without it a script can allocate an
-  arbitrarily large `(make-bytevector 1000000000)` without
-  reaching the cap.
+  `include_shared_binaries: true`: Scheme strings and bytevectors
+  are binaries, and large ones live off the process heap, so
+  without it a script can allocate an arbitrarily large
+  `(make-bytevector 1000000000)` without reaching the cap. The
+  option needs OTP 26 or later; OTP 25 rejects it with `badarg`,
+  so on OTP 25 drop the key and bound memory another way, for
+  example with an OS-level limit on the node.
 - **`Task.yield(task, timeout)`** — bounds wall-clock time. A
   script that loops forever doesn't return on its own; the
   yield window expires and we move to shutdown.
