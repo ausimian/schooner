@@ -30,6 +30,14 @@
 
 ### Fixed
 
+- Tail loops with internal definitions, including bodies that create
+  callbacks, no longer grow the stack or allocate recursive
+  process-dictionary slots when binding targets are distinct and
+  initializer references only target earlier bindings. Closures in
+  these forms retain their captured lexical values, including when
+  saved by host primitives. Self and forward references retain
+  recursive binding behavior.
+
 - Rational `asin`/`acos` outside the real domain and negative bases
   raised to fractional powers now return complex values. Inexact real
   `expt` and `exp` handle overflow and underflow, and numeric domain or

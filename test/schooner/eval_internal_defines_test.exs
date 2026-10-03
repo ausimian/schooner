@@ -284,7 +284,7 @@ defmodule Schooner.EvalInternalDefinesTest do
     end
   end
 
-  describe "TCO across letrec* try/rescue" do
+  describe "TCO across internal definitions" do
     test "internal-define-driven mutual recursion at depth" do
       env =
         Env.new()
@@ -307,12 +307,8 @@ defmodule Schooner.EvalInternalDefinesTest do
       assert heap < 5_000_000
     end
 
-    # Stress shape that exercises issue 25's TCO concern: every iteration
-    # of the tail-recursive `loop` re-enters `eval_letrec_star` because
-    # the body has an internal define. The walk-and-rewrite path holds
-    # one `try/rescue` frame per call until the body returns. Stack must
-    # stay constant — heap accumulates per-iteration allocations that GC
-    # reclaims, so we bound stack_size rather than total_heap_size here.
+    # Value-only internal definitions use immutable positional frames,
+    # so the loop body remains in tail position on every iteration.
     test "tail loop with internal define on every call preserves stack TCO" do
       env =
         Env.new()
@@ -353,13 +349,13 @@ defmodule Schooner.EvalInternalDefinesTest do
     # rec lookups, including mutually-recursive ones) can resolve rec
     # names. Leakage is therefore bounded to actual closure escapes,
     # not letrec-form count.
-    test "closure escape leaves exactly one rec slot per escaping letrec" do
+    test "recursive closure escape leaves exactly one rec slot per escaping letrec" do
       before = count_rec_slots()
 
       Schooner.run!("""
       (define escaped
-        (letrec ((helper (lambda () 42))
-                 (caller (lambda () (helper))))
+        (letrec ((helper (lambda (n) (if (= n 0) 42 (helper (- n 1)))))
+                 (caller (lambda () (helper 0))))
           caller))
       (escaped)
       """)
@@ -367,7 +363,7 @@ defmodule Schooner.EvalInternalDefinesTest do
       assert count_rec_slots() == before + 1
     end
 
-    test "many non-escaping letrecs do not leak; many escaping ones leak per escape" do
+    test "many non-escaping letrecs do not leak; recursive escapes retain one slot each" do
       before = count_rec_slots()
 
       for _ <- 1..50 do
@@ -379,7 +375,7 @@ defmodule Schooner.EvalInternalDefinesTest do
       base = count_rec_slots()
 
       for _ <- 1..50 do
-        Schooner.run!("(letrec ((f (lambda () 1))) f)")
+        Schooner.run!("(letrec ((f (lambda () f))) f)")
       end
 
       assert count_rec_slots() == base + 50, "each escaping letrec leaves one slot"

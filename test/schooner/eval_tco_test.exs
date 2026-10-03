@@ -1,7 +1,7 @@
 defmodule Schooner.EvalTcoTest do
   @moduledoc """
   Regression tests for proper-tail-call behaviour. Each test recurses
-  100 000 calls deep and asserts both that the call returns and that
+  at least 100 000 calls deep and asserts both that the call returns and that
   the process heap stays bounded — i.e. the tail calls really did
   collapse rather than each pushing a frame.
   """
@@ -117,5 +117,64 @@ defmodule Schooner.EvalTcoTest do
                (even? #{depth()}))
              """) == Value.bool(true)
     end)
+  end
+
+  test "tail loop with non-lambda internal definitions stays within a heap limit" do
+    parent = self()
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        env = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+        Process.flag(:max_heap_size, %{size: 1_000_000, kill: true, error_logger: false})
+
+        result =
+          Schooner.eval!(
+            """
+            (define (loop n)
+              (define k (+ n 0))
+              (if (= k 0) 'done (loop (- k 1))))
+            (loop #{depth()})
+            """,
+            env
+          )
+
+        slots = Enum.count(Process.get(), fn {_, v} -> match?({:rec_frame, _, _}, v) end)
+        send(parent, {:bounded_loop, self(), result, slots})
+      end)
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, 15_000
+    assert reason == :normal
+    assert_received {:bounded_loop, ^pid, result, 0}
+    assert result == Value.symbol("done")
+  end
+
+  test "tail loop with callback closures stays within a heap limit" do
+    parent = self()
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        env = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+        Process.flag(:max_heap_size, %{size: 1_000_000, kill: true, error_logger: false})
+
+        result =
+          Schooner.eval!(
+            """
+            (define (loop n acc)
+              (define k (+ n 1))
+              (if (= n 0)
+                  (length acc)
+                  (loop (- n 1) (map (lambda (x) (+ x k)) acc))))
+            (loop 300000 (list 1))
+            """,
+            env
+          )
+
+        slots = Enum.count(Process.get(), fn {_, v} -> match?({:rec_frame, _, _}, v) end)
+        send(parent, {:bounded_callback_loop, self(), result, slots})
+      end)
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, 30_000
+    assert reason == :normal
+    assert_received {:bounded_callback_loop, ^pid, 1, 0}
   end
 end
