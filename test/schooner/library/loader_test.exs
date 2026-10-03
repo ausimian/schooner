@@ -1,6 +1,7 @@
 defmodule Schooner.Library.LoaderTest do
   use ExUnit.Case, async: true
 
+  alias Schooner.Environment
   alias Schooner.Library
   alias Schooner.Library.Loader
   alias Schooner.Library.Standard
@@ -9,6 +10,30 @@ defmodule Schooner.Library.LoaderTest do
   defp standard, do: Standard.build_registry()
 
   describe "compile/2 — happy path" do
+    test "exports a macro from a nested mixed begin and uses it in a later define" do
+      source = """
+      (define-library (mixed-begin)
+        (import (scheme base))
+        (export m result)
+        (begin
+          (begin
+            (begin
+              (define-syntax m (syntax-rules () ((_ x) (+ x 1))))
+              0)
+            1)
+          (define result (m 1))))
+      """
+
+      reg = Loader.load_string(source, standard())
+      lib = Library.fetch!(reg, ["mixed-begin"])
+
+      assert {:macro, _} = Map.fetch!(lib.exports, "m")
+      assert {:var, 2} = Map.fetch!(lib.exports, "result")
+
+      env = Environment.new(libraries: [lib])
+      assert Schooner.eval("(import (scheme base) (mixed-begin)) (m result)", env) == {:ok, 3}
+    end
+
     test "exports a top-level define" do
       source = """
       (define-library (my util)

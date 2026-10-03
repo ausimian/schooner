@@ -19,12 +19,10 @@ defmodule Schooner.Expander do
 
   ## Top-level vs. internal `define-syntax`
 
-  Only top-level `define-syntax` is supported. Inside a top-level
-  `begin`, a macro is visible to the rest of that `begin`, but it
-  stays visible after the `begin` only if the `begin` contains
-  nothing but syntax definitions: a `begin` that also holds an
-  ordinary form drops its macros when it ends. A `define-syntax`
-  anywhere else raises `Schooner.Eval.Error` with reason
+  Only top-level `define-syntax` is supported, including within
+  nested top-level `begin` forms. These macros remain visible to
+  later top-level forms. A `define-syntax` anywhere else raises
+  `Schooner.Eval.Error` with reason
   `:nested_define_syntax_unsupported`; `let-syntax` and
   `letrec-syntax` cover local macro definitions.
   """
@@ -118,7 +116,7 @@ defmodule Schooner.Expander do
   defp expand_top_seq([form | rest], env, acc) do
     case expand_top(form, env) do
       {:syntax_def, env2} -> expand_top_seq(rest, env2, acc)
-      expanded -> expand_top_seq(rest, env, [expanded | acc])
+      {:expanded, expanded, env2} -> expand_top_seq(rest, env2, [expanded | acc])
     end
   end
 
@@ -128,13 +126,10 @@ defmodule Schooner.Expander do
   end
 
   defp expand_top([{:sym, "begin"} | body], env) do
-    case expand_top_begin(body, env, []) do
-      {:syntax_def, env2} -> {:syntax_def, env2}
-      expanded -> expanded
-    end
+    expand_top_begin(body, env, [])
   end
 
-  defp expand_top(form, env), do: expand(form, env)
+  defp expand_top(form, env), do: {:expanded, expand(form, env), env}
 
   defp expand_top_begin([], env, acc) do
     [{:sym, "begin"} | Value.list(Enum.reverse(acc))]
@@ -144,7 +139,7 @@ defmodule Schooner.Expander do
   defp expand_top_begin([form | rest], env, acc) do
     case expand_top(form, env) do
       {:syntax_def, env2} -> expand_top_begin(rest, env2, acc)
-      expanded -> expand_top_begin(rest, env, [expanded | acc])
+      {:expanded, expanded, env2} -> expand_top_begin(rest, env2, [expanded | acc])
     end
   end
 
@@ -152,7 +147,7 @@ defmodule Schooner.Expander do
 
   defp finalise_top_begin(_form, env, []), do: {:syntax_def, env}
 
-  defp finalise_top_begin(form, _env, _acc), do: form
+  defp finalise_top_begin(form, env, _acc), do: {:expanded, form, env}
 
   # ---------------------------------------------------------------------------
   # Recursive expansion of an arbitrary form

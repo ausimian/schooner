@@ -38,6 +38,71 @@ defmodule Schooner.CompileTest do
     end
   end
 
+  describe "compile/2 with macros in top-level begins" do
+    test "syntax-only begin" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile("(import (scheme base)) (begin #{macro}) (m 1)", env)
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+
+    test "macro use inside a mixed begin" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile("(import (scheme base)) (begin #{macro} (m 1))", env)
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+
+    test "macro use after a mixed begin" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile("(import (scheme base)) (begin #{macro} 0) (m 1)", env)
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+
+    test "macro use after nested mixed begins" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile("(import (scheme base)) (begin (begin #{macro} 0) 1) (m 1)", env)
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+
+    test "macro use within the outer begin after a nested mixed begin" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile("(import (scheme base)) (begin (begin #{macro} 0) (m 1))", env)
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+
+    test "macro use in a later define" do
+      env = Environment.new()
+      macro = "(define-syntax m (syntax-rules () ((_ x) (+ x 1))))"
+
+      assert {:ok, compiled} =
+               Schooner.compile(
+                 "(import (scheme base)) (begin #{macro} 0) (define result (m 1)) result",
+                 env
+               )
+
+      assert Schooner.run_compiled(compiled, env) == {:ok, 2}
+    end
+  end
+
   describe "compile then run multiple times" do
     test "compiled program is reusable; defines are applied to the runtime env on each run" do
       env = Environment.new()
