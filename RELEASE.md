@@ -21,7 +21,18 @@
   (Medians from `bench/eval_bench.exs` on OTP 28.5 with JIT.)
 - `%Schooner.Compiled{}` now holds the analysed program rather than the
   expanded source forms. It is still plain data, safe to cache or
-  persist, and is still opaque.
+  persist, and is still opaque. **A `%Compiled{}` produced by 1.0.x
+  cannot be run by this release**: running one raises. Recompile
+  cached or persisted programs with `Schooner.compile/2` after
+  upgrading.
+- Imports and library loading are stricter. An `only`, `except`, or
+  `rename` import that names an identifier the library doesn't export,
+  or a `rename` whose new name collides with another binding, now fails
+  with `Schooner.Eval.Error` instead of being silently ignored or
+  overwriting a binding. `Schooner.Library.Loader.load_string/2,3`
+  without `:base_dir` now rejects absolute include paths. Scripts and
+  libraries that relied on the old behaviour need updating; the
+  corresponding entries under Fixed have the details.
 
 ### Added
 
