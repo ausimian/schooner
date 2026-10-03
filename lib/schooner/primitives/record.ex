@@ -38,7 +38,7 @@ defmodule Schooner.Primitives.Record do
   @doc """
   Return every record-machinery primitive as a `{name, arity, fun}`
   tuple. Consumed by `Schooner.Library.Standard` as part of the
-  `(scheme base)` assembly (record machinery is in r7rs §5.4 of
+  `(scheme base)` assembly (record machinery is in r7rs §5.5 of
   base).
   """
   @spec specs() :: [{binary(), Value.arity_spec(), fun()}]

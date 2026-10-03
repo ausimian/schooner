@@ -722,7 +722,6 @@ defmodule Schooner.Primitives.Base do
   defp do_sqrt({:rational, n, _} = r) when n >= 0, do: rational_sqrt_or_widen(r)
   defp do_sqrt({:rational, _, _} = r), do: complex_sqrt_real(r)
   defp do_sqrt({:complex, _, _} = z), do: complex_sqrt(z)
-  defp do_sqrt(n), do: raise(Error, reason: {:irrational, "sqrt", n})
 
   # `sqrt` of a negative real lifts into the imaginary axis with an
   # inexact imaginary component (`:math.sqrt/1` returns a float).

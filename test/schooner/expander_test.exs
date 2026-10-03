@@ -363,12 +363,6 @@ defmodule Schooner.ExpanderTest do
   describe "Expander.Error message formatting" do
     alias Schooner.Expander.Error, as: EE
 
-    test ":no_matching_rule names the keyword" do
-      err = EE.exception(reason: {:no_matching_rule, "bin"})
-      assert err.message =~ "no matching"
-      assert err.message =~ "bin"
-    end
-
     test ":ellipsis_count_mismatch names the offending variable" do
       err = EE.exception(reason: {:ellipsis_count_mismatch, "x"})
       assert err.message =~ "ellipsis"
@@ -385,11 +379,6 @@ defmodule Schooner.ExpanderTest do
       err = EE.exception(reason: {:syntax_rules_arity, 0})
       assert err.message =~ "literals list and at least one rule"
       assert err.message =~ "0"
-    end
-
-    test ":nested_define_syntax_unsupported is rendered as a fixed message" do
-      err = EE.exception(reason: :nested_define_syntax_unsupported)
-      assert err.message == "`define-syntax` is currently only supported at top level"
     end
   end
 

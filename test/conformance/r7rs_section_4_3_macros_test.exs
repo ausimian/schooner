@@ -403,10 +403,10 @@ defmodule Schooner.Conformance.R7rsSection43MacrosTest do
   end
 
   # ---------------------------------------------------------------------------
-  # §5.3.2 — Syntax definitions
+  # §5.4 — Syntax definitions
   # ---------------------------------------------------------------------------
 
-  describe "§5.3.2 define-syntax" do
+  describe "§5.4 define-syntax" do
     test "later top-level syntax definitions replace earlier ones" do
       assert run("""
              (define-syntax m (syntax-rules () ((_ x) (* x 10))))

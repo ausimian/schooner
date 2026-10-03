@@ -1,10 +1,10 @@
 defmodule Schooner.Conformance.R7rsSection54RecordsTest do
-  # Worked examples from r7rs-small §5.4 (record-type definitions).
+  # Worked examples from r7rs-small §5.5 (record-type definitions).
   # Each test transcribes a `(form) ==> result` example from the
   # spec or pins a property the spec calls out as required of a
   # `define-record-type` implementation.
   #
-  # Schooner-specific deviations from §5.4:
+  # Schooner-specific deviations from §5.5:
   #
   #   - Field mutators (the third element of a `(field accessor
   #     mutator)` clause) are not supported. The grammar accepts
@@ -17,7 +17,7 @@ defmodule Schooner.Conformance.R7rsSection54RecordsTest do
 
   defp run(source), do: Schooner.run!(source)
 
-  describe "§5.4 the canonical kons example" do
+  describe "§5.5 the canonical kons example" do
     # Spec example:
     #   (define-record-type <pare>
     #     (kons x y)
@@ -52,7 +52,7 @@ defmodule Schooner.Conformance.R7rsSection54RecordsTest do
     end
   end
 
-  describe "§5.4 partial constructor" do
+  describe "§5.5 partial constructor" do
     test "constructor can mention only a subset of the declared fields" do
       assert run("""
              (define-record-type pt
@@ -66,7 +66,7 @@ defmodule Schooner.Conformance.R7rsSection54RecordsTest do
     end
   end
 
-  describe "§5.4 type identity" do
+  describe "§5.5 type identity" do
     test "two record-type definitions with the same name produce distinct types" do
       # The spec is explicit that each `define-record-type` form
       # introduces a *new* type, even if the syntactic name is the
@@ -87,7 +87,7 @@ defmodule Schooner.Conformance.R7rsSection54RecordsTest do
     end
   end
 
-  describe "§5.4 records and equality" do
+  describe "§5.5 records and equality" do
     test "two records of the same type are equal? when their fields are equal?" do
       assert run("""
              (define-record-type pt (mk x y) pt? (x px) (y py))

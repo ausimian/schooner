@@ -103,16 +103,10 @@ keywords, or `syntax-rules` literals.
 
 ## Macro hygiene gaps
 
-`syntax-rules` works for the standard r7rs cases, with two
-documented gaps:
-
-1. **Custom-ellipsis identifier**:
-   `(syntax-rules <id> () ...)` is not supported. Schooner's
-   ellipsis is always `...`.
-2. **`define-syntax` introduced by another macro template**:
-   a macro that expands to `(define-syntax foo ...)` won't
-   register `foo` as a macro at the outer site. Top-level
-   `define-syntax` only.
+`syntax-rules` works for the standard r7rs cases. The one gap
+is the custom-ellipsis identifier: `(syntax-rules <id> () ...)`
+is not supported, and Schooner's ellipsis is always `...`.
+`define-syntax` placement is covered in the next section.
 
 The standard idioms — `cond`, `case`, `let`, `when`, `unless`,
 `and`, `or`, `do`, `letrec`, `parameterize`, `delay`,
