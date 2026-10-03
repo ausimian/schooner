@@ -42,31 +42,41 @@ The "no mutation" constraint is a substantial simplification: environments and a
 | Control flow | Tail-recursive direct `eval`/`apply` in Elixir. Proper Scheme tail calls fall out of BEAM's last-call optimisation when `eval` and `apply` finish with a tail call to each other. No CPS pass, no trampoline. |
 | `call/cc` | Escape-only continuations via Erlang `throw`/`catch`. Multi-shot continuations are out of scope; with no `set!` they are mostly a curiosity anyway. |
 | Macros | Full r7rs hygienic `syntax-rules` with ellipsis patterns. Implemented as a dedicated AST→AST expansion pass between the reader and the evaluator. |
-| Numeric tower | Erlang integers (arbitrary precision) for exact integers, Erlang floats for inexact reals. Exactness tracked explicitly. No rationals, no complex — operations that require them raise. |
+| Numeric tower | Erlang integers (arbitrary precision) for exact integers, Erlang floats for inexact reals. Exactness tracked explicitly. The original plan excluded rationals and complex numbers; both were added later (see "Value representation" below). |
 | Sandbox | Default environment exposes only pure r7rs primitives. The embedding API lets the host register Elixir functions as Scheme procedures. CPU/memory limits are delegated to BEAM process facilities (`spawn` + timeout, `max_heap_size`, scheduler reductions) — the interpreter does not implement its own counters. |
 | I/O | No port abstraction in the language by default. Host functions are the supported way to do I/O. |
 
 ## Value representation (`Schooner.Value`)
 
-All Scheme values map to tagged Elixir terms. Tagging avoids ambiguity (Scheme `#f` vs `'()` vs unspecified, Scheme strings vs bytevectors, Scheme symbols vs strings).
+This section describes the current representation. The original plan tagged booleans (`{:bool, _}`), the empty list (`:null`), pairs (`{:pair, car, cdr}`), and strings (`{:string, binary}`); those were later replaced by native Elixir terms. The `Schooner.Value` moduledoc is the authoritative reference.
 
-- Booleans: `{:bool, true}` / `{:bool, false}`. Truthiness check: only `{:bool, false}` is false.
-- Empty list: `:null`
-- Pair: `{:pair, car, cdr}`
+Where the BEAM already distinguishes types cleanly, values use native Elixir terms. Where types would otherwise alias (symbols vs strings vs bytevectors, all binaries; characters vs integers; vectors vs records vs closures, all tuples), the colliding side is tagged.
+
+- Booleans: bare `true` / `false`. Only `false` is falsy; `[]` and `0` are truthy.
+- Empty list: `[]`
+- Pair: Elixir cons cell `[car | cdr]`; improper Scheme lists are improper Erlang lists
 - Symbol: `{:sym, binary}` (binaries, not atoms — atoms aren't GC'd and the table is bounded; a sandboxed script must not be able to fill it)
-- String: `{:string, binary}`
+- String: bare Elixir binary
 - Char: `{:char, codepoint}`
 - Exact integer: plain Elixir integer
+- Exact rational: `{:rational, numerator, denominator}`, always reduced, denominator > 1 (a whole number collapses to an integer)
 - Inexact real: plain Elixir float
+- Non-finite inexact: `{:float_special, :pos_inf | :neg_inf | :nan}`
+- Complex: `{:complex, real, imag}`, collapsing to the real part when `imag` is exact zero
 - Vector: `{:vector, tuple}`
 - Bytevector: `{:bytevector, binary}`
-- Closure: `{:closure, params, body, env, name_or_nil}`
+- Closure: `{:closure, params, body, env, name_or_nil}`, where `body` is the analysed body
 - Primitive: `{:primitive, name, arity, fun}`
-- Record instance: `{:record, type_id, fields_tuple}`
+- Record instance: `{:record, type_id, fields_tuple}`; record type identity: `{:record_type, name, unique_int}`
+- Error object: `{:error_obj, kind, message, irritants}`
+- Parameter object: `{:parameter, id, init, converter}`
+- Promise: `{:promise, :lazy, thunk}` or `{:promise, :forced, value}`
+- Foreign (opaque host value): `{:foreign, term}`
 - Eof: `:eof`
 - Unspecified: `:unspecified`
+- Multiple values (only in transit from `values` to its consumer): `{:values, list}`
 
-A `to_iodata/1` for `display`/`write` lives next to the value module.
+`write_iodata/1` and `display_iodata/1` (with the binary-returning `write/1` and `display/1`) render values for `write` and `display`, in `Schooner.Value`.
 
 ## Module layout
 
@@ -339,7 +349,7 @@ Records as `{:record, type_id, fields_tuple}`. Type IDs are gensyms generated at
 ```
 
 - `Schooner.compile/1` produces a fully expanded core AST for caching. The returned term is **opaque** (wrap as `%Schooner.Compiled{}` or document "treat as opaque") — embedders must not pattern-match on its internals. This is the seam that lets the v2.0 evaluator rewrite swap representations without breaking the public API.
-- `Schooner.Host` defines the marshalling rules: Scheme `{:string, b}` ↔ Elixir binary, lists ↔ lists, integers/floats unwrapped, vectors ↔ tuples, symbols stay tagged. Anything not representable raises a marshalling error at the boundary. **Closures, records of host-unknown types, and continuations are explicitly not marshallable** — listing continuations now (even though v1's escape-only continuations cannot meaningfully cross the boundary) makes the rule stable across the v2.0 multi-shot upgrade.
+- `Schooner.Host` defines the marshalling rules: Scheme strings ↔ Elixir binaries (now the same term), lists ↔ lists, integers/floats unwrapped, vectors ↔ tuples, symbols stay tagged. Anything not representable raises a marshalling error at the boundary. **Closures, records of host-unknown types, and continuations are explicitly not marshallable** — listing continuations now (even though v1's escape-only continuations cannot meaningfully cross the boundary) makes the rule stable across the v2.0 multi-shot upgrade.
 - **Host-boundary continuation barrier.** A Scheme procedure invoked from a host function executes inside a continuation barrier: capturing a continuation across the boundary and invoking it after the host call has returned is a Schooner error. Under v1's escape-only model this case is unreachable, so the rule is documentation-only; under v2.0's first-class `call/cc` it becomes load-bearing. Documenting it in v1 keeps v2 from having to introduce a new error case retroactively.
 - The host is responsible for resource limits — document the recommended pattern (run `Schooner.eval/2` inside a spawned process with `:max_heap_size` and a timeout `:after`).
 
