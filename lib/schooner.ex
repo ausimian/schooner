@@ -13,19 +13,20 @@ defmodule Schooner do
 
   Schooner's entry points come in pairs following the Elixir
   convention: a tagged-tuple form (`run/1`, `eval/2,3`) and a bang
-  form (`run!/1`, `eval!/2,3`) that raises on failure. Picking
-  between `run*` and `eval*` is a **trust-posture decision** — the
-  naming is the opposite of what reflex suggests.
+  form (`run!/1`, `eval!/2,3`) that raises on failure. Choosing
+  between `run*` and `eval*` is a **trust decision**, and the names
+  can mislead: `eval*` is the sandbox-safe family, `run*` the
+  permissive one.
 
   | Family        | Auto-imports                                                                              | Trust posture                                       | Use for                                                            |
   | ---           | ---                                                                                       | ---                                                 | --- |
   | `run/1`/`run!/1`     | injects `(import ...)` of every shipped standard library when the script declares none | **Not sandbox-safe.** Every shipped primitive is in scope by default. | tests, REPL-style use, your own scripts where you control the source |
   | `eval/2,3`/`eval!/2,3` | none — bindings come exclusively from the `env` argument and the script's own `(import ...)` declarations | **Sandbox-safe.** The embedder controls the surface. | embedding untrusted or semi-trusted scripts |
 
-  The implicit-import behaviour of `run`/`run!` is opt-in via the
-  `implicit_imports: :all` option on the 3-arity `eval/3` and
-  `eval!/3`. Embedders who want the convenience without the rename
-  can call `eval!/3` (or `eval/3`) with the option themselves.
+  `run`/`run!` evaluate against a fresh `Schooner.Env` with the
+  `implicit_imports: :all` option of `eval/3` and `eval!/3`. To get
+  the same implicit imports against your own `Schooner.Env`, call
+  `eval/3` or `eval!/3` with that option directly.
 
   Within each family, the bang form raises one of:
 
@@ -52,7 +53,9 @@ defmodule Schooner do
 
   Pair this with BEAM-level resource limits — run `eval!/2` inside
   a spawned process with `:max_heap_size` and a `Task.shutdown/2`
-  timeout so a runaway script cannot exhaust the host.
+  timeout so a runaway script cannot exhaust the host. Build the env
+  inside that process: an env can only be used by the process that
+  created it. See the Running Untrusted Scheme guide.
 
   For richer sandbox composition (registering host libraries,
   pre-imports, etc.), construct a `Schooner.Environment` via
@@ -140,8 +143,8 @@ defmodule Schooner do
   come exclusively from `env` and the script's own `(import ...)`
   declarations.
 
-  This is the strict path: it is the right entry point for
-  embedding scripts whose source the host does not control. See
+  This is the strict path and the right entry point for scripts
+  whose source the host does not control. See
   "Choosing an entry point" in the moduledoc.
   """
   @spec eval(binary(), Env.t() | Environment.t()) ::
@@ -195,10 +198,9 @@ defmodule Schooner do
           `(import ...)` declarations. Use this for untrusted
           input.
         * `:all` — implicitly import every shipped standard
-          library. Skipped if the script already declares any
-          `(import ...)`, on the principle that an explicit
-          import means the user has opted in to a tighter
-          surface.
+          library. Skipped if the script declares any
+          `(import ...)` of its own: an explicit import means
+          the script has chosen a narrower surface.
   """
   @spec eval!(binary(), Env.t(), keyword()) :: Value.t()
   def eval!(source, %Env{} = env, opts) when is_binary(source) and is_list(opts) do
@@ -270,10 +272,6 @@ defmodule Schooner do
   repeatedly against any compatible environment. Macros are
   expanded at compile time; variable bindings from `(import ...)`
   declarations are pre-resolved and baked into the artifact.
-
-  When called without an environment, defaults to a fresh
-  `Schooner.Environment.new/0` (every shipped standard library
-  available).
   """
   @spec compile(binary(), Environment.t()) ::
           {:ok, Compiled.t()} | {:error, Exception.t()}
@@ -283,6 +281,11 @@ defmodule Schooner do
     e -> rescue_script_error(e, __STACKTRACE__)
   end
 
+  @doc """
+  Compile `source` against a fresh `Schooner.Environment.new/0`, in
+  which every shipped standard library is available to import. See
+  `compile/2`.
+  """
   @spec compile(binary()) :: {:ok, Compiled.t()} | {:error, Exception.t()}
   def compile(source) when is_binary(source) do
     compile(source, Environment.new())
@@ -315,6 +318,9 @@ defmodule Schooner do
     Compiled.new(Enum.map(expanded, &Analyze.analyze/1), var_bindings)
   end
 
+  @doc """
+  Bang form of `compile/1` — raises on source-level failure.
+  """
   @spec compile!(binary()) :: Compiled.t()
   def compile!(source) when is_binary(source) do
     compile!(source, Environment.new())

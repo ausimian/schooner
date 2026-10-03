@@ -1,6 +1,7 @@
 defmodule Schooner.Env do
   @moduledoc """
-  Immutable-ish environment for the Scheme evaluator.
+  Environment for the Scheme evaluator: immutable lexical frames over
+  a mutable globals table.
 
   An environment is a chain of lexical frames innermost-first plus a
   *globals* slot identified by a process-dictionary key (a fresh
@@ -46,7 +47,8 @@ defmodule Schooner.Env do
   ## Recursive lexical frames
 
   `letrec`, `letrec*`, named `let`, and the `letrec*` produced by
-  internal-define splicing each push a *recursive* frame. A recursive
+  internal-define splicing each push a *recursive* frame, unless the
+  evaluator has compiled the form to direct calls. A recursive
   frame is a process-dictionary slot keyed by `make_ref/0`, holding the
   frame's names and a tuple of values, so closures captured during
   init evaluation see later bindings via frame identity.
@@ -108,7 +110,7 @@ defmodule Schooner.Env do
   defp lex_lookup([], _name), do: :error
 
   defp lex_lookup([{:rec, ref} | rest], name) do
-    # `Process.get(ref)` returns `nil` once `with_rec_frame` has
+    # `Process.get(ref)` returns `nil` once `release_rec/1` has
     # released the slot, but closures created during the binding
     # form's body may still hold this dead frame in their captured
     # env. Fall through to the surrounding scope so a name that

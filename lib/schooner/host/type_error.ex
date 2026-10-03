@@ -7,8 +7,8 @@ defmodule Schooner.Host.TypeError do
   site, e.g. `"my-lib/info"`), `:expected` (a short description of the
   shape that was demanded, e.g. `"string"`, `"proper list"`), and
   `:got` (the actual value, rendered with `inspect/1` in the
-  message). Tests can pattern on `:op` and `:expected` without
-  coupling to wording.
+  message). Callers can match on `:op` and `:expected` without
+  depending on the message wording.
   """
 
   defexception [:op, :expected, :got, :message]

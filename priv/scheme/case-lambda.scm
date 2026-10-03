@@ -23,11 +23,10 @@
 ;; formals case has its own dedicated rule that avoids a runtime
 ;; `(length '())`.
 ;;
-;; Arity discrimination is at runtime via `(length args)` against the
-;; literal formals list — O(N) per clause attempt where N is the
-;; clause's fixed-arity. The issue's option (a) called out the cost;
-;; tests don't gate on it and the natural macro is markedly simpler
-;; than carrying a compile-time-known arity through a helper macro.
+;; Arity is checked at run time by comparing `(length args)` with the
+;; length of the quoted formals list, so each clause attempt walks
+;; both lists. Carrying a compile-time arity through a helper macro
+;; would avoid that cost at the price of a more complicated macro.
 
 (define-syntax case-lambda
   (syntax-rules ()

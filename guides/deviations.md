@@ -39,7 +39,7 @@ or pass it through `letrec` / parameter objects:
 ```scheme
 (import (scheme base))
 
-;; Mutable counter via parameter object
+;; Rebind a counter for a dynamic extent with a parameter object
 (define counter (make-parameter 0))
 (define (with-incremented-counter thunk)
   (parameterize ((counter (+ (counter) 1)))
@@ -65,21 +65,41 @@ no extended-precision float, no flonum mode, no
 If you need higher precision, expose a host function backed by
 `Decimal` or `:erlang.float_to_binary/2` with explicit precision.
 
-## Special-form names cannot be lexically rebound
+## Special-form names are only partly rebindable
 
-`if`, `let`, `cond`, `=>`, etc. dispatch on the literal symbol
-*before* the lexical environment is consulted. A Scheme that
-uses one of these names as a variable produces unexpected
-results — Schooner rejects the rebinding rather than silently
-shadowing.
+A variable can be named after a special form or macro keyword:
+`(define if 42) if` returns `42`. Schooner does not always honour
+such a binding, though:
+
+- The core special forms (`quote`, `quasiquote`, `if`, `lambda`,
+  `define`, `define-values`, `begin`, `letrec*`,
+  `define-record-type`, `guard`, `define-syntax`, `let-syntax`,
+  `letrec-syntax`, and the unsupported `set!`) dispatch on the
+  literal symbol. At the head of a form
+  they are always the special form, even inside a local binding
+  of the same name; the binding is visible only as a variable
+  reference.
+- A local binding (a `lambda` parameter or `let` variable) of a
+  macro keyword such as `when` or `let` shadows the macro, but a
+  top-level `define` of the same name does not.
+- `syntax-rules` literals, such as `cond`'s `else` and `=>`, match
+  by name even where that name is locally bound.
 
 ```elixir
-{:error, _} =
-  Schooner.eval("(import (scheme base)) (define if 42) if", Schooner.Env.new())
+# `if` is visible as a variable...
+{:ok, 4} =
+  Schooner.eval("(import (scheme base)) (let ((if 3)) (+ if 1))", Schooner.Env.new())
+
+# ...but `(if ...)` is still the special form.
+{:ok, 1} =
+  Schooner.eval(
+    "(import (scheme base)) (let ((if (lambda (a b c) 99))) (if #t 1 2))",
+    Schooner.Env.new()
+  )
 ```
 
-**Workaround.** Use a different name. Lower-priority alternative:
-import the form under a renamed binding via `(import (rename ...))`.
+**Workaround.** Don't name variables after special forms, macro
+keywords, or `syntax-rules` literals.
 
 ## Macro hygiene gaps
 
@@ -95,9 +115,13 @@ documented gaps:
    `define-syntax` only.
 
 The standard idioms — `cond`, `case`, `let`, `when`, `unless`,
-`and`, `or`, `do`, `letrec*`, `parameterize`, `delay`,
+`and`, `or`, `do`, `letrec`, `parameterize`, `delay`,
 `delay-force`, `case-lambda` — are all defined as
-`syntax-rules` macros and behave per spec.
+`syntax-rules` macros and behave per spec. `letrec` expands to
+`letrec*`, so an initializer that refers to an earlier binding
+sees its value (`(letrec ((x 1) (y x)) y)` returns `1`). R7RS
+calls such a reference an error but does not require
+implementations to signal it.
 
 ## `define-syntax` is top-level only
 
@@ -141,10 +165,8 @@ continuation:
 
 Multi-shot continuations (`amb`, generators-via-`call/cc`,
 yin-yang puzzle) and `dynamic-wind` re-entry semantics are
-**deferred to v2.0**. The v1 documented-error case is
-forward-compatible: lifting the restriction in v2 is
-non-breaking, so v1 scripts that respect the rule will continue
-to work unchanged.
+**deferred to v2.0**. Lifting the restriction will not break v1
+scripts that respect it.
 
 **Workaround for long-lived non-local exit**: use `(raise ...)`
 and `with-exception-handler` / `guard`. Exceptions cross
@@ -246,11 +268,10 @@ if and only if they are appropriate for the trust context.
 
 `(scheme time)` *is* shipped, but as a host library (`Schooner.Time`)
 that the embedder must opt in to by passing
-`Schooner.Time.library()` to `Schooner.Environment.new/1`. Wall-clock
-access is the first side-effecting and non-deterministic primitive,
-so keeping it out of the default registry preserves the "default
-sandbox is pure" property. The same module also doubles as a worked
-example of the embeddable-library pattern — see
+`Schooner.Time.library()` to `Schooner.Environment.new/1`. Reading
+the clock is non-deterministic, so keeping it out of the default
+registry keeps the default sandbox pure. The same module doubles as
+a worked example of the embeddable-library pattern — see
 [Host Functions](host-functions.md).
 
 ## I/O is string-port-only
@@ -272,8 +293,8 @@ writing.
 
 ## What this means for migration
 
-Code written for full r7rs implementations may need adjustments
-in three places:
+Code written for full r7rs implementations most often needs
+adjusting in three places:
 
 1. **Anywhere using mutation** — restructure to pure
    transformation, parameters, or `letrec`-style state.
@@ -282,6 +303,6 @@ in three places:
 3. **Anywhere expecting `(scheme file)` / `(scheme load)`** —
    route through host functions provided by the embedder.
 
-Everything else — the macro layer, records, exceptions, the
-numeric tower up through complex, the standard library
-procedures — runs as you'd expect.
+Also check the narrower gaps above: special-form names, macro
+hygiene, `define-syntax` placement, parameter assignment, and
+primitive-error handling.

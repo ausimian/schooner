@@ -27,3 +27,26 @@
 
 - `bench/eval_bench.exs`, an evaluator throughput benchmark with no
   extra dependencies (`MIX_ENV=prod mix run bench/eval_bench.exs`).
+
+### Fixed
+
+- Module documentation and guides no longer contradict the
+  implementation in several places, including the representation of
+  promises and the empty list, `equal?` on foreign values, how
+  out-of-range `asin`/`acos` and negative `sqrt` behave, and how
+  include paths are confined when loading libraries.
+- The sandboxing examples in the "Running Untrusted Scheme" guide now
+  work. They built the environment in one process and evaluated it in
+  another, which fails. The first example also passed `:max_heap_size`
+  to `Task.Supervisor.async_nolink/3`, which ignores it, so no heap
+  limit applied. The examples now set the limit inside the task, give
+  it in words rather than bytes, and set `include_shared_binaries:
+  true` so that large strings and bytevectors count towards it.
+- The "Host Functions" guide told host code to raise `Schooner.Error`
+  for errors a script can catch. That exception bypasses Scheme
+  handlers. The guide now uses
+  `Schooner.Eval.ExceptionState.raise_value/1`, which reaches
+  `guard` and `with-exception-handler`.
+- The "Special-form names" deviation now describes the actual
+  behaviour: rebinding is accepted, but core special forms keep their
+  meaning at the head of a form.

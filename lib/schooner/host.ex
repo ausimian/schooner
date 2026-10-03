@@ -6,12 +6,10 @@ defmodule Schooner.Host do
   function has the same shape as a built-in primitive — it consumes a
   list of `t:Schooner.Value.t/0` arguments and returns a
   `t:Schooner.Value.t/0` — and uses the helpers in this module to move
-  between Scheme values and idiomatic Elixir terms. The named
-  constructors and accessors form the seam that future
-  representation changes pivot on; even when the underlying impl is
-  the identity (Schooner strings are bare Elixir binaries today),
-  host code stays representation-agnostic by going through the
-  helpers.
+  between Scheme values and idiomatic Elixir terms. Going through the
+  named constructors and accessors keeps host code independent of the
+  value representation, even where a helper is currently the
+  identity (Schooner strings are bare Elixir binaries today).
 
   ## Naming convention
 
@@ -25,11 +23,9 @@ defmodule Schooner.Host do
 
   ## Recommended use pattern
 
-  Several accessor names — `Schooner.Host.to_string/1` and
-  `Schooner.Host.to_string!/2` — collide with `Kernel.to_string/1`.
+  `Schooner.Host.to_string/1` collides with `Kernel.to_string/1`.
   **Don't `import Schooner.Host`.** Use `alias Schooner.Host` and
-  call the accessors as `Host.to_string!` etc.; the alias is one
-  line and the call sites stay explicit.
+  call the accessors as `Host.to_string!` etc.
 
   ## Worked example
 
@@ -264,9 +260,9 @@ defmodule Schooner.Host do
 
   @doc """
   Assert `value` is a Scheme boolean and return the Elixir
-  `true | false`. Note: this differs from "truthy" — only `false`
-  is Scheme-falsy, but every other value is *not* a Scheme boolean.
-  Use `Schooner.Value.truthy?/1` for the truthiness test.
+  `true | false`. This is a type check, not a truthiness test: every
+  value other than `#f` is truthy in Scheme, but only `#t` and `#f`
+  are booleans. Use `Schooner.Value.truthy?/1` for truthiness.
   """
   @spec to_bool!(Value.t(), keyword()) :: boolean()
   def to_bool!(value, _opts) when is_boolean(value), do: value
@@ -291,9 +287,8 @@ defmodule Schooner.Host do
 
   @doc """
   Assert `value` is a Scheme vector and return its elements as an
-  Elixir list. The list shape is more idiomatic for Elixir
-  iteration; hosts that want a tuple can call `Tuple.to_list/1`'s
-  inverse, but most use cases want `Enum`.
+  Elixir list, which suits `Enum`-based host code. Use
+  `List.to_tuple/1` on the result if a tuple is needed.
   """
   @spec to_vector!(Value.t(), keyword()) :: [Value.t()]
   def to_vector!({:vector, t}, _opts), do: Tuple.to_list(t)

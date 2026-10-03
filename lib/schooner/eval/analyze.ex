@@ -2,19 +2,15 @@ defmodule Schooner.Eval.Analyze do
   @moduledoc false
 
   # Pre-pass that rewrites the expander's core-form s-expressions into
-  # a tagged intermediate representation for `Schooner.Eval.exec/2`.
-  #
-  # The evaluator used to dispatch on the raw s-expression at every
-  # step — matching `{:sym, "if"}`, `{:sym, "lambda"}`, … against each
-  # application head — and re-ran `parse_params/1` and
-  # `desugar_body/1` every time a `lambda` was evaluated. Doing that
-  # work once here leaves `exec/2` with a single atom-tag dispatch per
-  # node and makes closure creation a tuple build.
+  # a tagged intermediate representation, which `Schooner.Eval.compile/2`
+  # turns into closures. Special-form dispatch, `parse_params/1` and
+  # `desugar_body/1` run once here rather than each time a form is
+  # evaluated, so creating a closure at run time is a tuple build.
   #
   # ## Lexical addressing
   #
   # Analysis threads a compile-time *scope* — a list of frames that
-  # mirrors, one for one, the frames `exec/2` will push at run time:
+  # mirrors, one for one, the frames the evaluator pushes at run time:
   #
   #   * `{:pos, names}` for a closure's parameters and a `guard`
   #     handler's variable. The run-time frame is the tuple
@@ -30,12 +26,12 @@ defmodule Schooner.Eval.Analyze do
   #     recursive frame `depth` levels up. `fallback` is the same name
   #     resolved in the scope *below* that frame, used if the frame's
   #     slot has already been released (see `Schooner.Env`), which is
-  #     where the old by-name walk would have continued;
+  #     where a by-name lookup would continue;
   #   * `{:gref, name, marked}` — a top-level binding. `marked` is the
-  #     hygiene fallback: when `name` carries a macro mark and no
-  #     binding exists for it, the old evaluator retried with the mark
-  #     stripped, so `marked` is that base name resolved against the
-  #     full scope (or `nil` for an unmarked name).
+  #     hygiene fallback: when `name` carries a macro mark and has no
+  #     binding, the name with the mark stripped is used instead, so
+  #     `marked` is that base name resolved against the full scope (or
+  #     `nil` for an unmarked name).
   #
   # Top-level forms are analysed against the empty scope, so
   # `Eval.eval/2` and compiled programs must run against an env with no
@@ -44,20 +40,19 @@ defmodule Schooner.Eval.Analyze do
   # ## Error timing
   #
   # A malformed core form must fail when (and only when) evaluation
-  # reaches it, exactly as it did before this pass existed: a bad form
-  # in an untaken branch is harmless, and earlier top-level forms still
-  # run. So `analyze/1` never raises a `Schooner.Eval.Error`; it
-  # replaces the offending node with `{:raise, exception}`, which
-  # `exec/2` raises on arrival. Each node owns the errors its own shape
-  # check would have raised, and children are analysed independently,
-  # so the raise lands at the same position the old evaluator would
-  # have raised from.
+  # reaches it: a bad form in an untaken branch is harmless, and
+  # earlier top-level forms still run. So `analyze/1` never raises a
+  # `Schooner.Eval.Error`; it replaces the offending node with
+  # `{:raise, exception}`, which the evaluator raises on arrival. Each
+  # node owns the errors from its own shape check, and children are
+  # analysed independently, so the raise lands at the malformed node
+  # rather than at an enclosing one.
   #
-  # Bodies whose `desugar_body/1` ran at closure-creation time (lambda)
-  # fail the `lambda` node; bodies desugared after other work had
-  # already happened (`letrec*` after its inits, `guard` inside its
+  # A `lambda` body that fails to desugar fails the `lambda` node, so
+  # the error surfaces when the closure is created. Bodies that run
+  # after other work (`letrec*` after its inits, `guard` inside its
   # handler extent) become a single `{:raise, exception}` body form so
-  # the earlier work still happens first.
+  # that work still happens first.
 
   alias Schooner.Eval.Error
   alias Schooner.Expander.SyntaxRules
@@ -142,9 +137,8 @@ defmodule Schooner.Eval.Analyze do
 
   defp analyze_all(forms, scope), do: Enum.map(forms, &analyze(&1, scope))
 
-  # The old evaluator evaluated each argument and only then tripped on
-  # a non-list tail, so the raise goes in the argument position after
-  # the last proper element.
+  # The arguments before a non-list tail are still evaluated, so the
+  # raise goes in the argument position after the last proper element.
   defp analyze_args([], _scope), do: []
   defp analyze_args([h | t], scope), do: [analyze(h, scope) | analyze_args(t, scope)]
   defp analyze_args(_, _scope), do: [{:raise, Error.exception(reason: :improper_application)}]
@@ -540,12 +534,12 @@ defmodule Schooner.Eval.Analyze do
   # guard
   # ---------------------------------------------------------------------------
   #
-  # Clauses are analysed in the same order the old evaluator matched
-  # them. A malformed clause (or improper clause list) becomes a
-  # `{:bad, exception}` entry that raises only if the clause walk
-  # reaches it, and an `else` clause ends the list since nothing after
-  # it was ever inspected. The body runs in the guard's own scope; the
-  # clauses run in a one-slot frame binding the condition variable.
+  # Clauses keep their source order. A malformed clause (or improper
+  # clause list) becomes a `{:bad, exception}` entry that raises only
+  # if the clause walk reaches it, and an `else` clause ends the list
+  # since nothing after it is ever inspected. The body runs in the
+  # guard's own scope; the clauses run in a one-slot frame binding the
+  # condition variable.
 
   defp analyze_guard([[{:sym, var} | clauses_form] | body], scope)
        when is_binary(var) and body != [] do
@@ -585,8 +579,8 @@ defmodule Schooner.Eval.Analyze do
   # Bodies
   # ---------------------------------------------------------------------------
 
-  # A body whose desugaring errors fail the enclosing node (lambda,
-  # define-fn): the old evaluator desugared these at closure creation.
+  # Desugaring errors in this body fail the enclosing node (lambda,
+  # define-fn), so they surface when the closure is created.
   defp analyze_body(body, scope), do: body |> desugar_body() |> analyze_all(scope)
 
   # A body whose desugaring errors surface only once the body runs.
@@ -700,11 +694,8 @@ defmodule Schooner.Eval.Analyze do
     [binding | build_letrec_bindings(rest)]
   end
 
-  # The `{:multi_vals, spec}` head is an Elixir-tagged tuple — Scheme
-  # source can't construct it, so users typing into `letrec*` directly
-  # never collide with this internal binding shape; only the desugarer
-  # emits it. `parse_bindings/2` recognises it and routes the init
-  # through the evaluator's multi-value binding path.
+  # Emits the internal `{:multi_vals, spec}` binding head described at
+  # `parse_bindings/2`.
   defp build_letrec_bindings([{:multi, spec, init} | rest]) do
     binding = [{:multi_vals, spec} | [init | []]]
     [binding | build_letrec_bindings(rest)]

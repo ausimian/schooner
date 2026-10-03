@@ -6,12 +6,12 @@ defmodule Schooner.Primitives.Exceptions do
   `error-object?`, `read-error?`, `file-error?`,
   `error-object-message`, `error-object-irritants`).
 
-  Handler bookkeeping lives in `Schooner.Eval.ExceptionState` —
-  this module is the binding layer that exposes those operations
-  to Scheme code. The `guard` derived form is implemented as a
-  core form in `Schooner.Eval` because it needs to escape the
-  body via `throw`/`catch` once a clause matches; the throw tag
-  is internal so it cannot be observed from Scheme.
+  Handler bookkeeping lives in `Schooner.Eval.ExceptionState`; this
+  module exposes those operations to Scheme code. `guard`, which r7rs
+  defines as a derived form, is a core form in `Schooner.Eval`
+  because it escapes the body with `throw`/`catch` once a clause
+  matches. The throw tag is internal and cannot be observed from
+  Scheme.
   """
 
   alias Schooner.Eval
@@ -89,20 +89,19 @@ defmodule Schooner.Primitives.Exceptions do
   # with-exception-handler
   # ---------------------------------------------------------------------------
 
-  # Both args must be procedures. Handler is pushed for the dynamic
-  # extent of the thunk's invocation; on every exit path the handler
-  # stack is restored to its state from before the call. We can't
-  # just `pop` once in the `after` clause because `raise_value`
-  # itself pops handlers as it walks the chain — so by the time the
-  # `after` runs, the handler we pushed may already be gone, and a
-  # blind pop would discard a handler installed *outside* this
-  # call. The snapshot/restore pattern collapses every escape path
-  # to the same observable: the stack on exit equals the stack on
-  # entry. The thunk call itself is *not* in tail position with
-  # respect to the surrounding code — that's an unavoidable cost of
-  # dynamic-extent handler installation, and is fixed at one BEAM
-  # stack frame per handler boundary regardless of how deep the body
-  # recurses (TCO inside the body still flattens tail self-calls).
+  # Both args must be procedures. The handler is pushed for the
+  # dynamic extent of the thunk's invocation, and every exit path
+  # restores the handler stack to its state from before the call. A
+  # single `pop` in the `after` clause would not work: `raise_value`
+  # pops handlers as it walks the chain, so by the time the `after`
+  # runs the handler pushed here may already be gone, and a blind pop
+  # would discard a handler installed *outside* this call. Restoring a
+  # snapshot gives every exit path the same result: the stack on exit
+  # equals the stack on entry. The thunk call is *not* in tail
+  # position, which is unavoidable when installing a handler for a
+  # dynamic extent. The cost is one BEAM stack frame per handler
+  # boundary, however deeply the body recurses; tail calls inside the
+  # body are still proper.
   defp with_exception_handler([handler, thunk]) do
     require_procedure!("with-exception-handler", handler)
     require_procedure!("with-exception-handler", thunk)

@@ -5,7 +5,7 @@ defmodule Schooner.Primitives.Continuations do
 
   ## Escape-only `call/cc`
 
-  Schooner's continuations are *single-shot upward only*. `call/cc`
+  Schooner's continuations are *single-shot and upward only*. `call/cc`
   reifies the current continuation as a Schooner procedure that, when
   invoked, escapes back to the original call site. The implementation
   mints a fresh `make_ref/0` tag at every `call/cc` entry, installs a
@@ -15,32 +15,28 @@ defmodule Schooner.Primitives.Continuations do
   `{:schooner_continuation, tag, value}`; the matching `catch` returns
   the value as the result of the original `call/cc`.
 
-  Once the `call/cc` exits — by any path: matched escape, normal
-  return, raised exception, or another continuation invocation that
-  walks past us — its `after` clause deregisters the tag. A subsequent
+  Once the `call/cc` exits by any path (matched escape, normal
+  return, raised exception, or an outer continuation escaping through
+  it), its `after` clause deregisters the tag. A subsequent
   invocation of the now-stale continuation procedure observes the tag
   is gone and raises `Schooner.Eval.Error` with reason
   `:continuation_expired` rather than letting the throw propagate
-  uncaught into Erlang. This is a documented deviation from r7rs
-  (which mandates fully reusable continuations); lifting it to
-  multi-shot full first-class `call/cc` is the planned v2.0 change
-  per PLAN.md.
+  uncaught into Erlang. This is a documented deviation from r7rs,
+  which requires fully reusable continuations; PLAN.md defers
+  multi-shot first-class `call/cc` to v2.0.
 
   ## `dynamic-wind` without an explicit wind stack
 
-  Under escape-only continuations, every escape from inside a
-  `dynamic-wind` body unwinds via `:erlang.throw/1` (the continuation
-  procedure throws) or `Kernel.raise/1` (an exception escapes). Both
-  fire the surrounding `try/after` clauses in innermost-first order
-  as the stack unwinds, which is exactly the r7rs semantics for
-  running `after` thunks on escape. A separate wind-stack data
-  structure is therefore unnecessary at v1 — the `try/after`
-  primitive fan-in already gives us the right ordering for free.
+  With escape-only continuations, every escape from a `dynamic-wind`
+  body unwinds via `:erlang.throw/1` (a continuation is invoked) or
+  `Kernel.raise/1` (an exception escapes). Both run the surrounding
+  `try/after` clauses innermost first as the stack unwinds, which is
+  the order r7rs requires for `after` thunks on escape, so no
+  separate wind stack is needed.
 
-  v2.0's first-class `call/cc` does need an explicit wind stack
-  (capturing a continuation must snapshot the wind frames so re-entry
-  can re-fire `before` thunks). Until then, this module is just the
-  binding layer over `try/after`.
+  First-class `call/cc` in v2.0 will need an explicit wind stack:
+  capturing a continuation must snapshot the wind frames so that
+  re-entry can re-run the `before` thunks.
   """
 
   alias Schooner.Eval
@@ -84,10 +80,8 @@ defmodule Schooner.Primitives.Continuations do
 
   # The reified continuation procedure. When applied with one argument
   # it consults the live-tag registry: if the surrounding `call/cc` is
-  # still on the stack, throw the matched tag; otherwise raise a
-  # documented Schooner error rather than letting an unmatched throw
-  # escape. Captured by reference so this file owns the throw-tag
-  # vocabulary end-to-end.
+  # still on the stack, throw to its tag; otherwise raise a Schooner
+  # error rather than letting an unmatched throw escape.
   defp make_continuation(tag) do
     Value.primitive("continuation", 1, fn [value] ->
       if ContinuationState.live?(tag) do
@@ -104,9 +98,9 @@ defmodule Schooner.Primitives.Continuations do
 
   # `before` runs once on entry. `thunk` is the body whose value is
   # returned. `after` runs on every exit path: normal return,
-  # exception, or escape via a continuation invocation. The `after`
-  # thunk evaluates *outside* its own `dynamic-wind` extent — that's
-  # what `try/after` gives us, and matches r7rs.
+  # exception, or escape via a continuation invocation. As r7rs
+  # requires, the `after` thunk runs *outside* its own `dynamic-wind`
+  # extent, which `try/after` provides.
   defp dynamic_wind([before_thunk, thunk, after_thunk]) do
     require_procedure!("dynamic-wind", before_thunk)
     require_procedure!("dynamic-wind", thunk)

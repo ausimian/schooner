@@ -2,15 +2,12 @@ defmodule Schooner.Primitives.Read do
   @moduledoc """
   The `(scheme read)` library: a single `read` procedure.
 
-  Schooner has no port abstraction (see PLAN.md), so this is the
-  string-port flavour called out in the Phase 13 plan: `read` takes
-  exactly one argument — a Scheme string — and returns the first
-  datum parsed from it. An empty string returns `eof`.
+  Schooner has no port abstraction (see PLAN.md), so `read` takes
+  exactly one argument, a Scheme string, and returns the first datum
+  parsed from it. A string containing no datum returns `eof`.
 
-  This is a documented deviation from r7rs, which makes `read` take a
-  port and read incrementally. A future phase that introduces ports
-  (or, more likely, a host-injected reader function) can replace this
-  surface.
+  This is a documented deviation from r7rs, where `read` takes a port
+  and reads incrementally.
   """
 
   alias Schooner.Reader

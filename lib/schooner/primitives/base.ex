@@ -1,33 +1,35 @@
 defmodule Schooner.Primitives.Base do
   @moduledoc """
-  Numeric core, type predicates, and boolean helpers from `(scheme base)`.
+  The `(scheme base)` procedures implemented in Elixir: numbers,
+  type and equivalence predicates, booleans, pairs and lists, vectors,
+  bytevectors, strings, symbols, and multiple values.
 
-  Every binding here is registered as a `Schooner.Value.primitive/3` value
-  in the standard environment. The evaluator already understands those
-  via `Schooner.Eval.apply_proc/2` — this module just supplies the
-  Elixir-side implementations.
+  Each binding is registered as a `Schooner.Value.primitive/3` value
+  and called through `Schooner.Eval.apply_proc/2`.
 
   Exactness rules follow r7rs: exact inputs (integers and rationals)
-  produce exact results where possible; any inexact (float) operand
-  contaminates the whole expression. Real operations that produce a
-  complex result lift into the complex layer (`(sqrt -1)` ⟹ `+i`).
+  produce exact results where possible, and any inexact (float)
+  operand makes the result inexact. Real operations whose result is
+  complex lift into the complex layer (`(sqrt -1)` ⟹ `+1.0i`).
 
   ## `sqrt` exact-vs-inexact split
 
-  `sqrt` keeps results exact whenever it can: a perfect-square integer
-  or rational yields an exact integer/rational; a non-square exact value
-  widens to a float. Negative real inputs lift into the imaginary axis
-  (`(sqrt -1)` ⟹ `0+i`, `(sqrt -1.0)` ⟹ `0+1.0i`). The non-finite floats
-  follow IEEE-754 directly: `(sqrt +inf.0)` ⟹ `+inf.0`, `(sqrt -inf.0)`
-  and `(sqrt +nan.0)` ⟹ `+nan.0`.
+  `sqrt` keeps results exact when it can: a non-negative perfect-square
+  integer or rational yields an exact integer or rational, and any
+  other non-negative exact value widens to a float. Negative real
+  inputs lift onto the imaginary axis with an inexact imaginary part
+  (`(sqrt -1)` and `(sqrt -1.0)` both ⟹ `+1.0i`). Non-finite floats
+  follow IEEE-754: `(sqrt +inf.0)` ⟹ `+inf.0`, and `(sqrt -inf.0)` and
+  `(sqrt +nan.0)` ⟹ `+nan.0`.
 
-  ## `expt` zero / unit-base short-circuits
+  ## `expt` with infinities and NaN
 
-  `expt` follows the IEEE-754-2008 / C99 `pow` boundary rules ahead of
-  the usual NaN-propagation: anything raised to an exact `0` or signed
-  `±0.0` is `1.0` (including `(expt +nan.0 0)` and `(expt +inf.0 0)`);
-  `1` or `1.0` raised to anything is `1.0`; `±1` raised to `±inf.0` is
-  `1.0`. Outside those carve-outs, NaN propagates.
+  When either operand is an infinity or NaN, `expt` applies the
+  IEEE-754-2008 / C99 `pow` boundary rules before propagating NaN: a
+  zero exponent (exact `0` or `±0.0`) gives `1.0`, even for
+  `(expt +nan.0 0)` and `(expt +inf.0 0)`; a base of `1` or `1.0`
+  gives `1.0`; and `±1` raised to `±inf.0` gives `1.0`. Otherwise NaN
+  propagates.
   """
 
   alias Schooner.Eval
@@ -458,12 +460,11 @@ defmodule Schooner.Primitives.Base do
     end
   end
 
-  # Rationals are stored in lowest terms with positive denominator. The
-  # only denominator that admits a tie (exact half) is 2 — for any
-  # larger denominator a fraction of `(den/2)/den` would reduce, so the
-  # gcd-1 invariant rules it out. Outside the q==2 case we compare
-  # `2 * remainder` against `den` to decide which side the fractional
-  # part falls on.
+  # Rationals are stored in lowest terms with a positive denominator.
+  # The only denominator that admits a tie (an exact half) is 2: for any
+  # larger denominator, `(den/2)/den` would reduce, which lowest terms
+  # rule out. For other denominators, comparing `2 * remainder` with
+  # `den` decides which side of the half the fractional part falls on.
   defp rat_round_to_even(num, 2) do
     fl = Integer.floor_div(num, 2)
     if rem(fl, 2) == 0, do: fl, else: fl + 1
@@ -697,7 +698,8 @@ defmodule Schooner.Primitives.Base do
 
   # Principal complex square root via the half-angle formula:
   #   sqrt(z) = sqrt((|z|+a)/2) + sign(b) * sqrt((|z|-a)/2) * i
-  # for z = a + bi. Numerically stable for any rectangular complex.
+  # for z = a + bi. The `max/2` clamps a slightly negative difference
+  # caused by rounding.
   defp complex_sqrt({:complex, r, i}) do
     a = to_float(r)
     b = to_float(i)
@@ -973,7 +975,7 @@ defmodule Schooner.Primitives.Base do
     ]
   end
 
-  # Two-fixnum fast paths skip the variadic type-check and NaN-aware
+  # Two-integer fast paths skip the variadic type check and NaN-aware
   # pairwise loop; everything else falls through to the general path.
   defp cmp_eq([a, b]) when is_integer(a) and is_integer(b), do: a == b
   defp cmp_eq(args), do: variadic_cmp("=", args, &num_eq/2, &require_number!/2)
@@ -1832,7 +1834,7 @@ defmodule Schooner.Primitives.Base do
     {ints, any_float?}
   end
 
-  # ---- Type-checks shared by phase 6 primitives ------------------------------
+  # ---- Type checks for the collection and string primitives ------------------
 
   defp require_proper_list!(op, value) do
     if Value.list?(value), do: :ok, else: raise(Error, reason: {:improper_list, op, value})

@@ -8,10 +8,10 @@ defmodule Schooner.Error do
   `irritants/1` for the common case.
 
   This is distinct from `Schooner.Eval.Error` and
-  `Schooner.Primitive.Error`, which signal evaluator/primitive failures
-  that the host gets directly without crossing the Scheme exception
-  machinery. Phase 11 only routes explicit `raise` calls through here;
-  evaluator/primitive errors continue to propagate as before.
+  `Schooner.Primitive.Error`, which signal evaluator and primitive
+  failures. Those reach the host directly without passing through
+  the Scheme exception handlers; only values raised from Scheme end
+  up here.
   """
 
   alias Schooner.Value

@@ -3,8 +3,8 @@ defmodule Schooner.Eval.Error do
   Exception raised by the evaluator for runtime and syntactic failures.
 
   The `:reason` field is a structured term — atom or tagged tuple — meant
-  to be machine-matchable in tests. The pretty `:message` is generated
-  lazily so assertions can pin behaviour without coupling to wording.
+  to be matched on. The `:message` is derived from the reason, so
+  assertions can pin behaviour on `:reason` without coupling to wording.
   """
 
   defexception [:reason, :message]

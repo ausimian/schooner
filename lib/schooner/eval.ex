@@ -9,8 +9,8 @@ defmodule Schooner.Eval do
   closures — one `fn env -> ... end` per node, built once — so
   executing a program is a chain of closure calls with no per-node
   dispatch. `Schooner.compile/2` stores the analysed IR (plain data,
-  safe to cache or persist) and `run_compiled/2` compiles it to
-  closures on each run.
+  safe to cache or persist) and `Schooner.run_compiled/2` compiles it
+  to closures on each run.
 
   ## Tail-call invariant
 
@@ -128,7 +128,7 @@ defmodule Schooner.Eval do
   end
 
   # An unmarked global reads its cell (see `Schooner.Env`), resolved
-  # here once. A marked name is looked up by name as before: macro
+  # here once. A marked name is still looked up by name: macro
   # expansion mints fresh marked names, and giving each one a cell
   # would grow the globals with every expansion.
   def compile({:gref, name, nil}, g) do
@@ -308,7 +308,7 @@ defmodule Schooner.Eval do
 
   # Applications are specialised on argument count so the common small
   # arities build their argument list inline. Head first, then
-  # arguments left to right, as before.
+  # arguments left to right.
   defp compile_app({:app, head, args}, g) do
     head = compile(head, g)
 
@@ -534,13 +534,12 @@ defmodule Schooner.Eval do
     end
   end
 
-  # `letrec*` is the workhorse for both user-facing recursive bindings
-  # (the `let`, `let*`, `letrec`, `letrec*`, named-`let` bootstrap
-  # macros all expand to it eventually) and for internal-define
-  # splicing (see `Schooner.Eval.Analyze`). Init expressions are evaluated
-  # left-to-right in a frame whose closure values reference the
-  # frame's identity — `Env.extend_rec/2` plus `rec_set/3` ties the
-  # knot without any after-the-fact mutation of the closures
+  # `letrec*` backs both user-facing recursive bindings (the `letrec`
+  # and named-`let` bootstrap macros expand to it) and internal-define
+  # splicing (see `Schooner.Eval.Analyze`). Init expressions are
+  # evaluated left-to-right in a frame whose closure values reference
+  # the frame's identity — `Env.extend_rec/2` plus `Env.rec_put/3` ties
+  # the knot without any after-the-fact mutation of the closures
   # themselves.
   #
   # On normal body return, `finalize_letrec_star/3` walks the result
@@ -549,9 +548,9 @@ defmodule Schooner.Eval do
   # finalised snapshot so escaped closures (and any inner closures
   # they reach via rec lookups, including mutually-recursive
   # bindings) can resolve their rec names through it. If no closure
-  # in the result references the slot, it is released as usual. The
-  # slot becomes immutable after letrec exit — the evaluator never
-  # writes to a freed-but-kept slot.
+  # in the result references the slot, it is released as usual. A kept
+  # slot is immutable after letrec exit: the evaluator never writes to
+  # it again.
   defp eval_letrec_star(names, bindings, body, env) do
     rec_env = Env.extend_rec(env, names)
     [{:rec, ref} | _] = rec_env.lex
@@ -592,8 +591,8 @@ defmodule Schooner.Eval do
   end
 
   # Quasiquote templates compile to closures that rebuild only the
-  # non-constant spine. Head before tail, matching the old
-  # left-to-right evaluation order.
+  # non-constant spine. The head is evaluated before the tail, keeping
+  # unquoted expressions in left-to-right order.
   defp compile_template({:qc, datum}, _g), do: fn _env -> datum end
   defp compile_template({:qu, expr}, g), do: compile(expr, g)
 
@@ -642,7 +641,7 @@ defmodule Schooner.Eval do
   # `{:rec, ref}` in its captured env. The walk recurses into every
   # aggregate value tag that can carry a closure — pairs, vectors,
   # records, multi-values, promises, parameters, error objects — and
-  # is identity-false for atomic / opaque tags. A missed aggregate
+  # returns false for atomic and opaque tags. A missed aggregate
   # tag would prematurely release a slot a captured closure still
   # depends on, surfacing as a delayed lookup failure, so extending
   # the value model means extending this walk.
@@ -694,9 +693,9 @@ defmodule Schooner.Eval do
   # ---------------------------------------------------------------------------
 
   # `guard` is a core form rather than a `syntax-rules` macro because
-  # it has to escape the body once a clause matches, and the only
-  # tools available pre-`call/cc` (phase 12) are Elixir `throw` /
-  # `catch`. The handler is wrapped as a `:primitive` so
+  # it has to escape the body once a clause matches; it was written
+  # before `call/cc` existed and escapes with Elixir `throw` / `catch`
+  # directly. The handler is wrapped as a `:primitive` so
   # `apply_proc/2` invokes it with the same machinery as a user
   # handler — `with-exception-handler` and `guard` are
   # indistinguishable from the raise side.

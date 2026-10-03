@@ -12,10 +12,11 @@ defmodule Schooner.Library do
   survive as transformers.
 
   Names are canonical lists of segments where each segment is either a
-  binary (Scheme-symbol form) or a non-negative integer. The reader
-  will produce datum-form names like `[{:sym, "scheme"}, {:sym, "base"}]`
-  once `import` and `define-library` land; this module accepts only
-  the canonicalised form so the registry key is `==`-comparable.
+  binary (Scheme-symbol form) or a non-negative integer. Library names
+  in source are read as lists of symbols such as
+  `[{:sym, "scheme"}, {:sym, "base"}]`; `canonicalise_name/1` converts
+  them, and this module accepts only the canonical form so registry
+  keys compare with `==`.
 
   ## Registries and persistent storage
 
@@ -132,7 +133,7 @@ defmodule Schooner.Library do
   skipped — `import` resolution surfaces those at use site.
 
   Returns `{:error, {:cycle, names}}` when `registry` contains an
-  import cycle. `names` lists the cycle entry-to-cycle-back order so
+  import cycle. `names` starts and ends at the same library, so
   `(a) imports (b), (b) imports (a)` reports `[a, b, a]`.
   """
   @spec topo_sort(registry()) :: {:ok, [name()]} | {:error, {:cycle, [name()]}}

@@ -4,21 +4,20 @@ defmodule Schooner.Expander.Derived do
 
   Reads the `.scm` files under `priv/scheme/` and concatenates them
   into a single source binary that
-  `Schooner.Expander.bootstrap_env/0` parses and expands once per VM.
-  Two files contribute today:
+  `Schooner.Expander.bootstrap_env/0` parses and expands once per VM:
 
-    * `base.scm` — derived forms (when, unless, and, or, let, let*,
-      letrec, cond, case, do).
+    * `base.scm` — derived forms (`when`, `unless`, `and`, `or`, `let`,
+      `let*`, `letrec`, `cond`, `case`, `do`, `let-values`,
+      `let*-values`, `parameterize`).
     * `lazy.scm` — `delay` and `delay-force`.
 
   ## Quasiquote
 
-  `quasiquote` stays as a special form in `Schooner.Eval` rather than
-  becoming a `syntax-rules` macro. r7rs §4.2.8 lays out a recursive,
-  level-aware definition that includes vector quasiquotation; that
-  level tracking is awkward to express with finite, non-recursive
-  `syntax-rules` rules, and the existing evaluator implementation is
-  the simpler home.
+  `quasiquote` remains a core form handled by the evaluator
+  (`Schooner.Eval.Analyze`) rather than a `syntax-rules` macro. r7rs
+  §4.2.8 defines it recursively, tracking the quasiquote level and
+  covering vector templates; that level tracking is awkward to express
+  in `syntax-rules`.
   """
 
   alias Schooner.Library.Scheme

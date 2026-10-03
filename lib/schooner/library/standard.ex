@@ -10,8 +10,9 @@ defmodule Schooner.Library.Standard do
   `newline` and `write-string` output primitives in
   `Primitives.Write.base_io_specs/0`, plus the syntax-rules macros
   defined in `priv/scheme/base.scm` (`when`, `unless`, `and`, `or`,
-  `let`, `let*`, `letrec`, `cond`, `case`, `do`, `parameterize`). The other libraries map one-to-one to a single primitive
-  module:
+  `let`, `let*`, `letrec`, `cond`, `case`, `do`, `let-values`,
+  `let*-values`, `parameterize`). The other libraries map one-to-one
+  to a single primitive module:
 
     * `(scheme cxr)` → `Primitives.Cxr`
     * `(scheme char)` → `Primitives.Char`
@@ -27,11 +28,10 @@ defmodule Schooner.Library.Standard do
   `lambda`s wrapped in a rest-only outer lambda that dispatches by
   arity at call time.
 
-  Idempotent: calling `boot/0` repeatedly rebuilds and re-persists the
-  same registry. The first call from `Schooner.Application.start/2` is
-  the single-flight that avoids the global literal-area GC that
-  re-`put`ting persistent terms triggers; later calls accept that
-  cost.
+  `boot/0` is idempotent: each call rebuilds and re-persists the same
+  registry. The first call, from `Schooner.Application.start/2`,
+  creates the persistent term; later calls replace it and pay the
+  global literal-area GC that replacing a persistent term triggers.
   """
 
   alias Schooner.Expander

@@ -11,7 +11,7 @@ defmodule Schooner.Application do
   #   2. Concurrent first-evals cannot race the lazy `get → build →
   #      put` path. The lazy path stores the env only if the key is
   #      `:unset`, but two callers can observe `:unset` simultaneously,
-  #      both build (each minting fresh `make_ref/0` hygiene marks),
+  #      both build (each minting fresh hygiene marks),
   #      and both `put`. The second `put` is then an *update* of an
   #      existing key, and `:persistent_term.put/2` triggers a global
   #      literal-area GC across all processes when it replaces a

@@ -12,10 +12,13 @@ defmodule Schooner.Primitives.Inexact do
     * `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, and `log`
       accept complex arguments and return complex.
 
-  Real `(asin x)` / `(acos x)` outside `[-1, 1]` still raise rather
-  than lifting silently — pass `(make-rectangular x 0)` to opt in.
-  `(log 0)` returns `-inf.0`, matching `:math.log/1` once we recognise
-  zero as a special edge case.
+  For an integer or float `x` outside `[-1, 1]`, `(asin x)` and
+  `(acos x)` also lift: `(asin x)` returns the same result as
+  `(asin (make-rectangular x 0))`, and likewise for `acos`. An exact
+  rational outside that range currently raises (#118).
+
+  `(log 0)` returns `-inf.0`; zero is handled explicitly because
+  `:math.log/1` raises on it. `(log -inf.0)` raises.
   """
 
   alias Schooner.Primitive.Error
@@ -203,8 +206,8 @@ defmodule Schooner.Primitives.Inexact do
 
   @doc """
   `expt(z, w) = exp(w * log z)` on the complex tower. Public so the
-  base-library `expt` primitive can defer the non-integer-exponent
-  path here without exposing the underlying complex `exp` / `log`.
+  base-library `expt` primitive can delegate complex cases here
+  without exposing the underlying complex `exp` / `log`.
   """
   @spec generic_expt(Value.complex_v() | Value.real_v(), Value.complex_v() | Value.real_v()) ::
           Value.t()

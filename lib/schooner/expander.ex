@@ -4,23 +4,29 @@ defmodule Schooner.Expander do
 
   Walks the reader's output, applies `define-syntax` / `let-syntax` /
   `letrec-syntax` bindings to expand macro uses, and leaves only the
-  core forms — `quote`, `if`, `lambda`, top-level `define`, `begin`,
-  application, and variable reference — for the evaluator to consume.
-  Everything else, including all of phase 7's derived forms, lives as
-  a `syntax-rules` macro registered in the bootstrap syntax env.
+  core forms for the evaluator: `quote`, `if`, `lambda`, `define`,
+  `define-values`, `begin`, `letrec*`, `quasiquote`, `guard`,
+  application, and variable reference. `define-record-type` expands
+  to a `begin` of `define`s. The derived forms (`let`, `cond`, `case`,
+  `do`, and so on) are `syntax-rules` macros in the bootstrap syntax
+  env.
 
   Hygiene is by alpha-renaming with a fresh per-expansion mark; see
-  `Schooner.Expander.SyntaxRules` for the details. The expander's job
-  in this module is to drive expansion until a fixed point and to
-  shadow macro keywords with `:variable` frames so that an inner
-  `let` shadowing the bootstrap `let` does the expected thing.
+  `Schooner.Expander.SyntaxRules`. This module drives expansion to a
+  fixed point and pushes `:variable` frames for local bindings, so a
+  local variable named after a macro keyword (a parameter called
+  `when`, say) shadows the macro.
 
   ## Top-level vs. internal `define-syntax`
 
-  Top-level `define-syntax` is the supported form. Bodies that mix
-  internal `define-syntax` with internal `define` are not yet handled
-  — `let-syntax` / `letrec-syntax` cover the in-body needs and the
-  spec leaves the internal-define-syntax case off the critical path.
+  Only top-level `define-syntax` is supported. Inside a top-level
+  `begin`, a macro is visible to the rest of that `begin`, but it
+  stays visible after the `begin` only if the `begin` contains
+  nothing but syntax definitions: a `begin` that also holds an
+  ordinary form drops its macros when it ends. A `define-syntax`
+  anywhere else raises `Schooner.Eval.Error` with reason
+  `:nested_define_syntax_unsupported`; `let-syntax` and
+  `letrec-syntax` cover local macro definitions.
   """
 
   alias Schooner.Eval.Error
@@ -31,14 +37,14 @@ defmodule Schooner.Expander do
   alias Schooner.Reader
   alias Schooner.Value
 
-  # `letrec*` is intentionally retained as a core form: it backs both
-  # user-facing recursive bindings and the internal-define splicing
-  # done at evaluation time, and a fully-macroised replacement would
-  # need either mutation or a hand-built fix-point combinator.
-  # `define-record-type` joins the core set because it has to mint a
-  # fresh type identity at expansion time and embed it as a literal
-  # in the bindings it generates — `syntax-rules` templates are pure
-  # substitution and can't introduce a fresh constant per use.
+  # Core special forms. A hygiene-marked symbol whose base name is in
+  # this set is re-dispatched on the canonical name (`resolve_base/2`).
+  #
+  # `letrec*` stays a core form because it backs both user-facing
+  # recursive bindings and internal-define splicing in
+  # `Schooner.Eval.Analyze`; a macro replacement would need either
+  # mutation or a hand-built fix-point combinator. For why
+  # `define-record-type` is core, see `expand_define_record_type/2`.
   @core_specials MapSet.new(
                    ~w(quote if lambda define define-values begin set! letrec* define-record-type guard)
                  )
@@ -72,18 +78,17 @@ defmodule Schooner.Expander do
   Return the cached bootstrap syntax env containing the derived-form
   macros.
 
-  Normally populated eagerly by `Schooner.Application.start/2` so that
-  the first `Schooner.eval/2` call on the node pays no bootstrap
-  parse-and-expand cost and concurrent first-evals cannot race the
-  put. A lazy fallback is retained for callers that use the library
-  without starting the OTP application (some test scenarios). Under
-  normal operation the fallback branch is dead.
+  `Schooner.Application.start/2` builds and caches it at startup, so
+  the first `Schooner.eval/2` call on a node does not pay the
+  parse-and-expand cost. If the application has not been started (in
+  some tests, for example), the first call builds and caches it here
+  instead.
 
-  The fallback is *not* race-safe: two callers observing `:unset`
-  simultaneously will both build and both `put`; the second `put`
-  becomes an update of an existing key, which triggers a global
-  literal-area GC across all processes. Eager init from
-  `Schooner.Application` avoids this by single-flighting the put.
+  That fallback is *not* race-safe: two callers that both see `:unset`
+  will both build and `put`, and the second `put` replaces an existing
+  `:persistent_term` key, which triggers a global literal-area GC
+  across all processes. Building once at application start avoids
+  this.
   """
   @spec bootstrap_env() :: SyntaxEnv.t()
   def bootstrap_env do
@@ -224,10 +229,10 @@ defmodule Schooner.Expander do
     [expand(head, env) | expand_each(args, env)]
   end
 
-  # A core special form's name reached us with a hygiene mark — i.e.
-  # a template wrote one of `quote`/`if`/`lambda`/etc. without
-  # listing it in `SyntaxRules`'s `@core_keywords`. Re-dispatch on
-  # the canonical name so the dedicated handlers fire.
+  # A core special form's name reached us with a hygiene mark: a
+  # template used a core form (`letrec*`, `guard`, ...) that is not in
+  # `SyntaxRules`'s `@core_keywords`, so instantiation marked it.
+  # Re-dispatch on the canonical name so the dedicated handlers fire.
   defp canonicalise_special(base, [{:sym, _} | tail], env) do
     expand([{:sym, base} | tail], env)
   end
@@ -299,10 +304,10 @@ defmodule Schooner.Expander do
 
   # `define-values` is a core form rather than a `syntax-rules` macro
   # because, in internal-definition position, it has to fan out into
-  # multiple recursive bindings on a single evaluation of the producer
-  # — the body desugarer in `Schooner.Eval` handles that splice. The
-  # expander only validates the formal-list shape and recursively
-  # expands the producer expression.
+  # multiple recursive bindings from a single evaluation of the
+  # producer; the body desugarer in `Schooner.Eval.Analyze` does that
+  # splice. The expander only validates the formals and expands the
+  # producer expression.
   defp expand_define_values([formals | [producer | []]], env) do
     validate_define_values_formals(formals)
     [{:sym, "define-values"} | [formals | [expand(producer, env) | []]]]
@@ -352,12 +357,9 @@ defmodule Schooner.Expander do
 
   defp sym_name({:sym, name}), do: name
 
-  # Single walk over the binding list yielding `[{sym, init}, ...]` —
-  # used twice by the caller (once to derive the binder names for
-  # the syntax-env shadow, once to expand the inits in that
-  # already-shadowed env), avoiding the duplicate parse the previous
-  # split into `letrec_binding_names/1` and `expand_letrec_bindings/2`
-  # required.
+  # Parse the binding list once into `[{sym, init}, ...]`. The caller
+  # uses the result twice: to derive the binder names for the
+  # syntax-env shadow, and to expand the inits in that shadowed env.
   defp parse_letrec_bindings([], acc), do: Enum.reverse(acc)
 
   defp parse_letrec_bindings(
@@ -458,19 +460,18 @@ defmodule Schooner.Expander do
     end)
   end
 
-  # Build `(define (<name> <param> ...) <body>)`. Centralises the
-  # `:pair`/`[]` skeleton the three record-machinery emitters
-  # would otherwise duplicate.
+  # Build `(define (<name> <param> ...) <body>)` for the record
+  # constructor, predicate, and accessor emitters.
   defp make_define_form(name, params, body) do
     Value.list([{:sym, "define"}, Value.list([{:sym, name} | params]), body])
   end
 
   # `guard` is a core form rather than a `syntax-rules` macro because
-  # it must escape the body via Elixir `throw`/`catch` once a clause
-  # matches — `call/cc` (phase 12) is the macro-friendly alternative
-  # but does not yet exist. The expander walks the variable shadow,
-  # the clause tests/bodies, and the body so that user macros inside
-  # any of those positions get a chance to expand.
+  # it escapes the body with Elixir `throw`/`catch` once a clause
+  # matches. (The r7rs reference definition uses `call/cc`, which
+  # Schooner did not have when `guard` was added.) The expander
+  # expands the body and each clause's test and body, with the
+  # condition variable shadowing any same-named macro in the clauses.
   defp expand_guard([[{:sym, var} | clauses_form] | body], env)
        when body != [] and is_binary(var) do
     inner = SyntaxEnv.push_variables(env, [var])
