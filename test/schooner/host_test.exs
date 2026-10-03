@@ -1,6 +1,8 @@
 defmodule Schooner.HostTest do
   use ExUnit.Case, async: true
 
+  alias Schooner.Environment
+  alias Schooner.Error
   alias Schooner.Host
   alias Schooner.Host.TypeError
   alias Schooner.Value
@@ -50,6 +52,96 @@ defmodule Schooner.HostTest do
     test "primitive/3 builds a primitive value" do
       fun = fn [x] -> x end
       assert {:primitive, "id", 1, ^fun} = Host.primitive("id", 1, fun)
+    end
+  end
+
+  describe "script-catchable host errors" do
+    setup do
+      library =
+        Host.library(
+          values: [{"custom-error", Value.error_object(:user, Host.string("custom"), [7])}],
+          primitives: [
+            {"host-error", 0,
+             fn [] ->
+               Host.raise_error("db query failed", [Host.foreign(:timeout), 42])
+             end},
+            {"host-error-default", 0, fn [] -> Host.raise_error("failed") end},
+            {"host-raise", 1, fn [value] -> Host.raise_value(value) end}
+          ]
+        )
+
+      %{env: Environment.new(libraries: [library], pre_imports: [["scheme", "base"]])}
+    end
+
+    test "guard catches raise_error with its message and irritants", %{env: env} do
+      assert {:ok, ["db query failed", [{:foreign, :timeout}, 42]]} =
+               Schooner.eval(
+                 """
+                 (guard (e ((error-object? e)
+                            (list (error-object-message e)
+                                  (error-object-irritants e))))
+                   (host-error))
+                 """,
+                 env
+               )
+    end
+
+    test "with-exception-handler sees raise_error", %{env: env} do
+      assert {:ok, ["db query failed", [{:foreign, :timeout}, 42]]} =
+               Schooner.eval(
+                 """
+                 (guard (e (else e))
+                   (with-exception-handler
+                     (lambda (e)
+                       (raise (list (error-object-message e)
+                                    (error-object-irritants e))))
+                     (lambda () (host-error))))
+                 """,
+                 env
+               )
+    end
+
+    test "unhandled raise_error surfaces as Schooner.Error", %{env: env} do
+      assert {:error,
+              %Error{
+                value: {:error_obj, :user, "db query failed", [{:foreign, :timeout}, 42]}
+              }} = Schooner.eval("(host-error)", env)
+    end
+
+    test "raise_error defaults to no irritants", %{env: env} do
+      assert {:error, %Error{value: {:error_obj, :user, "failed", []}}} =
+               Schooner.eval("(host-error-default)", env)
+    end
+
+    test "guard catches the raw raise_value value", %{env: env} do
+      assert {:ok, {:sym, "host-failure"}} =
+               Schooner.eval("(guard (e (else e)) (host-raise 'host-failure))", env)
+    end
+
+    test "with-exception-handler sees the raw raise_value value", %{env: env} do
+      assert {:ok, [{:sym, "handled"}, {:sym, "host-failure"}]} =
+               Schooner.eval(
+                 """
+                 (guard (e (else e))
+                   (with-exception-handler
+                     (lambda (e) (raise (list 'handled e)))
+                     (lambda () (host-raise 'host-failure))))
+                 """,
+                 env
+               )
+    end
+
+    test "unhandled raise_value preserves the Scheme value", %{env: env} do
+      assert {:error, %Error{value: {:sym, "host-failure"}}} =
+               Schooner.eval("(host-raise 'host-failure)", env)
+
+      assert {:error, %Error{value: {:error_obj, :user, "custom", [7]}}} =
+               Schooner.eval("(host-raise custom-error)", env)
+    end
+
+    test "raise_error rejects bad host arguments with ArgumentError" do
+      assert_raise ArgumentError, fn -> Host.raise_error(:not_a_string) end
+      assert_raise ArgumentError, fn -> Host.raise_error("failed", :not_a_list) end
     end
   end
 

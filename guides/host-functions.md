@@ -254,11 +254,12 @@ on how it is raised.
 ### Host raises a Scheme-catchable error
 
 When you want the script's `with-exception-handler` / `guard` to
-see the error, pass the value to
-`Schooner.Eval.ExceptionState.raise_value/1`. That is the path
-Scheme's own `raise` takes: it calls the innermost handler, and
-with no handler installed it surfaces to the embedder as
-`Schooner.Error`. Raising `Schooner.Error` directly with
+see the error, use `Schooner.Host.raise_error/2` with a string
+message and a list of Scheme irritants. It builds a `:user` error
+object and follows the same path as Scheme's own `raise`: it calls
+the innermost handler. With no handler installed it surfaces to
+the embedder as `Schooner.Error`, and `Schooner.eval/2` returns
+`{:error, %Schooner.Error{}}`. Raising `Schooner.Error` directly with
 `Kernel.raise/2` does **not** reach Scheme handlers; it unwinds
 past them, and `Schooner.eval/2` returns it as `{:error, _}`.
 
@@ -272,16 +273,16 @@ defp query([conn, sql]) do
       Host.list(Enum.map(rows, &row_to_scheme/1))
 
     {:error, reason} ->
-      Schooner.Eval.ExceptionState.raise_value(
-        Schooner.Value.error_object(
-          :user,
-          Host.string("db query failed"),
-          [Host.foreign(reason)]
-        )
-      )
+      Host.raise_error("db query failed", [Host.foreign(reason)])
   end
 end
 ```
+
+To raise an arbitrary Scheme value, such as a symbol or an error
+object you built yourself, use `Host.raise_value/1`. Both helpers
+raise non-continuably, like Scheme's `raise`. Invalid argument
+types to `Host.raise_error/2` raise `ArgumentError` as a host
+programming error.
 
 The script catches it like any other:
 
@@ -300,8 +301,8 @@ exceptions, or land in the `{:error, _}` arm of `Schooner.eval/2`.
 
 This is deliberate: a sandboxed script must not be able to paper
 over its own type errors. If you want a host primitive to
-produce a *script-catchable* failure, use the `raise_value/1`
-pattern above; if you want it to be a host-side bug report,
+produce a *script-catchable* failure, use `Host.raise_error/2` or
+`Host.raise_value/1`; if you want it to be a host-side bug report,
 use `Schooner.Host.TypeError` (which is what the assertion
 helpers produce automatically).
 
