@@ -59,14 +59,13 @@ defmodule Schooner.Eval.ExceptionState do
     :ok
   end
 
-  @doc """
-  Raise `value`. Pops the topmost handler (so the handler runs in
-  the *parent* dynamic extent — its own raises walk further up) and
-  invokes it. If the handler returns normally the raise is
-  non-continuable, so we re-raise a secondary error in the parent
-  extent. With no handler installed, escapes to the host as
-  `Schooner.Error`.
-  """
+  # Raise `value`. Pops the topmost handler (so the handler runs in
+  # the parent dynamic extent — its own raises walk further up) and
+  # invokes it. If the handler returns normally the raise is
+  # non-continuable, so we re-raise a secondary error in the parent
+  # extent. With no handler installed, escapes to the host as
+  # `Schooner.Error`.
+  @doc false
   @spec raise_value(Value.t()) :: no_return()
   def raise_value(value) do
     case get_stack() do

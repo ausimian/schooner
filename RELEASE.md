@@ -25,6 +25,10 @@
 
 ### Added
 
+- `Schooner.Host.raise_error/2` and `Schooner.Host.raise_value/1` let host
+  functions raise errors that scripts can catch with `guard` or
+  `with-exception-handler`.
+
 - `bench/eval_bench.exs`, an evaluator throughput benchmark with no
   extra dependencies (`MIX_ENV=prod mix run bench/eval_bench.exs`).
 
@@ -87,7 +91,7 @@
 - The "Host Functions" guide told host code to raise `Schooner.Error`
   for errors a script can catch. That exception bypasses Scheme
   handlers. The guide now uses
-  `Schooner.Eval.ExceptionState.raise_value/1`, which reaches
+  `Schooner.Host.raise_error/2`, which reaches
   `guard` and `with-exception-handler`.
 - The "Special-form names" deviation now describes the actual
   behaviour: rebinding is accepted, but core special forms keep their

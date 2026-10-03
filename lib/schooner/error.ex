@@ -10,8 +10,11 @@ defmodule Schooner.Error do
   This is distinct from `Schooner.Eval.Error` and
   `Schooner.Primitive.Error`, which signal evaluator and primitive
   failures. Those reach the host directly without passing through
-  the Scheme exception handlers; only values raised from Scheme end
-  up here.
+  the Scheme exception handlers. Values raised from Scheme or through
+  `Schooner.Host.raise_error/2` and `Schooner.Host.raise_value/1` end up
+  here when unhandled. Host code should use those helpers for errors
+  scripts can catch; raising `Schooner.Error` directly bypasses Scheme
+  handlers.
   """
 
   alias Schooner.Value

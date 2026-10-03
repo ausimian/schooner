@@ -11,6 +11,9 @@ defmodule Schooner.Host do
   value representation, even where a helper is currently the
   identity (Schooner strings are bare Elixir binaries today).
 
+  Use `raise_error/2` or `raise_value/1` to raise failures that a
+  script can catch with `guard` or `with-exception-handler`.
+
   ## Naming convention
 
   Asserting accessors (`to_*!/2`) raise `Schooner.Host.TypeError` when
@@ -52,6 +55,7 @@ defmodule Schooner.Host do
       end
   """
 
+  alias Schooner.Eval.ExceptionState
   alias Schooner.Host.TypeError
   alias Schooner.Library
   alias Schooner.Value
@@ -91,6 +95,58 @@ defmodule Schooner.Host do
 
   @spec primitive(binary(), Value.arity_spec(), (list() -> Value.t())) :: Value.primitive_v()
   defdelegate primitive(name, arity, fun), to: Value
+
+  @doc """
+  Raise a Scheme error object of kind `:user` with `message` and `irritants`.
+
+  A script's `guard` or `with-exception-handler` catches the error.
+  With no handler, it surfaces to the embedder as `Schooner.Error`:
+  `Schooner.eval/2` returns `{:error, %Schooner.Error{}}`.
+  Raising `Schooner.Error` directly with `Kernel.raise/2` bypasses
+  Scheme handlers.
+
+  `message` must be an Elixir string and `irritants` a list of Scheme
+  values. A non-binary message or non-list irritants raises
+  `ArgumentError`, indicating a host programming error.
+
+  ```elixir
+  alias Schooner.Host
+
+  Host.raise_error("db query failed", [Host.foreign(:timeout)])
+  ```
+  """
+  @spec raise_error(binary(), [Value.t()]) :: no_return()
+  def raise_error(message, irritants \\ [])
+
+  def raise_error(message, irritants) when is_binary(message) and is_list(irritants) do
+    :user
+    |> Value.error_object(string(message), irritants)
+    |> ExceptionState.raise_value()
+  end
+
+  def raise_error(message, irritants) do
+    raise ArgumentError,
+          "raise_error expects a binary message and a list of irritants, " <>
+            "got #{inspect(message)} and #{inspect(irritants)}"
+  end
+
+  @doc """
+  Raise any Scheme `value`, including a symbol or a host-built error object.
+
+  A script's `guard` or `with-exception-handler` catches the value.
+  With no handler, it surfaces to the embedder as `Schooner.Error`:
+  `Schooner.eval/2` returns `{:error, %Schooner.Error{}}`.
+  Raising `Schooner.Error` directly with `Kernel.raise/2` bypasses
+  Scheme handlers.
+
+  ```elixir
+  alias Schooner.Host
+
+  Host.raise_value(Host.symbol("service-unavailable"))
+  ```
+  """
+  @spec raise_value(Value.t()) :: no_return()
+  defdelegate raise_value(value), to: ExceptionState
 
   # ---------------------------------------------------------------------------
   # Library builder
