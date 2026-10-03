@@ -116,6 +116,55 @@ defmodule Schooner.ImportOnlyPathTest do
     end
   end
 
+  describe "simultaneous import renames" do
+    test "the issue 123 swap repros return the original cdr and car values" do
+      import = "(import (rename (only (scheme base) car cdr) (car cdr) (cdr car)))"
+
+      for {expression, expected} <- [{"(car '(1 2))", [2]}, {"(cdr '(1 2))", 1}] do
+        source = import <> " " <> expression
+        assert Schooner.run(source) == {:ok, expected}
+        assert Schooner.eval(source, Env.new()) == {:ok, expected}
+      end
+    end
+
+    test "rotations, non-overlapping renames and composed modifiers preserve values" do
+      for {source, expected} <- [
+            {"(import (rename (only (scheme base) car cdr cons) " <>
+               "(car cdr) (cdr cons) (cons car))) (car (cdr '(1 2)) (cons '(1 2)))", [1, 2]},
+            {"(import (rename (only (scheme base) car cdr) (car head) (cdr tail))) " <>
+               "(tail '(1 2))", [2]},
+            {"(import (only (rename (prefix (only (scheme base) car cdr) b:) " <>
+               "(b:car b:cdr) (b:cdr b:car)) b:car)) (b:car '(1 2))", [2]},
+            {"(import (prefix (rename (only (scheme base) car cdr) " <>
+               "(car cdr) (cdr car)) b:)) (b:cdr '(1 2))", 1}
+          ] do
+        assert Schooner.run(source) == {:ok, expected}
+        assert Schooner.eval(source, Env.new()) == {:ok, expected}
+      end
+    end
+
+    for entry <- [:run, :eval],
+        {label, spec, reason} <- [
+          {"duplicate targets", "(rename (scheme base) (car x) (cdr x))",
+           {:duplicate_import_identifier, "rename", "x", ["scheme", "base"]}},
+          {"retained exports", "(rename (only (scheme base) car cdr) (car cdr))",
+           {:import_identifier_collision, "rename", "car", "cdr", ["scheme", "base"]}}
+        ] do
+      test "#{entry} returns an import error for #{label}" do
+        source = "(import #{unquote(spec)}) 42"
+
+        result =
+          case unquote(entry) do
+            :run -> Schooner.run(source)
+            :eval -> Schooner.eval(source, Env.new())
+          end
+
+        assert {:error, %EvalError{reason: reason}} = result
+        assert reason == unquote(Macro.escape(reason))
+      end
+    end
+  end
+
   describe "Schooner.eval/3 :implicit_imports option" do
     test ":implicit_imports defaults to :none" do
       assert_raise EvalError, fn ->

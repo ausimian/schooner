@@ -12,7 +12,7 @@ defmodule Schooner.Library.Import do
     * `(except spec n1 n2 ...)` — drop the named bindings.
     * `(prefix spec p)` — prepend `p` to every bound name.
     * `(rename spec (old1 new1) (old2 new2) ...)` — rename specific
-      bindings.
+      bindings simultaneously, so swaps and rotations preserve the original values.
 
   Modifiers compose: `(prefix (only (scheme base) car cdr) my-)`.
 
@@ -25,6 +25,12 @@ defmodule Schooner.Library.Import do
   with reason `{:unknown_import_identifier, modifier, identifier, library_name}`,
   where the modifier and identifier are strings and the library name
   is canonical.
+
+  Rename destinations must be unique and must not overwrite an export
+  that remains under its original name. A destination renamed away in
+  the same import set is allowed. Collisions raise `Schooner.Eval.Error`
+  with reason `{:duplicate_import_identifier, "rename", new, library_name}`
+  or `{:import_identifier_collision, "rename", old, new, library_name}`.
   """
 
   alias Schooner.Env
@@ -103,14 +109,13 @@ defmodule Schooner.Library.Import do
   defp resolve_one([{:sym, "rename"} | [inner | rename_list]], registry) do
     renames = parse_renames(rename_list)
     inner_exports = resolve_one(inner, registry)
-    validate_names!(inner_exports, Enum.map(renames, &elem(&1, 0)), "rename", inner)
+    old_names = Enum.map(renames, &elem(&1, 0))
+    validate_names!(inner_exports, old_names, "rename", inner)
 
-    Enum.reduce(renames, inner_exports, fn {old, new}, exports ->
-      case Map.fetch(exports, old) do
-        {:ok, v} -> exports |> Map.delete(old) |> Map.put(new, v)
-        :error -> exports
-      end
-    end)
+    retained_exports = Map.drop(inner_exports, old_names)
+    validate_rename_destinations!(renames, retained_exports, inner)
+    renamed_exports = Map.new(renames, fn {old, new} -> {new, Map.fetch!(inner_exports, old)} end)
+    Map.merge(retained_exports, renamed_exports)
   end
 
   # Bare library name like (scheme base) or (srfi 1).
@@ -128,6 +133,22 @@ defmodule Schooner.Library.Import do
         raise EvalError,
           reason: {:unknown_import_identifier, modifier, name, import_library_name(inner)}
       end
+    end)
+  end
+
+  defp validate_rename_destinations!(renames, retained_exports, inner) do
+    Enum.reduce(renames, MapSet.new(), fn {old, new}, destinations ->
+      if MapSet.member?(destinations, new) do
+        raise EvalError,
+          reason: {:duplicate_import_identifier, "rename", new, import_library_name(inner)}
+      end
+
+      if Map.has_key?(retained_exports, new) do
+        raise EvalError,
+          reason: {:import_identifier_collision, "rename", old, new, import_library_name(inner)}
+      end
+
+      MapSet.put(destinations, new)
     end)
   end
 

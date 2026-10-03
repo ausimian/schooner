@@ -34,6 +34,10 @@
   later forms even when the `begin` also contains ordinary forms,
   including nested `begin` forms and compiled programs.
 
+- Import `rename` clauses now apply simultaneously, preserving bindings
+  in swaps and rotations. Duplicate destinations and renames that would
+  overwrite an export retained under its original name now return script errors.
+
 - Import modifiers `only`, `except`, and `rename` now reject identifiers
   absent from the inner import set. Scripts that previously imported an
   unknown name silently now fail with a script error.
