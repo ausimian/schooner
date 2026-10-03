@@ -177,24 +177,22 @@ defmodule Schooner.Primitives.Char do
   # ---------------------------------------------------------------------------
 
   # Per r7rs §6.6: returns the numeric value (0..9) of a Unicode Nd
-  # character, or #f for any other character. Each Nd block spans exactly
-  # ten consecutive codepoints starting at a "digit zero", so the digit
-  # value of `cp` equals its offset from the start of its block — found
-  # by walking down until the codepoint stops being Nd.
+  # character, or #f for any other character. Unicode encodes Nd digits
+  # in consecutive sets of ten, ordered 0..9. Sets can be adjacent, so
+  # walk back to the start of the contiguous Nd run and take the offset
+  # modulo ten to recover the digit value.
   defp digit_value([{:char, cp}]) when cp in ?0..?9, do: cp - ?0
   defp digit_value([{:char, cp}]) when cp < 128, do: Value.bool(false)
 
   defp digit_value([{:char, cp}]) do
-    if nd?(cp), do: nd_block_offset(cp, 0), else: Value.bool(false)
+    if nd?(cp), do: rem(nd_run_offset(cp, 0), 10), else: Value.bool(false)
   end
 
   defp digit_value([other]), do: raise_char("digit-value", other)
 
-  defp nd_block_offset(_cp, 9), do: 9
-
-  defp nd_block_offset(cp, n) do
+  defp nd_run_offset(cp, n) do
     prev = cp - 1
-    if nd?(prev), do: nd_block_offset(prev, n + 1), else: n
+    if nd?(prev), do: nd_run_offset(prev, n + 1), else: n
   end
 
   defp nd?(cp), do: Regex.match?(@numeric_re, <<cp::utf8>>)

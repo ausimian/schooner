@@ -37,6 +37,9 @@
 - Loading a library with `base_dir: "/"` no longer rejects includes
   beneath the filesystem root.
 
+- `digit-value` now returns the correct decimal value for adjacent Unicode
+  digit sets, including mathematical styled digits.
+
 - Library sources loaded without a base directory now reject absolute
   include paths as well as relative ones. Load from a file or pass
   `:base_dir` to confine includes to the library root directory.
