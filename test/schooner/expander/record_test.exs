@@ -1,7 +1,7 @@
 defmodule Schooner.Expander.RecordTest do
   # Phase 10 — `define-record-type`. End-to-end tests through
   # `Schooner.run/1` covering the constructor / predicate / accessor
-  # surface, partial constructors (per r7rs §5.4 a constructor's
+  # surface, partial constructors (per r7rs §5.5 a constructor's
   # field list may be a subset of the record's fields), the per-form
   # type-identity rule (two definitions with the same record name
   # produce distinct types), nested records, and `write` rendering.

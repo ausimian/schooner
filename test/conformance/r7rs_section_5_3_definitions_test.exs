@@ -4,7 +4,7 @@ defmodule Schooner.Conformance.R7rsSection53DefinitionsTest do
   # property the spec calls out as required of `define-values`.
   #
   # `define` itself is exercised throughout the §4 conformance file;
-  # this file focuses on §5.3.2 `define-values`. Both top-level and
+  # this file focuses on §5.3.3 `define-values`. Both top-level and
   # internal-definition positions are covered, since Schooner
   # implements them via different mechanisms (top-level `Env.define`
   # vs. body desugarer fan-out into a `letrec*` multi-binding).
@@ -14,7 +14,7 @@ defmodule Schooner.Conformance.R7rsSection53DefinitionsTest do
 
   defp run(source), do: Schooner.run!(source)
 
-  describe "§5.3.2 define-values" do
+  describe "§5.3.3 define-values" do
     # Spec example:
     #   (define-values (x y) (values 1 2))
     #   (+ x y) ==> 3

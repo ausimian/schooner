@@ -652,7 +652,7 @@ defmodule Schooner.Eval.Analyze do
     e in Error -> [{:raise, e}]
   end
 
-  # r7rs §5.3.3 lets a body begin with a sequence of `define` forms
+  # r7rs §5.3.2 lets a body begin with a sequence of `define` forms
   # followed by a sequence of expressions; the defines splice into a
   # `letrec*` whose body is the rest of the forms. `desugar_body/1`
   # performs that rewrite. Forms with no leading defines are returned
@@ -680,7 +680,7 @@ defmodule Schooner.Eval.Analyze do
 
   defp scan_defines([], acc), do: {Enum.reverse(acc), []}
 
-  # r7rs §5.3.3: a `(begin <form> ...)` at the head of a body is
+  # r7rs §5.3.2: a `(begin <form> ...)` at the head of a body is
   # spliced into the body in place. This is what lets
   # `define-record-type` work in an internal-definition position —
   # the expander emits a `(begin (define ...) (define ...) ...)`
@@ -714,7 +714,7 @@ defmodule Schooner.Eval.Analyze do
     end
   end
 
-  # r7rs §5.3.2: `define-values` in internal-definition position fans
+  # r7rs §5.3.3: `define-values` in internal-definition position fans
   # out into a single multi-binding letrec* frame. The producer is
   # evaluated once, and its values are spread across the formals'
   # lexical slots in lock-step — no mutation, no auxiliary tmp visible to

@@ -14,10 +14,9 @@ defmodule Schooner.Eval.ContinuationState do
   This is what makes Schooner's continuations *escape-only* in a
   user-observable way — invoking a captured continuation after its
   dynamic extent has ended is a documented error rather than undefined
-  behaviour. See PLAN.md phase 12 and the v2.0 follow-up note: lifting
-  this restriction (multi-shot, full re-entry) is non-breaking for
-  scripts that respect the v1 contract because it removes an error case
-  rather than adding one.
+  behaviour. Lifting this restriction in v2.0 (multi-shot, full
+  re-entry) will not break scripts that respect the v1 contract,
+  because it removes an error case rather than adding one.
 
   The set is reset by `Schooner.eval/2` at the start of every top-level
   call, mirroring `Schooner.Eval.ExceptionState`.

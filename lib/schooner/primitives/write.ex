@@ -4,8 +4,9 @@ defmodule Schooner.Primitives.Write do
   `write-simple` — plus the `(scheme base)` output primitives
   `newline` and `write-string`.
 
-  Schooner has no port abstraction (see PLAN.md — I/O is delegated to
-  host functions), so these primitives deviate from r7rs in two ways:
+  Schooner has no port abstraction (I/O is delegated to host
+  functions; see the Deviations guide), so these primitives deviate
+  from r7rs in two ways:
 
     1. They take only the value, with no port argument. Hosts that
        need output inject their own functions.

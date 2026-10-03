@@ -22,8 +22,8 @@ defmodule Schooner.Primitives.Continuations do
   is gone and raises `Schooner.Eval.Error` with reason
   `:continuation_expired` rather than letting the throw propagate
   uncaught into Erlang. This is a documented deviation from r7rs,
-  which requires fully reusable continuations; PLAN.md defers
-  multi-shot first-class `call/cc` to v2.0.
+  which requires fully reusable continuations. Multi-shot first-class
+  `call/cc` is deferred to v2.0; see the Deviations guide.
 
   ## `dynamic-wind` without an explicit wind stack
 

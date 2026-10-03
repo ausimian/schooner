@@ -30,12 +30,13 @@ defmodule Schooner.Eval.Error do
   defp format(:empty_body), do: "body must contain at least one expression"
 
   defp format(:nested_define_syntax_unsupported) do
-    "nested `define-syntax` (a `define-syntax` introduced by macro expansion) is not supported"
+    "`define-syntax` is only supported at top level; " <>
+      "use `let-syntax` or `letrec-syntax` for local macros"
   end
 
   defp format(:continuation_expired) do
     "continuation invoked after its dynamic extent has ended " <>
-      "(Schooner continuations are escape-only — see PLAN.md phase 12)"
+      "(Schooner continuations are escape-only)"
   end
 
   defp format({:rec_uninitialised, name}) do

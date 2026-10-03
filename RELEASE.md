@@ -58,6 +58,12 @@
   range failures return script errors instead of leaking
   Elixir arithmetic exceptions.
 
+- The error for a `define-syntax` outside the top level now says that
+  only top-level definitions are supported and suggests `let-syntax`
+  or `letrec-syntax`; it previously described only macro-introduced
+  definitions. The expired-continuation error no longer refers to an
+  internal planning document.
+
 - Module documentation and guides no longer contradict the
   implementation in several places, including the representation of
   promises and the empty list, `equal?` on foreign values, how

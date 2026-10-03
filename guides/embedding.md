@@ -91,6 +91,8 @@ produced, in this representation:
 | `#u8(0 1 255)` (bytevector) | `{:bytevector, <<0, 1, 255>>}` |
 | Procedure / closure | `{:closure, ...}` or `{:primitive, name, arity, fun}` |
 | Record instance | `{:record, type_id, fields_tuple}` |
+| Promise | `{:promise, :lazy, thunk}` or `{:promise, :forced, value}` |
+| Parameter object | `{:parameter, id, init, converter}` |
 | Error object | `{:error_obj, kind, message, irritants}` |
 | EOF | `:eof` |
 | Unspecified | `:unspecified` |
