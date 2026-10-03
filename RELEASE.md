@@ -42,6 +42,11 @@
   limit applied. The examples now set the limit inside the task, give
   it in words rather than bytes, and set `include_shared_binaries:
   true` so that large strings and bytevectors count towards it.
+- The "Host Functions" guide told host code to raise `Schooner.Error`
+  for errors a script can catch. That exception bypasses Scheme
+  handlers. The guide now uses
+  `Schooner.Eval.ExceptionState.raise_value/1`, which reaches
+  `guard` and `with-exception-handler`.
 - The "Special-form names" deviation now describes the actual
   behaviour: rebinding is accepted, but core special forms keep their
   meaning at the head of a form.
