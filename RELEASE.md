@@ -30,6 +30,34 @@
 
 ### Fixed
 
+- Import modifiers `only`, `except`, and `rename` now reject identifiers
+  absent from the inner import set. Scripts that previously imported an
+  unknown name silently now fail with a script error.
+
+- Loading a library with `base_dir: "/"` no longer rejects includes
+  beneath the filesystem root.
+
+- `digit-value` now returns the correct decimal value for adjacent Unicode
+  digit sets, including mathematical styled digits.
+
+- Library sources loaded without a base directory now reject absolute
+  include paths as well as relative ones. Load from a file or pass
+  `:base_dir` to confine includes to the library root directory.
+
+- Tail loops with internal definitions, including bodies that create
+  callbacks, no longer grow the stack or allocate recursive
+  process-dictionary slots when binding targets are distinct and
+  initializer references only target earlier bindings. Closures in
+  these forms retain their captured lexical values, including when
+  saved by host primitives. Self and forward references retain
+  recursive binding behavior.
+
+- Rational `asin`/`acos` outside the real domain and negative bases
+  raised to fractional powers now return complex values. Inexact real
+  `expt` and `exp` handle overflow and underflow, and numeric domain or
+  range failures return script errors instead of leaking
+  Elixir arithmetic exceptions.
+
 - Module documentation and guides no longer contradict the
   implementation in several places, including the representation of
   promises and the empty list, `equal?` on foreign values, how

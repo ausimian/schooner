@@ -14,15 +14,33 @@ defmodule Schooner.Eval do
 
   ## Tail-call invariant
 
-  Every compiled closure and every `apply_proc/2` clause finishes with
-  a direct tail call: the closure for a node in tail position calls
-  the next closure (or `apply_proc/2`) last, and `apply_proc/2` calls
-  a closure's compiled body last. Nothing wraps these calls in a
-  `try`, a tuple constructor, a `with`, or any expression that would
-  knock them out of tail position. This is what makes Scheme's
-  proper-tail-call requirement fall out of BEAM's last-call
-  optimisation. **Adding a wrapper around any of these calls breaks
-  the invariant — see `eval_tco_test.exs`.**
+  A compiled node in ordinary tail position calls the next closure (or
+  `apply_proc/2`) last, and `apply_proc/2` calls a closure's compiled body
+  last. Keeping those calls outside `try` blocks, tuple constructors,
+  or other wrappers lets BEAM's last-call optimisation implement tail
+  recursion. **Adding a wrapper breaks this property — see
+  `eval_tco_test.exs`.**
+
+  A `letrec*` body is tail-called when analysis converts the form to
+  direct calls, or when it can use an immutable positional frame. The
+  positional path requires distinct binding targets and initializers
+  whose references to the same frame only target earlier bindings,
+  including references inside nested lambdas and direct-recursion
+  (`:fixrec`) bodies. Init closures capture an immutable frame containing
+  those earlier values; body closures capture the fully initialized
+  frame. Both remain valid as long as the closures are reachable.
+  Analysis tracks the lexical depth through each nested frame and
+  checks all branches; quoted data does not count as code.
+
+  The remaining `letrec*` forms use `eval_letrec_star/4` unless the
+  direct-call analysis eliminates their recursive frame: duplicate
+  targets, or any initializer reference to its own or a later binding,
+  including references inside nested procedure bodies. This includes
+  escaping self-recursive or mutually recursive procedures and mixtures
+  of procedures and data with those dependencies. Its body runs inside
+  `try` and is followed by slot cleanup or escape detection, so that
+  body is not in tail position. `guard` also retains its dynamic
+  exception-handler extent.
 
   The evaluator only consumes the core forms produced by
   `Schooner.Expander`: `quote`, `if`, `lambda`, top-level `define`,
@@ -198,6 +216,17 @@ defmodule Schooner.Eval do
   end
 
   def compile({:seq, body}, g), do: compile_body(body, g)
+
+  def compile({:letseq, names, bindings, body}, g) do
+    bindings = Enum.map(bindings, &compile_binding(&1, g))
+    frame = List.to_tuple([names | List.duplicate(@rec_uninitialised, tuple_size(names))])
+    body = compile_body(body, g)
+
+    fn env ->
+      env = Enum.reduce(bindings, Env.push_frame(env, frame), &init_pos_binding/2)
+      body.(env)
+    end
+  end
 
   def compile({:letrec, names, bindings, body}, g) do
     bindings = Enum.map(bindings, &compile_binding(&1, g))
@@ -575,6 +604,23 @@ defmodule Schooner.Eval do
       Env.release_rec(rec_env)
       result
     end
+  end
+
+  defp init_pos_binding({:single, slot, init}, %Env{lex: [frame | rest]} = env) do
+    value = single_value!(init.(env))
+    %{env | lex: [put_elem(frame, slot + 1, value) | rest]}
+  end
+
+  defp init_pos_binding({:multi, spec, init, slots}, %Env{lex: [frame | rest]} = env) do
+    values = values_to_list(init.(env))
+    bindings = spec |> bind_params(values, "define-values") |> Enum.zip(slots)
+
+    frame =
+      Enum.reduce(bindings, frame, fn {{_, value}, slot}, acc ->
+        put_elem(acc, slot + 1, value)
+      end)
+
+    %{env | lex: [frame | rest]}
   end
 
   defp init_binding({:single, slot, init}, rec_env) do

@@ -310,4 +310,61 @@ defmodule Schooner.Primitives.InexactTest do
       assert_in_delta i, ea * :math.sin(pi_), 1.0e-12
     end
   end
+
+  describe "numeric domain and range regressions" do
+    test "out-of-range rational inverse trig lifts to complex" do
+      for op <- ~w(asin acos), value <- ~w(3/2 -3/2) do
+        assert {:ok, {:complex, _, _} = result} = Schooner.run("(#{op} #{value})")
+        assert result == run("(#{op} (make-rectangular #{value} 0))")
+      end
+    end
+
+    test "real exp overflow and underflow return non-finite values and zero" do
+      for value <- ~w(1000 1000.0 2001/2) do
+        assert Schooner.run("(exp #{value})") == {:ok, {:float_special, :pos_inf}}
+      end
+
+      assert run("(exp -1000)") === 0.0
+      assert run("(log -1e300)") == {:complex, :math.log(1.0e300), :math.pi()}
+    end
+
+    test "intermediate numeric failures stay within the script error contract" do
+      for expression <- [
+            "(asin 1e300)",
+            "(acos 1e300)",
+            "(sqrt 1e300+1e300i)",
+            "(magnitude 1e300+1e300i)",
+            "(log 0.0+0.0i)",
+            "(tan 1+1000i)"
+          ] do
+        source = "(import (scheme base) (scheme inexact) (scheme complex)) #{expression}"
+
+        for result <- [Schooner.run(expression), Schooner.eval(source, Schooner.Env.new())] do
+          assert match?({:ok, _}, result) or match?({:error, %PError{}}, result)
+        end
+      end
+    end
+
+    test "unrepresentable numeric results are returned as script errors" do
+      huge = "(expt 10 400)"
+
+      for expression <- [
+            "(exp 1000+i)",
+            "(sin 1+1000i)",
+            "(cos 1+1000i)",
+            "(atan +i)",
+            "(log 2 1)",
+            "(expt 1+i 3000.0)",
+            "(make-polar #{huge} 1)",
+            "(angle (make-rectangular #{huge} 1))",
+            "(sin #{huge})",
+            "(atan #{huge} 1)",
+            "(sqrt (- #{huge} 1))"
+          ] do
+        assert {:error, %PError{reason: {:numeric_range, _, _}}} = Schooner.run(expression)
+        source = "(import (scheme base) (scheme inexact) (scheme complex)) #{expression}"
+        assert {:error, %PError{}} = Schooner.eval(source, Schooner.Env.new())
+      end
+    end
+  end
 end

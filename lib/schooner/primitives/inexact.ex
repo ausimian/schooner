@@ -12,13 +12,17 @@ defmodule Schooner.Primitives.Inexact do
     * `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, and `log`
       accept complex arguments and return complex.
 
-  For an integer or float `x` outside `[-1, 1]`, `(asin x)` and
-  `(acos x)` also lift: `(asin x)` returns the same result as
-  `(asin (make-rectangular x 0))`, and likewise for `acos`. An exact
-  rational outside that range currently raises (#118).
+  For a real `x` outside `[-1, 1]`, whether an integer, rational, or
+  float, `(asin x)` and `(acos x)` also lift: `(asin x)` returns the
+  same result as `(asin (make-rectangular x 0))`, and likewise for
+  `acos`.
 
   `(log 0)` returns `-inf.0`; zero is handled explicitly because
   `:math.log/1` raises on it. `(log -inf.0)` raises.
+  Real `exp` overflow returns `+inf.0`, and underflow returns `0.0`.
+  Other domain or range failures in float-based calculations raise
+  `Schooner.Primitive.Error`, which `Schooner.eval/2` and `Schooner.run/1`
+  return as `{:error, exception}`.
   """
 
   alias Schooner.Primitive.Error
@@ -37,18 +41,30 @@ defmodule Schooner.Primitives.Inexact do
   @spec specs() :: [{binary(), Value.arity_spec(), fun()}]
   def specs do
     [
-      {"exp", 1, &exp_/1},
-      {"log", {:between, 1, 2}, &log_/1},
-      {"sin", 1, &sin_/1},
-      {"cos", 1, &cos_/1},
-      {"tan", 1, &tan_/1},
-      {"asin", 1, &asin_/1},
-      {"acos", 1, &acos_/1},
-      {"atan", {:between, 1, 2}, &atan_/1},
+      {"exp", 1, checked("exp", &exp_/1)},
+      {"log", {:between, 1, 2}, checked("log", &log_/1)},
+      {"sin", 1, checked("sin", &sin_/1)},
+      {"cos", 1, checked("cos", &cos_/1)},
+      {"tan", 1, checked("tan", &tan_/1)},
+      {"asin", 1, checked("asin", &asin_/1)},
+      {"acos", 1, checked("acos", &acos_/1)},
+      {"atan", {:between, 1, 2}, checked("atan", &atan_/1)},
       {"finite?", 1, &finite_p/1},
       {"infinite?", 1, &infinite_p/1},
       {"nan?", 1, &nan_p/1}
     ]
+  end
+
+  # Keep float domain/range failures inside the numeric primitives. The
+  # evaluator must not wrap procedure calls in a non-tail rescue frame.
+  defp checked(op, fun) do
+    fn args ->
+      try do
+        fun.(args)
+      rescue
+        ArithmeticError -> reraise Error, [reason: {:numeric_range, op, args}], __STACKTRACE__
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -59,10 +75,16 @@ defmodule Schooner.Primitives.Inexact do
   defp exp_([{:float_special, :nan}]), do: {:float_special, :nan}
   defp exp_([{:float_special, :pos_inf}]), do: {:float_special, :pos_inf}
   defp exp_([{:float_special, :neg_inf}]), do: 0.0
-  defp exp_([n]) when is_integer(n), do: :math.exp(n * 1.0)
-  defp exp_([n]) when is_float(n), do: :math.exp(n)
-  defp exp_([n]) when is_rational(n), do: :math.exp(real_to_float(n))
+  defp exp_([n]) when is_integer(n), do: real_exp(n)
+  defp exp_([n]) when is_float(n), do: real_exp(n)
+  defp exp_([n]) when is_rational(n), do: real_exp(real_to_float(n))
   defp exp_([other]), do: raise_type("exp", other)
+
+  defp real_exp(n) do
+    :math.exp(real_to_float(n))
+  rescue
+    ArithmeticError -> if n > 0, do: {:float_special, :pos_inf}, else: 0.0
+  end
 
   defp log_([x]), do: log_one(x, "log")
   defp log_([x, b]), do: log_quotient(x, b)
@@ -112,7 +134,7 @@ defmodule Schooner.Primitives.Inexact do
   # Real negative inputs lift into the imaginary axis: log(-x) = log(x) + iπ.
   defp complex_log_negative(n, _name) do
     f = real_to_float(n)
-    Value.complex(:math.log(:math.sqrt(f * f)), :math.pi())
+    Value.complex(:math.log(abs(f)), :math.pi())
   end
 
   # ---------------------------------------------------------------------------
@@ -145,7 +167,13 @@ defmodule Schooner.Primitives.Inexact do
 
   defp bounded_inv(n, f, _fc, _name) when is_integer(n), do: f.(n * 1.0)
   defp bounded_inv(n, f, _fc, _name) when is_float(n), do: f.(n)
-  defp bounded_inv(n, f, _fc, _name) when is_rational(n), do: f.(real_to_float(n))
+
+  defp bounded_inv({:rational, num, den} = n, f, fc, _name) do
+    if num < -den or num > den,
+      do: fc.(Value.complex(n, 0)),
+      else: f.(real_to_float(n))
+  end
+
   defp bounded_inv(other, _f, _fc, name), do: raise_type(name, other)
 
   # ---------------------------------------------------------------------------
@@ -217,6 +245,9 @@ defmodule Schooner.Primitives.Inexact do
     {lr, li} = log_z
     product = {wr * lr - wi * li, wr * li + wi * lr}
     finish(exp_pair(product))
+  rescue
+    ArithmeticError ->
+      reraise Error, [reason: {:numeric_range, "expt", [base, exp]}], __STACKTRACE__
   end
 
   defp complex_exp(z), do: exp_pair(complex_floats(z)) |> finish()

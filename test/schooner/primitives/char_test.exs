@@ -2,6 +2,7 @@ defmodule Schooner.Primitives.CharTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Primitive.Error, as: PError
+  alias Schooner.Primitives.Char
   alias Schooner.Value
 
   defp run(source), do: Schooner.run!(source)
@@ -158,12 +159,50 @@ defmodule Schooner.Primitives.CharTest do
     end
 
     test "non-ASCII Nd characters return their digit value" do
+      assert run("(digit-value (integer->char #x0660))") == 0
       # Arabic-Indic digit five (U+0665).
       assert run("(digit-value (integer->char #x0665))") == 5
+      assert run("(digit-value (integer->char #x0669))") == 9
       # Devanagari digit zero (U+0966).
       assert run("(digit-value (integer->char #x0966))") == 0
       # Devanagari digit nine (U+096F).
       assert run("(digit-value (integer->char #x096F))") == 9
+    end
+
+    test "adjacent mathematical digit sets restart at zero" do
+      for {cp, expected} <- [
+            {0x1D7CE, 0},
+            {0x1D7D7, 9},
+            {0x1D7D8, 0},
+            {0x1D7E1, 9},
+            {0x1D7E2, 0},
+            {0x1D7EC, 0},
+            {0x1D7F6, 0},
+            {0x1D7FF, 9}
+          ] do
+        assert run("(digit-value (integer->char #{cp}))") === expected
+      end
+    end
+
+    test "every runtime Nd run consists of complete decimal digit sets" do
+      scalars =
+        for cp <- 0..0x10FFFF, cp not in 0xD800..0xDFFF, into: "", do: <<cp::utf8>>
+
+      runs = Regex.scan(~r/\p{Nd}+/u, scalars)
+
+      {"digit-value", 1, digit_value} =
+        Enum.find(Char.specs(), fn {name, _, _} -> name == "digit-value" end)
+
+      assert runs != []
+
+      for [digits] <- runs do
+        codepoints = String.to_charlist(digits)
+        assert rem(length(codepoints), 10) == 0
+
+        for {cp, offset} <- Enum.with_index(codepoints) do
+          assert digit_value.([Value.char(cp)]) === rem(offset, 10)
+        end
+      end
     end
 
     test "non-Nd unicode characters return #f" do
@@ -171,6 +210,9 @@ defmodule Schooner.Primitives.CharTest do
       assert run(~s|(digit-value #\\é)|) == false
       # Emoji.
       assert run("(digit-value (integer->char #x1F600))") == false
+      # Other_Number (fraction) and Letter_Number (Roman numeral).
+      assert run("(digit-value (integer->char #x2155))") == false
+      assert run("(digit-value (integer->char #x2160))") == false
     end
   end
 

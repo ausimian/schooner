@@ -25,6 +25,10 @@ defmodule Schooner.Primitive.Error do
     "division by zero in `#{op}`"
   end
 
+  defp format({:numeric_range, op, args}) do
+    "`#{op}`: numeric result outside the supported domain or range for #{inspect(args)}"
+  end
+
   defp format({:irrational, op, arg}) do
     "`#{op}`: unsupported argument #{inspect(arg)}"
   end

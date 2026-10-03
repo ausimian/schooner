@@ -2,6 +2,7 @@ defmodule Schooner.Library.ImportTest do
   use ExUnit.Case, async: true
 
   alias Schooner.Env
+  alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Expander.SyntaxEnv
   alias Schooner.Library.Import, as: LibImport
   alias Schooner.Library.NotFoundError
@@ -101,6 +102,72 @@ defmodule Schooner.Library.ImportTest do
       assert Map.keys(bindings) |> Enum.sort() == ["head", "tail"]
     end
 
+    for {modifier, spec, name, library} <- [
+          {"only", "(only (scheme base) car lenght)", "lenght", ["scheme", "base"]},
+          {"except", "(except (scheme char) char-upcse)", "char-upcse", ["scheme", "char"]},
+          {"rename", "(rename (scheme char) (char-upcse up))", "char-upcse", ["scheme", "char"]}
+        ] do
+      test "#{modifier} rejects an identifier absent from the inner exports" do
+        err =
+          assert_raise EvalError, fn ->
+            LibImport.resolve([datum(unquote(spec))], test_registry())
+          end
+
+        assert err.reason ==
+                 {:unknown_import_identifier, unquote(modifier), unquote(name), unquote(library)}
+
+        assert err.message =~ unquote(modifier)
+        assert err.message =~ unquote(name)
+        assert err.message =~ Schooner.Library.render_name(unquote(library))
+      end
+    end
+
+    test "only validates names after an inner prefix" do
+      bindings =
+        LibImport.resolve([datum("(only (prefix (scheme base) b:) b:car)")], test_registry())
+
+      assert Map.keys(bindings) == ["b:car"]
+
+      err =
+        assert_raise EvalError, fn ->
+          LibImport.resolve([datum("(only (prefix (scheme base) b:) car)")], test_registry())
+        end
+
+      assert err.reason == {:unknown_import_identifier, "only", "car", ["scheme", "base"]}
+    end
+
+    test "except validates names after an inner rename" do
+      bindings =
+        LibImport.resolve(
+          [datum("(except (rename (only (scheme base) car cdr) (car head)) head)")],
+          test_registry()
+        )
+
+      assert Map.keys(bindings) == ["cdr"]
+
+      err =
+        assert_raise EvalError, fn ->
+          LibImport.resolve(
+            [datum("(except (rename (scheme base) (car head)) car)")],
+            test_registry()
+          )
+        end
+
+      assert err.reason == {:unknown_import_identifier, "except", "car", ["scheme", "base"]}
+    end
+
+    test "rename validates all old names against the original inner set" do
+      err =
+        assert_raise EvalError, fn ->
+          LibImport.resolve(
+            [datum("(rename (only (scheme base) car) (car head) (head tail))")],
+            test_registry()
+          )
+        end
+
+      assert err.reason == {:unknown_import_identifier, "rename", "head", ["scheme", "base"]}
+    end
+
     test "modifiers compose left-to-right outermost-first" do
       bindings =
         LibImport.resolve(
@@ -180,16 +247,16 @@ defmodule Schooner.Library.ImportTest do
       assert err.message =~ "invalid import spec"
     end
 
-    test "rename modifier silently ignores names that aren't in the inner exports" do
-      bindings =
-        LibImport.resolve(
-          [datum("(rename (only (scheme base) car) (cadr nope))")],
-          test_registry()
-        )
+    test "rename rejects names removed by an inner only" do
+      err =
+        assert_raise EvalError, fn ->
+          LibImport.resolve(
+            [datum("(rename (only (scheme base) car) (cdr nope))")],
+            test_registry()
+          )
+        end
 
-      # `cadr` was never present (we only kept `car`), so the rename is
-      # ignored — `car` survives unchanged.
-      assert Map.keys(bindings) == ["car"]
+      assert err.reason == {:unknown_import_identifier, "rename", "cdr", ["scheme", "base"]}
     end
 
     test "rename clause that isn't (old new) is rejected" do

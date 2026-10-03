@@ -588,6 +588,172 @@ defmodule Schooner.Library.LoaderTest do
 
   describe "include path types" do
     @tag :tmp_dir
+    test "absolute include requires a base directory even when the file exists", %{tmp_dir: dir} do
+      body_path = Path.join(dir, "body.scm")
+      File.write!(body_path, "(define answer 42)")
+
+      source = """
+      (define-library (absolute-body)
+        (export answer)
+        (include "#{body_path}"))
+      """
+
+      err = assert_raise ArgumentError, fn -> Loader.load_string(source, standard()) end
+
+      assert err.message ==
+               "line 3, column 12: cannot resolve include path #{inspect(body_path)} " <>
+                 "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
+                 "to Loader.load_string/3"
+
+      reg = Loader.load_string(source, standard(), base_dir: dir)
+      lib = Library.fetch!(reg, ["absolute-body"])
+      assert {:var, 42} = Map.fetch!(lib.exports, "answer")
+    end
+
+    @tag :tmp_dir
+    test "a diagnostic path does not give load_string/3 an include root", %{tmp_dir: dir} do
+      body_path = Path.join(dir, "body.scm")
+      source_path = Path.join(dir, "lib.scm")
+      File.write!(body_path, "(define answer 42)")
+
+      source = """
+      (define-library (diagnostic-only)
+        (include "#{body_path}"))
+      """
+
+      err =
+        assert_raise ArgumentError, fn ->
+          Loader.load_string(source, standard(), path: source_path, base_dir: nil)
+        end
+
+      assert err.message ==
+               "#{source_path}:2:12: cannot resolve include path #{inspect(body_path)} " <>
+                 "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
+                 "to Loader.load_string/3"
+    end
+
+    test "both relative include forms keep the no-base-directory error and position style" do
+      for {form, prefix} <- [
+            {"include", "line 2, column 12: "},
+            {"include-library-declarations", ""}
+          ] do
+        source = """
+        (define-library (relative-no-base)
+          (#{form} "anything.scm"))
+        """
+
+        err = assert_raise ArgumentError, fn -> Loader.load_string(source, standard()) end
+
+        assert err.message ==
+                 "#{prefix}cannot resolve include path \"anything.scm\" " <>
+                   "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
+                   "to Loader.load_string/3"
+      end
+    end
+
+    @tag :tmp_dir
+    test "absolute declaration includes require a base directory too", %{tmp_dir: dir} do
+      decls_path = Path.join(dir, "decls.scm")
+      source_path = Path.join(dir, "lib.scm")
+
+      File.write!(decls_path, """
+      (export answer)
+      (begin (define answer 42))
+      """)
+
+      source = """
+      (define-library (absolute-decls)
+        (include-library-declarations "#{decls_path}"))
+      """
+
+      for {opts, prefix} <- [{[], ""}, {[path: source_path], "#{source_path}: "}] do
+        err =
+          assert_raise ArgumentError, fn ->
+            Loader.load_string(source, standard(), opts)
+          end
+
+        assert err.message ==
+                 "#{prefix}cannot resolve include path #{inspect(decls_path)} " <>
+                   "without a base directory; load via Loader.load_file/2 or pass `:base_dir` " <>
+                   "to Loader.load_string/3"
+      end
+
+      reg = Loader.load_string(source, standard(), base_dir: dir)
+      lib = Library.fetch!(reg, ["absolute-decls"])
+      assert {:var, 42} = Map.fetch!(lib.exports, "answer")
+    end
+
+    @tag :tmp_dir
+    test "nested includes may return to the original root through either entry point",
+         %{tmp_dir: dir} do
+      sub = Path.join(dir, "sub")
+      File.mkdir_p!(sub)
+      lib_path = Path.join(dir, "lib.scm")
+
+      source = """
+      (define-library (nested-root)
+        (export answer)
+        (include-library-declarations "sub/decls.scm"))
+      """
+
+      File.write!(lib_path, source)
+
+      for {form, contents} <- [
+            {"include", "(define answer 42)"},
+            {"include-library-declarations", "(begin (define answer 42))"}
+          ] do
+        File.write!(Path.join(dir, "body.scm"), contents)
+        File.write!(Path.join(sub, "decls.scm"), "(#{form} \"../body.scm\")")
+
+        for reg <- [
+              Loader.load_file(lib_path, standard()),
+              Loader.load_string(source, standard(), base_dir: dir)
+            ] do
+          lib = Library.fetch!(reg, ["nested-root"])
+          assert {:var, 42} = Map.fetch!(lib.exports, "answer")
+        end
+      end
+    end
+
+    @tag :tmp_dir
+    test "nested absolute and relative includes cannot escape the original root",
+         %{tmp_dir: dir} do
+      root = Path.join(dir, "root")
+      sub = Path.join(root, "sub")
+      File.mkdir_p!(sub)
+      outside = Path.join(dir, "outside.scm")
+      decls_path = Path.join(sub, "decls.scm")
+      lib_path = Path.join(root, "lib.scm")
+
+      source = """
+      (define-library (nested-escape)
+        (include-library-declarations "sub/decls.scm"))
+      """
+
+      File.write!(lib_path, source)
+
+      for {form, contents} <- [
+            {"include", "(define answer 42)"},
+            {"include-library-declarations", "(begin (define answer 42))"}
+          ],
+          include_path <- [outside, "../../outside.scm"],
+          load <- [
+            fn -> Loader.load_file(lib_path, standard()) end,
+            fn -> Loader.load_string(source, standard(), base_dir: root) end
+          ] do
+        File.write!(outside, contents)
+        File.write!(decls_path, "(#{form} #{inspect(include_path)})")
+
+        err = assert_raise ArgumentError, load
+
+        assert String.starts_with?(err.message, decls_path <> ":")
+
+        assert err.message =~
+                 "include path #{inspect(include_path)} resolves outside the library root directory"
+      end
+    end
+
+    @tag :tmp_dir
     test "absolute include path inside the entry-point directory is allowed", %{tmp_dir: dir} do
       body_path = Path.join(dir, "abs_body.scm")
       File.write!(body_path, "(define eight 8)")
@@ -604,6 +770,23 @@ defmodule Schooner.Library.LoaderTest do
       reg = Loader.load_file(lib_path, standard())
       lib = Library.fetch!(reg, ["abs-include"])
       assert {:var, 8} = Map.fetch!(lib.exports, "eight")
+    end
+
+    @tag :tmp_dir
+    test "a filesystem-root base directory allows includes beneath it", %{tmp_dir: dir} do
+      body_path = Path.join(dir, "root_body.scm")
+      File.write!(body_path, "(define nine 9)")
+
+      source = """
+      (define-library (root-include)
+        (import (scheme base))
+        (export nine)
+        (include "#{body_path}"))
+      """
+
+      reg = Loader.load_string(source, standard(), base_dir: "/")
+      lib = Library.fetch!(reg, ["root-include"])
+      assert {:var, 9} = Map.fetch!(lib.exports, "nine")
     end
 
     @tag :tmp_dir

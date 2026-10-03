@@ -34,12 +34,29 @@ defmodule Schooner.Eval.LexicalAddressingTest do
       assert {:app, {:lref, 1, 1}, [{:lref, 0, 1}, {:gref, "z", nil}]} = app
     end
 
-    test "letrec* names resolve to rec slots with a by-name fallback below the frame" do
+    test "non-recursive letrec* names resolve to positional slots" do
       # (lambda (f) (letrec* ((f 1) (g f)) g))
       form = [
         sym("lambda"),
         [sym("f")],
         [sym("letrec*"), [[sym("f"), 1], [sym("g"), sym("f")]], sym("g")]
+      ]
+
+      assert {:lambda, _, {_, [letseq]}, nil} = Analyze.analyze(form)
+      assert {:letseq, {"f", "g"}, [{:single, 0, _}, {:single, 1, f_ref}], [g_ref]} = letseq
+      assert f_ref == {:lref, 0, 1}
+      assert g_ref == {:lref, 0, 2}
+    end
+
+    test "recursive letrec* names retain a by-name fallback below the frame" do
+      form = [
+        sym("lambda"),
+        [sym("f")],
+        [
+          sym("letrec*"),
+          [[sym("f"), [sym("lambda"), [], sym("f")]], [sym("g"), sym("f")]],
+          sym("g")
+        ]
       ]
 
       assert {:lambda, _, {_, [letrec]}, nil} = Analyze.analyze(form)
@@ -109,14 +126,14 @@ defmodule Schooner.Eval.LexicalAddressingTest do
     test "falls through to a global of the same name" do
       assert run_and_call_stashed("""
              (define f 'global-f)
-             (letrec ((f (lambda () 'inner)) (h (lambda () f))) (stash h) 1)
+             (letrec ((f (lambda () f)) (h (lambda () f))) (stash h) 1)
              """) == {:ok, Value.symbol("global-f")}
     end
 
     test "falls through to an enclosing parameter of the same name" do
       assert run_and_call_stashed("""
              ((lambda (f)
-                (letrec ((f (lambda () 'inner)) (h (lambda () f))) (stash h) 1))
+                (letrec ((f (lambda () f)) (h (lambda () f))) (stash h) 1))
               'outer-param)
              """) == {:ok, Value.symbol("outer-param")}
     end
@@ -124,7 +141,7 @@ defmodule Schooner.Eval.LexicalAddressingTest do
     test "is unbound when nothing else binds the name" do
       assert {:error, %Error{reason: {:unbound, "only-here"}}} =
                run_and_call_stashed("""
-               (letrec ((only-here (lambda () 'inner)) (h (lambda () only-here)))
+               (letrec ((only-here (lambda () only-here)) (h (lambda () only-here)))
                  (stash h)
                  1)
                """)

@@ -6,7 +6,7 @@ defmodule Schooner.Library.Import do
 
   An `import` declaration sits at the top of a program (or library
   body) and brings names from one or more libraries into the current
-  scope. r7rs §5.6.1 defines four wrapping modifiers:
+  scope. r7rs §5.2 defines four wrapping modifiers:
 
     * `(only spec n1 n2 ...)` — keep only the named bindings.
     * `(except spec n1 n2 ...)` — drop the named bindings.
@@ -20,10 +20,15 @@ defmodule Schooner.Library.Import do
   caller passes in (typically `Schooner.Library.standard/0`).
   Missing libraries raise `Schooner.Library.NotFoundError` with the
   canonical name of the offender. Names inside `only`, `except`, or
-  `rename` that the inner spec does not export are ignored.
+  `rename` (the old name) must be exported by the inner spec after
+  its modifiers are applied. Unknown names raise `Schooner.Eval.Error`
+  with reason `{:unknown_import_identifier, modifier, identifier, library_name}`,
+  where the modifier and identifier are strings and the library name
+  is canonical.
   """
 
   alias Schooner.Env
+  alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Expander.SyntaxEnv
   alias Schooner.Library
   alias Schooner.Value
@@ -72,13 +77,17 @@ defmodule Schooner.Library.Import do
   # (only spec n1 n2 ...)
   defp resolve_one([{:sym, "only"} | [inner | name_list]], registry) do
     names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
-    Map.take(resolve_one(inner, registry), names)
+    inner_exports = resolve_one(inner, registry)
+    validate_names!(inner_exports, names, "only", inner)
+    Map.take(inner_exports, names)
   end
 
   # (except spec n1 n2 ...)
   defp resolve_one([{:sym, "except"} | [inner | name_list]], registry) do
     names = name_list |> Value.to_list() |> Enum.map(&sym_name!/1)
-    Map.drop(resolve_one(inner, registry), names)
+    inner_exports = resolve_one(inner, registry)
+    validate_names!(inner_exports, names, "except", inner)
+    Map.drop(inner_exports, names)
   end
 
   # (prefix spec p)
@@ -94,6 +103,7 @@ defmodule Schooner.Library.Import do
   defp resolve_one([{:sym, "rename"} | [inner | rename_list]], registry) do
     renames = parse_renames(rename_list)
     inner_exports = resolve_one(inner, registry)
+    validate_names!(inner_exports, Enum.map(renames, &elem(&1, 0)), "rename", inner)
 
     Enum.reduce(renames, inner_exports, fn {old, new}, exports ->
       case Map.fetch(exports, old) do
@@ -111,6 +121,22 @@ defmodule Schooner.Library.Import do
   defp resolve_one(other, _registry) do
     raise ArgumentError, "invalid import spec: #{inspect(other)}"
   end
+
+  defp validate_names!(exports, names, modifier, inner) do
+    Enum.each(names, fn name ->
+      unless Map.has_key?(exports, name) do
+        raise EvalError,
+          reason: {:unknown_import_identifier, modifier, name, import_library_name(inner)}
+      end
+    end)
+  end
+
+  defp import_library_name([{:sym, modifier}, inner | _])
+       when modifier in ["only", "except", "prefix", "rename"] do
+    import_library_name(inner)
+  end
+
+  defp import_library_name(name_datum), do: Library.canonicalise_name(name_datum)
 
   defp parse_renames([]), do: []
 

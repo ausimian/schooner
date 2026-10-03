@@ -737,6 +737,38 @@ defmodule Schooner.Primitives.BaseTest do
     @neg_inf {:float_special, :neg_inf}
     @nan {:float_special, :nan}
 
+    test "negative real bases with fractional exponents use the principal branch" do
+      for base <- ~w(-8 -8.0 -8/1), exponent <- ~w(0.5 1/3) do
+        assert {:ok, {:complex, re, im}} = Schooner.run("(expt #{base} #{exponent})")
+        e = if exponent == "0.5", do: 0.5, else: 1.0 / 3.0
+        magnitude = :math.pow(8.0, e)
+        assert_in_delta re, magnitude * :math.cos(:math.pi() * e), 1.0e-12
+        assert_in_delta im, magnitude * :math.sin(:math.pi() * e), 1.0e-12
+      end
+    end
+
+    test "real inexact powers preserve signs on overflow and underflow" do
+      for expression <- [
+            "(expt 10.0 400)",
+            "(expt 10 400.0)",
+            "(expt -10.0 400)",
+            "(expt 0.1 -400.0)"
+          ] do
+        assert Schooner.run(expression) == {:ok, @pos_inf}
+      end
+
+      assert run("(expt -10.0 401)") == @neg_inf
+      assert run("(expt -0.1 -401.0)") == @neg_inf
+      assert run("(expt 10.0 -400)") === 0.0
+      assert run("(expt 0.1 400.0)") === 0.0
+      assert <<run("(expt -10.0 -401)")::float>> == <<-0.0::float>>
+      assert <<run("(expt -0.1 401.0)")::float>> == <<-0.0::float>>
+      assert run("(expt -8.0 3.0)") === -512.0
+
+      assert {:error, %PError{reason: {:division_by_zero, "expt"}}} =
+               Schooner.run("(expt 0.0 -0.5)")
+    end
+
     test "anything to +0.0 / -0.0 is 1.0 (matches both signed-zero clauses)" do
       assert run("(expt +inf.0 0.0)") === 1.0
       assert run("(expt +nan.0 (- 0.0))") === 1.0

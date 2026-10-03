@@ -16,7 +16,8 @@ defmodule Schooner.Eval.Analyze do
   #     handler's variable. The run-time frame is the tuple
   #     `{names_tuple, v1, v2, ...}`.
   #   * `{:rec, names}` for a `letrec*` frame. The run-time frame is a
-  #     process-dictionary slot holding a values tuple.
+  #     process-dictionary slot holding a values tuple. Initializers that
+  #     only reference earlier bindings can instead use a positional frame.
   #
   # Each variable reference is resolved against that scope to
   #
@@ -98,6 +99,7 @@ defmodule Schooner.Eval.Analyze do
           | {:define_values, params(), ir()}
           | {:seq, [ir()]}
           | {:letrec, [binary()], [binding()], [ir()]}
+          | {:letseq, tuple(), [binding()], [ir()]}
           | {:fixrec, [{tuple(), [ir()]}], [ir()]}
           | {:known_call, non_neg_integer(), non_neg_integer(), tuple(), [ir()]}
           | {:quasi, template()}
@@ -300,7 +302,7 @@ defmodule Schooner.Eval.Analyze do
           {:multi, spec, analyze(init, rec_scope), targets}
       end)
 
-    known_calls({:letrec, names, bindings, analyze_deferred_body(body, rec_scope)})
+    sequential_values({:letrec, names, bindings, analyze_deferred_body(body, rec_scope)})
   end
 
   defp analyze_letrec_star(_, _scope), do: raise(Error, reason: {:bad_special_form, "letrec*"})
@@ -326,6 +328,66 @@ defmodule Schooner.Eval.Analyze do
 
   defp binding_names({:single, name, _}), do: [name]
   defp binding_names({:multi, spec, _}), do: spec_names(spec)
+
+  # Rewrite the candidate frame's references to positional slots when
+  # every init, including its nested procedure bodies, only references
+  # earlier bindings. Init closures capture that partially filled
+  # immutable frame; body closures capture the fully initialized one.
+  # Duplicate targets keep their existing recursive-frame semantics.
+  defp sequential_values({:letrec, names, bindings, body} = node) do
+    {bindings, ready} = Enum.map_reduce(bindings, MapSet.new(), &sequential_binding/2)
+    body = sequential_refs(body, 0, ready)
+    {:letseq, List.to_tuple(names), bindings, body}
+  catch
+    :needs_recursive_frame -> known_calls(node)
+  end
+
+  defp sequential_binding({:single, slot, init}, ready) do
+    init = sequential_refs(init, 0, ready)
+    {{:single, slot, init}, ready_slot(slot, ready)}
+  end
+
+  defp sequential_binding({:multi, spec, init, slots}, ready) do
+    init = sequential_refs(init, 0, ready)
+    {{:multi, spec, init, slots}, Enum.reduce(slots, ready, &ready_slot/2)}
+  end
+
+  defp ready_slot(slot, ready) do
+    if MapSet.member?(ready, slot), do: throw(:needs_recursive_frame)
+    MapSet.put(ready, slot)
+  end
+
+  # Track the candidate frame through nested scopes. A reference's
+  # fallback is resolved against that same scope, so it keeps `d`.
+  defp sequential_refs({:rref, d, slot, _, _}, d, ready) do
+    if not MapSet.member?(ready, slot), do: throw(:needs_recursive_frame)
+    {:lref, d, slot + 1}
+  end
+
+  defp sequential_refs({tag, _} = leaf, _d, _ready) when tag in [:const, :raise, :qc],
+    do: leaf
+
+  defp sequential_refs({:lambda, params, {names, body}, name}, d, ready),
+    do: {:lambda, params, {names, sequential_refs(body, d + 1, ready)}, name}
+
+  defp sequential_refs({:fixrec, lambdas, body}, d, ready) do
+    lambdas = for {names, fbody} <- lambdas, do: {names, sequential_refs(fbody, d + 2, ready)}
+    {:fixrec, lambdas, sequential_refs(body, d + 1, ready)}
+  end
+
+  defp sequential_refs({tag, names, bindings, body}, d, ready) when tag in [:letrec, :letseq],
+    do: {tag, names, sequential_refs(bindings, d + 1, ready), sequential_refs(body, d + 1, ready)}
+
+  defp sequential_refs({:guard, names, clauses, body}, d, ready),
+    do: {:guard, names, sequential_refs(clauses, d + 1, ready), sequential_refs(body, d, ready)}
+
+  defp sequential_refs(tuple, d, ready) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> sequential_refs(d, ready) |> List.to_tuple()
+
+  defp sequential_refs(list, d, ready) when is_list(list),
+    do: Enum.map(list, &sequential_refs(&1, d, ready))
+
+  defp sequential_refs(other, _d, _ready), do: other
 
   # ---------------------------------------------------------------------------
   # Known calls
@@ -436,14 +498,14 @@ defmodule Schooner.Eval.Analyze do
 
   defp known({:seq, body}, d, lam?, info), do: {:seq, known_all(body, d, lam?, info)}
 
-  defp known({:letrec, names, bindings, body}, d, lam?, info) do
+  defp known({tag, names, bindings, body}, d, lam?, info) when tag in [:letrec, :letseq] do
     bindings =
       Enum.map(bindings, fn
         {:single, slot, init} -> {:single, slot, known(init, d + 1, lam?, info)}
         {:multi, spec, init, slots} -> {:multi, spec, known(init, d + 1, lam?, info), slots}
       end)
 
-    {:letrec, names, bindings, known_all(body, d + 1, lam?, info)}
+    {tag, names, bindings, known_all(body, d + 1, lam?, info)}
   end
 
   defp known({:fixrec, lambdas, body}, d, lam?, info) do
@@ -653,9 +715,9 @@ defmodule Schooner.Eval.Analyze do
   end
 
   # r7rs §5.3.2: `define-values` in internal-definition position fans
-  # out into a single multi-binding letrec* slot. The producer is
+  # out into a single multi-binding letrec* frame. The producer is
   # evaluated once, and its values are spread across the formals'
-  # rec slots in lock-step — no mutation, no auxiliary tmp visible to
+  # lexical slots in lock-step — no mutation, no auxiliary tmp visible to
   # the user.
   defp parse_internal_define([{:sym, "define-values"} | body]) do
     case body do

@@ -48,10 +48,19 @@ defmodule Schooner.Env do
 
   `letrec`, `letrec*`, named `let`, and the `letrec*` produced by
   internal-define splicing each push a *recursive* frame, unless the
-  evaluator has compiled the form to direct calls. A recursive
-  frame is a process-dictionary slot keyed by `make_ref/0`, holding the
-  frame's names and a tuple of values, so closures captured during
-  init evaluation see later bindings via frame identity.
+  evaluator has compiled the form to direct calls or proved that its
+  targets are distinct and every initializer reference to the same
+  frame targets an earlier binding, including references inside nested
+  procedures. Those forms use immutable positional frames: init
+  closures capture the earlier values, and body closures capture the
+  fully initialized frame. These snapshots live as long as the closures
+  that reference them and need no process-dictionary slot or cleanup.
+
+  Duplicate targets and initializer references to their own or later
+  bindings still need recursive frames unless compiled to direct calls.
+  A recursive frame is a process-dictionary slot keyed by `make_ref/0`,
+  holding the frame's names and a tuple of values, so closures captured
+  during init evaluation see later bindings via frame identity.
 
   Each such frame is released by `release_rec/1` when the body
   finishes — *unless* the body's return value carries a closure whose

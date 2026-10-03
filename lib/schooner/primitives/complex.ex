@@ -16,7 +16,8 @@ defmodule Schooner.Primitives.Complex do
   Polar form `(make-polar magnitude angle)` is converted to
   rectangular on construction; Schooner does not retain the polar
   parametrisation. `magnitude` and `angle` reconstruct polar
-  coordinates from the rectangular components on demand.
+  coordinates from the rectangular components on demand. Float
+  domain or range failures raise `Schooner.Primitive.Error`.
   """
 
   alias Schooner.Primitive.Error
@@ -39,12 +40,22 @@ defmodule Schooner.Primitives.Complex do
   def specs do
     [
       {"make-rectangular", 2, &make_rectangular/1},
-      {"make-polar", 2, &make_polar/1},
+      {"make-polar", 2, checked("make-polar", &make_polar/1)},
       {"real-part", 1, &real_part/1},
       {"imag-part", 1, &imag_part/1},
-      {"magnitude", 1, &magnitude/1},
-      {"angle", 1, &angle/1}
+      {"magnitude", 1, checked("magnitude", &magnitude/1)},
+      {"angle", 1, checked("angle", &angle/1)}
     ]
+  end
+
+  defp checked(op, fun) do
+    fn args ->
+      try do
+        fun.(args)
+      rescue
+        ArithmeticError -> reraise Error, [reason: {:numeric_range, op, args}], __STACKTRACE__
+      end
+    end
   end
 
   defp make_rectangular([r, i]) do
