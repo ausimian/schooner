@@ -100,7 +100,7 @@ defmodule Mix.Tasks.Schooner.ReplTest do
       [_, pricing] =
         Regex.run(~r/and one script, `scripts\/pricing.scm`:\n\n```scheme\n(.*?)```/s, @guide)
 
-      [section] = Regex.run(~r/## The REPL\n.*?(?=\n## )/s, @guide)
+      [section] = Regex.run(~r/## The REPL\n.*?(?=\n## |\z)/s, @guide)
 
       [_, argv, transcript] =
         Regex.run(~r/```console\n\$ mix schooner.repl (.*?)\n(.*?)```/s, section)
@@ -128,11 +128,6 @@ defmodule Mix.Tasks.Schooner.ReplTest do
       output = File.cd!(dir, fn -> run_task(argv, IO.iodata_to_binary(input)) end)
 
       assert normalise(output, env) == normalise(IO.iodata_to_binary(expected), env)
-    end
-
-    test "marks the section available" do
-      assert @guide =~ "**Status: Available** ([#139]"
-      assert @guide =~ "| 5 | [The REPL](#the-repl) | Available |"
     end
   end
 

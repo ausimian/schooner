@@ -100,9 +100,6 @@ runnable example and a workaround.
 
 ## Tooling
 
-The [Tooling](guides/tooling.md) guide covers writing, checking,
-testing and debugging scripts: error locations, a static checker,
-tracing, backtraces, a REPL, a macro expander, a test library and
-editor integration. Most of it is planned work, tracked in
-[#134](https://github.com/ausimian/schooner/issues/134); each
-section of the guide shows its status.
+The [Tooling](guides/tooling.md) guide covers writing, checking and
+debugging scripts: error locations, a static checker, tracing,
+backtraces, a REPL and a macro expander.

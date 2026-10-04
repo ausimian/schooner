@@ -129,7 +129,7 @@ defmodule Mix.Tasks.Schooner.ExpandTest do
 
   describe "guides/tooling.md" do
     test "the mix schooner.expand example" do
-      [section] = Regex.run(~r/## Inspecting macro expansion.*?(?=\n## )/s, @guide)
+      [section] = Regex.run(~r/## Inspecting macro expansion.*?(?=\n## |\z)/s, @guide)
 
       [_, argv, expected] =
         Regex.run(~r/```console\n\$ mix schooner.expand (.*?)\n(.*?)```/s, section)

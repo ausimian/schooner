@@ -6,8 +6,8 @@ defmodule Schooner.Library.Loader do
   ## Supported declaration heads
 
     * `(import spec ...)` — pull bindings from already-registered
-      libraries. Composes with all of the modifiers handled by
-      `Schooner.Library.Import`.
+      libraries, with any of the r7rs import modifiers: `only`,
+      `except`, `prefix` and `rename`.
     * `(begin form ...)` — body forms evaluated in the library's
       private env.
     * `(export name ...)` — names visible to importers. Each entry is

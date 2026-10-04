@@ -1,39 +1,20 @@
 # Tooling for Script Authors
 
-This guide covers the tools for writing, checking, testing and
-debugging Schooner scripts: error locations, a static checker,
-tracing, backtraces, a REPL, a macro expander, a test library,
-surface documentation and editor integration.
+This guide covers the tools for writing, checking and debugging
+Schooner scripts:
 
-> #### Roadmap {: .warning}
->
-> Most of this guide describes **planned** tooling, tracked in
-> [#134](https://github.com/ausimian/schooner/issues/134) and
-> developed on the `feature/tooling` branch. Each section names its
-> issue and status. Sections marked **Planned** show the intended
-> API; it may change before it ships. When a feature lands on
-> `feature/tooling`, its section is marked **Available** and its
-> examples are verified. The branch merges into `main` once the
-> roadmap, or a releasable part of it, is complete.
-
-| # | Feature | Status | Issue |
-| --- | --- | --- | --- |
-| 1 | [Source locations in errors](#source-locations-in-errors) | Available | [#135](https://github.com/ausimian/schooner/issues/135) |
-| 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available | [#136](https://github.com/ausimian/schooner/issues/136) |
-| 3 | [Tracing and assertions](#tracing-and-assertions) | Available | [#137](https://github.com/ausimian/schooner/issues/137) |
-| 4 | [Backtraces](#backtraces) | Available | [#138](https://github.com/ausimian/schooner/issues/138) |
-| 5 | [The REPL](#the-repl) | Available | [#139](https://github.com/ausimian/schooner/issues/139) |
-| 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Available | [#140](https://github.com/ausimian/schooner/issues/140) |
-| 7 | [Testing scripts](#testing-scripts) | Planned | [#141](https://github.com/ausimian/schooner/issues/141) |
-| 8 | [Documenting your scripting surface](#documenting-your-scripting-surface) | Planned | [#142](https://github.com/ausimian/schooner/issues/142) |
-| 9 | [Editor integration](#editor-integration) | Planned | [#143](https://github.com/ausimian/schooner/issues/143) |
+- [Source locations in errors](#source-locations-in-errors)
+- [Checking scripts before they run](#checking-scripts-before-they-run)
+- [Tracing and assertions](#tracing-and-assertions)
+- [Backtraces](#backtraces)
+- [The REPL](#the-repl)
+- [Inspecting macro expansion](#inspecting-macro-expansion)
 
 ## The running example
 
 The examples below share one embedder-defined environment. Keeping
-it in a named, zero-arity function lets the mix tasks, the REPL,
-the test helpers and the language server all use **the same
-sandbox your application uses**:
+it in a named, zero-arity function lets the mix tasks and the REPL
+use **the same sandbox your application uses**:
 
 ```elixir
 defmodule MyApp.Scripts do
@@ -93,8 +74,6 @@ way, first match wins:
    sandbox, so prefer 1 or 2.
 
 ## Source locations in errors
-
-**Status: Available** ([#135](https://github.com/ausimian/schooner/issues/135))
 
 Every script-level exception carries a `:location` (a
 `%Schooner.Location{file, line, column}`, or `nil`), and when the
@@ -161,8 +140,6 @@ their locations; pass `file:` and `debug:` to `compile`, or
 
 ## Checking scripts before they run
 
-**Status: Available** ([#136](https://github.com/ausimian/schooner/issues/136))
-
 `Schooner.check/3` reads a script, resolves its imports and expands
 its macros against an environment **without evaluating it**, and
 returns a list of `Schooner.Diagnostic`s. An empty list means
@@ -225,8 +202,6 @@ too, although every diagnostic the checker reports today is an
 error. `--format json` prints machine-readable output.
 
 ## Tracing and assertions
-
-**Status: Available** ([#137](https://github.com/ausimian/schooner/issues/137))
 
 In Schooner, `display` and `write` *return* their rendered text
 rather than writing it anywhere (see
@@ -327,8 +302,6 @@ error.message
 ```
 
 ## Backtraces
-
-**Status: Available** ([#138](https://github.com/ausimian/schooner/issues/138))
 
 Schooner implements proper tail calls on top of the BEAM's
 last-call optimisation, so there is no Scheme call stack to look
@@ -435,8 +408,6 @@ must run at full speed.
 
 ## The REPL
 
-**Status: Available** ([#139](https://github.com/ausimian/schooner/issues/139))
-
 `mix schooner.repl` starts an interactive session against your
 real environment. Something that works in the REPL works in
 production, and something that's unbound in production is
@@ -511,8 +482,6 @@ macros to `Schooner.expand/3`.
 
 ## Inspecting macro expansion
 
-**Status: Available** ([#140](https://github.com/ausimian/schooner/issues/140))
-
 Many of Schooner's standard forms (`cond`, `case`, the `let`
 family, `do`, `and`, `or`, `when`, `unless`) are `syntax-rules`
 macros. When they, or your own macros, surprise you, look at the
@@ -554,122 +523,3 @@ yours, and are printed with a number (`letrec*·1` above), so you
 can tell a macro's own `tmp` from yours. Pass `names: :plain` to
 `Schooner.Pretty.format/2`, or `--plain` to the task, to print plain
 names. Like `check/3`, `expand/3` never evaluates the program.
-
-## Testing scripts
-
-**Status: Planned** ([#141](https://github.com/ausimian/schooner/issues/141))
-
-The opt-in `(schooner test)` library provides an SRFI-64-style
-API: `test-equal`, `test-eqv`, `test-assert`, `test-not`,
-`test-error` and `test-group`. A failing assertion is recorded
-and the file keeps running, so one run reports every failure.
-
-`test/scripts/pricing_test.scm`:
-
-```scheme
-(import (scheme base) (schooner test))
-
-(test-group "line-total"
-  (test-equal "single widget" 10 (line-total "widget" 1))
-  (test-equal "bulk widgets" 90 (line-total "widget" 10))
-  (test-error "unknown sku" (line-total "nope" 1)))
-```
-
-Run it from ExUnit with `Schooner.Case`:
-
-```elixir
-defmodule MyApp.PricingScriptTest do
-  use Schooner.Case, environment: &MyApp.Scripts.environment/0
-
-  # Loaded before each test file, e.g. the code under test.
-  @scheme_preload ["scripts/pricing.scm"]
-
-  scheme_test "test/scripts/pricing_test.scm"
-end
-```
-
-Each top-level `test-group` becomes one ExUnit test. A failing
-test lists every failing assertion with its location:
-
-```text
-  1) test line-total (MyApp.PricingScriptTest)
-     test/scripts/pricing_test.scm:5:3: bulk widgets
-       expected: 90
-       got:      100
-       expr:     (line-total "widget" 10)
-```
-
-`mix test` recompiles the test module when its `.scm` file
-changes.
-
-## Documenting your scripting surface
-
-**Status: Planned** ([#142](https://github.com/ausimian/schooner/issues/142))
-
-Script authors can only use what your environment exposes, so
-they need a reference for it. Add docs to your host primitives
-with an optional fourth element:
-
-```elixir
-Host.library(
-  name: ["myapp", "catalog"],
-  primitives: [
-    {"unit-price", 1, &unit_price/1,
-     doc: "(unit-price sku) — current unit price for `sku`, a string."}
-  ]
-)
-```
-
-Then list the surface from code:
-
-```elixir
-Schooner.Environment.surface(MyApp.Scripts.environment())
-# => [
-#      %{name: "unit-price", kind: :procedure, arity: 1,
-#        library: ["myapp", "catalog"], imported?: false,
-#        doc: "(unit-price sku) — current unit price for `sku`, a string."},
-#      %{name: "car", kind: :procedure, arity: 1, library: ["scheme", "base"],
-#        imported?: true, doc: "..."},
-#      ...
-#    ]
-```
-
-or generate a reference page for your users:
-
-```console
-$ mix schooner.surface --env MyApp.Scripts.environment --format markdown > docs/scripting-reference.md
-```
-
-The shipped standard libraries carry one-line docs for every
-export, so the generated page is complete without extra work.
-
-## Editor integration
-
-**Status: Planned** ([#143](https://github.com/ausimian/schooner/issues/143))
-
-A language server, shipped as a separate package so `schooner`
-itself stays dependency-light, brings the tools above into the
-editor:
-
-- **diagnostics** as you type, from
-  [`Schooner.check/3`](#checking-scripts-before-they-run)
-- **completion** of exactly the names your environment exposes,
-  plus the file's own definitions
-- **hover** docs from
-  [`Environment.surface/1`](#documenting-your-scripting-surface)
-- **go to definition** for top-level definitions
-
-The planned setup: add the package to your project's `:dev`
-dependencies and tell it which environment and files to use:
-
-```elixir
-# .schooner.exs
-[
-  environment: {MyApp.Scripts, :environment, []},
-  include: ["scripts/**/*.scm", "test/scripts/**/*.scm"]
-]
-```
-
-Then point your editor's generic LSP client at
-`mix schooner_ls` for `scheme` files. Editor-specific snippets
-will be added here when the server ships.

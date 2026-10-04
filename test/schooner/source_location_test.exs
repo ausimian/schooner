@@ -386,7 +386,7 @@ defmodule Schooner.SourceLocationTest do
       [_, script] =
         Regex.run(~r/and one script, `scripts\/pricing.scm`:\n\n```scheme\n(.*?)```/s, @guide)
 
-      [section] = Regex.run(~r/## Source locations in errors.*?(?=\n## )/s, @guide)
+      [section] = Regex.run(~r/## Source locations in errors.*?(?=\n## |\z)/s, @guide)
       [_, rendered] = Regex.run(~r/```text\n(.*?)\n```/s, section)
 
       environment =
@@ -409,13 +409,6 @@ defmodule Schooner.SourceLocationTest do
 
       assert error.location == %Location{file: "scripts/pricing.scm", line: 4, column: 3}
       assert Schooner.format_error(error, source: script) == rendered
-    end
-
-    test "marks the source-location section available" do
-      assert @guide =~ "**Status: Available** ([#135]"
-
-      assert @guide =~
-               "| 1 | [Source locations in errors](#source-locations-in-errors) | Available |"
     end
   end
 

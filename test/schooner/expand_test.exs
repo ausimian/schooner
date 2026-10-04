@@ -365,14 +365,7 @@ defmodule Schooner.ExpandTest do
   describe "guides/tooling.md" do
     @guide File.read!("guides/tooling.md")
 
-    defp section, do: hd(Regex.run(~r/## Inspecting macro expansion\n.*?(?=\n## )/s, @guide))
-
-    test "marks the section available" do
-      assert section() =~ "**Status: Available** ([#140]"
-
-      assert @guide =~
-               "| 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Available |"
-    end
+    defp section, do: hd(Regex.run(~r/## Inspecting macro expansion\n.*?(?=\n## |\z)/s, @guide))
 
     test "the expand/3 example" do
       [_, call, expected] =

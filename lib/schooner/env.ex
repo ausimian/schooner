@@ -34,8 +34,8 @@ defmodule Schooner.Env do
   ## Frame shapes
 
   The evaluator resolves every lexical variable reference to a
-  `{depth, slot}` address at analysis time (see
-  `Schooner.Eval.Analyze`), so the frames it pushes are *positional*:
+  `{depth, slot}` address when it analyses the program, before it
+  runs, so the frames it pushes are *positional*:
   a tuple whose element 0 is a tuple of the frame's names and whose
   remaining elements are the values in the same order. The names are
   carried so `lookup/2` can still resolve by name; the evaluator
