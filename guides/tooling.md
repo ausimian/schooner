@@ -19,7 +19,7 @@ surface documentation and editor integration.
 | # | Feature | Status | Issue |
 | --- | --- | --- | --- |
 | 1 | [Source locations in errors](#source-locations-in-errors) | Available | [#135](https://github.com/ausimian/schooner/issues/135) |
-| 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Planned | [#136](https://github.com/ausimian/schooner/issues/136) |
+| 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available | [#136](https://github.com/ausimian/schooner/issues/136) |
 | 3 | [Tracing and assertions](#tracing-and-assertions) | Planned | [#137](https://github.com/ausimian/schooner/issues/137) |
 | 4 | [Backtraces](#backtraces) | Planned | [#138](https://github.com/ausimian/schooner/issues/138) |
 | 5 | [The REPL](#the-repl) | Planned | [#139](https://github.com/ausimian/schooner/issues/139) |
@@ -87,9 +87,10 @@ way, first match wins:
    config :schooner, :tooling_environment, {MyApp.Scripts, :environment, []}
    ```
 
-3. Otherwise, every shipped standard library, the same surface
-   `Schooner.run/1` sees. This is fine for experiments, but it is
-   wider than any real sandbox, so prefer 1 or 2.
+3. Otherwise, every shipped standard library, all imported: the
+   surface `Schooner.run/1` gives a script that imports nothing.
+   This is fine for experiments, but it is wider than any real
+   sandbox, so prefer 1 or 2.
 
 ## Source locations in errors
 
@@ -153,11 +154,12 @@ their locations; pass `file:` and `debug:` to `compile`.
 
 ## Checking scripts before they run
 
-**Status: Planned** ([#136](https://github.com/ausimian/schooner/issues/136))
+**Status: Available** ([#136](https://github.com/ausimian/schooner/issues/136))
 
-`Schooner.check/3` reads, resolves imports and expands a script
-against an environment **without evaluating it**, and returns a
-list of diagnostics. An empty list means nothing was found.
+`Schooner.check/3` reads a script, resolves its imports and expands
+its macros against an environment **without evaluating it**, and
+returns a list of `Schooner.Diagnostic`s. An empty list means
+nothing was found.
 
 ```elixir
 Schooner.check(~s|(import (myapp catalog)) (unit-prise "widget")|,
@@ -176,27 +178,44 @@ Schooner.check(~s|(import (myapp catalog)) (unit-prise "widget")|,
 | Code | Meaning |
 | --- | --- |
 | `:read_error` | the source doesn't parse (unbalanced parens, bad literal) |
-| `:syntax_error` | a special form or macro use is malformed |
+| `:syntax_error` | a special form, macro use or `import` set is malformed |
 | `:unknown_library` | an `(import ...)` names a library the environment doesn't provide |
 | `:unbound` | a name isn't bound by the environment, an import, or a definition in the script |
 | `:arity` | a call's argument count can't match a known procedure's arity |
 
-Because `check/3` never runs the script, it is safe to call on
-untrusted input when a script is saved. Use it to reject broken
-scripts early and to show diagnostics in your own UI.
+A procedure's arity is known when it is a primitive or procedure
+bound by the environment or an import, or when the script defines it
+once with `lambda` or `(define (name ...) ...)` and nothing else binds
+it.
 
-From the command line, or in CI:
+Every form is checked, including branches that never run, so an
+unbound name in dead code is still reported. When an import fails,
+the checker can't know which names it would have bound, so it
+reports no `:unbound` diagnostics for that script.
+
+Because `check/3` never runs the script and leaves the environment
+unchanged, it is safe to call on untrusted input when a script is
+saved. Use it to reject broken scripts early and to show diagnostics
+in your own UI. It does expand the script's macros, and a macro that
+never stops expanding never returns, so call it under a timeout as
+you would `Schooner.eval/3`.
+
+From the command line, or in CI: suppose `scripts/` holds
+`pricing.scm`, `draft.scm` with the script above, and `discounts.scm`,
+which starts with `(import (myapp promos))`. Then:
 
 ```console
 $ mix schooner.check "scripts/**/*.scm" --env MyApp.Scripts.environment
-scripts/pricing.scm:4:7: error[unbound]: unbound variable: unit-prise
-scripts/discounts.scm:1:9: error[unknown_library]: no library named (myapp promos)
+scripts/discounts.scm:1:9: error[unknown_library]: library not found: (myapp promos)
+scripts/draft.scm:1:27: error[unbound]: unbound variable: unit-prise
 2 errors in 2 files
 ```
 
-The task exits non-zero when it finds errors.
-`--warnings-as-errors` makes warnings fail too, and
-`--format json` prints machine-readable output.
+Arguments can be files, directories or globs; quote globs so the
+task expands them rather than the shell. The task exits with status
+1 when it finds errors. `--warnings-as-errors` makes warnings fail
+too, although every diagnostic the checker reports today is an
+error. `--format json` prints machine-readable output.
 
 ## Tracing and assertions
 
