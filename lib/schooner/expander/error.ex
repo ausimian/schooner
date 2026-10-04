@@ -1,15 +1,24 @@
 defmodule Schooner.Expander.Error do
   @moduledoc """
   Exception raised by the expander for malformed macro forms, failed
-  pattern matches, and other expansion-time failures.
+  pattern matches, and other expansion-time failures. `:location` is the
+  `Schooner.Location` of the form being expanded, or `nil`.
   """
 
-  defexception [:reason, :message]
+  alias Schooner.Location
+
+  defexception [:reason, :message, :location]
 
   @impl true
   def exception(opts) do
     reason = Keyword.fetch!(opts, :reason)
-    %__MODULE__{reason: reason, message: format(reason)}
+    location = Keyword.get(opts, :location)
+
+    %__MODULE__{
+      reason: reason,
+      location: location,
+      message: Location.prefix(location) <> format(reason)
+    }
   end
 
   defp format({:bad_syntax, name}), do: "malformed `#{name}` form"

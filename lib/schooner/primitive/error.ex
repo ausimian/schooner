@@ -7,14 +7,26 @@ defmodule Schooner.Primitive.Error do
   Kept distinct from `Schooner.Eval.Error` because primitives report a
   different vocabulary of failures than the evaluator. Tests can match
   on `:reason` without coupling to the message wording.
+
+  `:location` is the `Schooner.Location` of the call that failed. It is
+  only filled in when the script runs with `debug: true`; see "Source
+  locations" in `Schooner`.
   """
 
-  defexception [:reason, :message]
+  alias Schooner.Location
+
+  defexception [:reason, :message, :location]
 
   @impl true
   def exception(opts) do
     reason = Keyword.fetch!(opts, :reason)
-    %__MODULE__{reason: reason, message: format(reason)}
+    location = Keyword.get(opts, :location)
+
+    %__MODULE__{
+      reason: reason,
+      location: location,
+      message: Location.prefix(location) <> format(reason)
+    }
   end
 
   defp format({:type_error, op, expected, got}) do

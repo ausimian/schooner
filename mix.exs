@@ -114,6 +114,7 @@ defmodule Schooner.MixProject do
                     Schooner.Env,
                     Schooner.Library,
                     Schooner.Library.NotFoundError,
+                    Schooner.Location,
                     Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
