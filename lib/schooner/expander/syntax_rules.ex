@@ -133,6 +133,78 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
+  @doc false
+  # Split a name into its base name and its marks, oldest first: `[]`
+  # for an unmarked name, and more than one for an identifier a macro
+  # introduced into the output of another macro's template. A mark is
+  # a separator followed by digits at the end of the name, so a NUL
+  # the script wrote itself (`|a\x0;b|`) is left in the base name.
+  @spec split_marks(binary()) :: {binary(), [binary()]}
+  def split_marks(name) when is_binary(name) do
+    [first | segments] = :binary.split(name, @mark_separator, [:global])
+    {marks, rest} = segments |> Enum.reverse() |> Enum.split_while(&mark?/1)
+    {Enum.join([first | Enum.reverse(rest)], @mark_separator), Enum.reverse(marks)}
+  end
+
+  defp mark?(<<_, _::binary>> = segment),
+    do: for(<<c <- segment>>, do: c in ?0..?9) |> Enum.all?()
+
+  defp mark?(_segment), do: false
+
+  @doc false
+  # Renumber the hygiene marks in `values` 1, 2, 3, ... in the order
+  # they first appear, walking each value depth first, so expansions
+  # print the same on every run. A mark keeps its number across all of
+  # `values`, so identifiers that were the same stay the same, and
+  # different ones stay different.
+  @spec renumber_marks([Value.t()]) :: [Value.t()]
+  def renumber_marks(values) when is_list(values) do
+    {values, _numbers} = Enum.map_reduce(values, %{}, &renumber/2)
+    values
+  end
+
+  defp renumber({:sym, name} = sym, numbers) do
+    case split_marks(name) do
+      {_base, []} ->
+        {sym, numbers}
+
+      {base, marks} ->
+        {marks, numbers} = Enum.map_reduce(marks, numbers, &renumber_mark/2)
+        {{:sym, Enum.reduce(marks, base, &mark_name(&2, &1))}, numbers}
+    end
+  end
+
+  defp renumber([h | t], numbers) do
+    {h, numbers} = renumber(h, numbers)
+    {t, numbers} = renumber(t, numbers)
+    {[h | t], numbers}
+  end
+
+  defp renumber({:vector, items}, numbers) do
+    {items, numbers} = items |> Tuple.to_list() |> Enum.map_reduce(numbers, &renumber/2)
+    {{:vector, List.to_tuple(items)}, numbers}
+  end
+
+  # An expanded `define-record-type` embeds its type's name, renamed
+  # like the definitions when a macro introduced it.
+  defp renumber({:record_type, name, id}, numbers) do
+    {{:sym, name}, numbers} = renumber({:sym, name}, numbers)
+    {{:record_type, name, id}, numbers}
+  end
+
+  defp renumber(other, numbers), do: {other, numbers}
+
+  defp renumber_mark(mark, numbers) do
+    case numbers do
+      %{^mark => n} ->
+        {n, numbers}
+
+      _ ->
+        n = map_size(numbers) + 1
+        {n, Map.put(numbers, mark, n)}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # syntax-rules parsing
   # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ surface documentation and editor integration.
 | 3 | [Tracing and assertions](#tracing-and-assertions) | Available | [#137](https://github.com/ausimian/schooner/issues/137) |
 | 4 | [Backtraces](#backtraces) | Available | [#138](https://github.com/ausimian/schooner/issues/138) |
 | 5 | [The REPL](#the-repl) | Planned | [#139](https://github.com/ausimian/schooner/issues/139) |
-| 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Planned | [#140](https://github.com/ausimian/schooner/issues/140) |
+| 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Available | [#140](https://github.com/ausimian/schooner/issues/140) |
 | 7 | [Testing scripts](#testing-scripts) | Planned | [#141](https://github.com/ausimian/schooner/issues/141) |
 | 8 | [Documenting your scripting surface](#documenting-your-scripting-surface) | Planned | [#142](https://github.com/ausimian/schooner/issues/142) |
 | 9 | [Editor integration](#editor-integration) | Planned | [#143](https://github.com/ausimian/schooner/issues/143) |
@@ -486,7 +486,7 @@ session = Schooner.Session.new(MyApp.Scripts.environment())
 
 ## Inspecting macro expansion
 
-**Status: Planned** ([#140](https://github.com/ausimian/schooner/issues/140))
+**Status: Available** ([#140](https://github.com/ausimian/schooner/issues/140))
 
 Many of Schooner's standard forms (`cond`, `case`, the `let`
 family, `do`, `and`, `or`, `when`, `unless`) are `syntax-rules`
@@ -501,24 +501,34 @@ IO.puts(Schooner.Pretty.format(form))
 
 Options:
 
-- `step: :once` expands only the outermost macro use of each
-  form.
-- `trace: true` also returns each expansion step as
-  `%{macro:, location:, before:, after:}`.
+- `step: :once` expands each macro use that isn't inside another
+  macro use once, and leaves the macro uses in its output
+  unexpanded.
+- `trace: true` also returns each expansion step, in the order it
+  happened, as `%{macro:, location:, before:, after:}`.
+
+`mix schooner.expand` takes a file, or the source with `-e`, and
+the same `--env` as `mix schooner.check`. `--trace` lists the steps
+before the result:
 
 ```console
 $ mix schooner.expand -e "(let loop ((i 0)) (when (< i 3) (loop (+ i 1))))" --trace
-[1] let (named)  <stdin>:1:1
-    (let loop ((i 0)) ...)
- => (letrec* ((loop (lambda (i) ...))) (loop 0))
-[2] when  <stdin>:1:19
+[1] let at 1:1
+    (let loop ((i 0)) (when (< i 3) (loop (+ i 1))))
+ => (letrec*·1 ((loop (lambda (i) (when (< i 3) (loop (+ i 1)))))) (loop 0))
+
+[2] when at 1:19
     (when (< i 3) (loop (+ i 1)))
  => (if (< i 3) (begin (loop (+ i 1))))
+
+(letrec* ((loop (lambda (i) (if (< i 3) (begin (loop (+ i 1))))))) (loop 0))
 ```
 
-Hygienically renamed identifiers are printed distinctly (e.g.
-`tmp·1`), so you can tell a macro's own `tmp` from yours. Like
-`check/3`, `expand/3` never evaluates the program.
+Identifiers a macro introduces are renamed so they can't clash with
+yours, and are printed with a number (`letrec*·1` above), so you
+can tell a macro's own `tmp` from yours. Pass `names: :plain` to
+`Schooner.Pretty.format/2`, or `--plain` to the task, to print plain
+names. Like `check/3`, `expand/3` never evaluates the program.
 
 ## Testing scripts
 

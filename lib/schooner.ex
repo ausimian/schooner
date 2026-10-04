@@ -128,6 +128,8 @@ defmodule Schooner do
   alias Schooner.Eval.ParameterState
   alias Schooner.Expander
   alias Schooner.Expander.Positions
+  alias Schooner.Expander.SyntaxEnv
+  alias Schooner.Expander.SyntaxRules
   alias Schooner.Frame
   alias Schooner.Lexer
   alias Schooner.Library
@@ -679,6 +681,180 @@ defmodule Schooner do
       when is_binary(source) and is_list(opts) do
     opts = Keyword.validate!(opts, file: nil)
     Schooner.Checker.check(source, environment, opts)
+  end
+
+  @typedoc """
+  One macro use expanded by `expand/3` with `trace: true`: the macro's
+  name, the location of the use (`nil` when unknown), the use itself,
+  and what the macro rewrote it to.
+  """
+  @type expansion_step :: %{
+          macro: binary(),
+          location: Location.t() | nil,
+          before: Value.t(),
+          after: Value.t()
+        }
+
+  @doc ~S"""
+  Expand the macros in `source` against `environment` without running
+  it, and return the expanded top-level forms.
+
+  The script is read, its imports are resolved against
+  `environment`'s registry, and its macros are expanded, as `eval/3`
+  would, but **no part of it is evaluated** and `environment` is left
+  unchanged. Many standard forms (`cond`, `case`, the `let` family,
+  `do`, `and`, `or`, `when`, `unless`) are `syntax-rules` macros, so
+  this shows what they, and the script's own macros, turn into.
+  Render the forms with `Schooner.Pretty.format/2`:
+
+      iex> environment = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+      iex> {:ok, [form]} = Schooner.expand("(when (> n 0) (go n))", environment)
+      iex> Schooner.Pretty.format(form)
+      "(if (> n 0) (begin (go n)))"
+
+  The `(import ...)` forms are not returned, and nor are the
+  `define-syntax` forms, whose macros are expanded where the script
+  uses them. Expansion runs the script's `syntax-rules` macros, and a
+  macro that expands forever never returns, so bound the call with a
+  timeout as you would `eval/3`.
+
+  An identifier a macro introduces is renamed for hygiene, so that it
+  can't capture or be captured by the script's own identifiers.
+  `Schooner.Pretty` prints a renamed identifier with a number, such as
+  `tmp·1`. Numbers are assigned from 1 in the order the identifiers
+  appear in the result, so the output is the same on every run:
+
+      iex> environment = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+      iex> {:ok, [form]} = Schooner.expand("(or (f) tmp)", environment)
+      iex> Schooner.Pretty.format(form)
+      "((lambda (t·1) (if t·1 t·1 tmp)) (f))"
+
+  Returns `{:ok, forms}`, `{:ok, forms, steps}` with `trace: true`, or
+  `{:error, exception}` when the script can't be read, imports a
+  library the registry doesn't have, or uses a macro or special form
+  wrongly. Errors are located as with `eval/3` and `locations: true`.
+
+  Options:
+
+    * `:file` — the name of the script, recorded in locations and
+      error messages. Defaults to `nil`.
+    * `:step` — `:full` (the default) expands until only core forms
+      are left. `:once` expands each macro use that is not inside
+      another macro use once, and leaves the macro uses in its output
+      as they are:
+
+          iex> environment = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+          iex> {:ok, [form]} = Schooner.expand("(cond (a 1) (b 2))", environment, step: :once)
+          iex> Schooner.Pretty.format(form)
+          "(if a (begin 1) (cond·1 (b 2)))"
+
+    * `:trace` — when `true`, also return every macro use expanded, in
+      the order it was expanded, as a list of `t:expansion_step/0`
+      maps:
+
+          iex> environment = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+          iex> {:ok, _forms, [step]} = Schooner.expand("(unless ok (fail))", environment, trace: true)
+          iex> {step.macro, step.location}
+          {"unless", %Schooner.Location{file: nil, line: 1, column: 1}}
+          iex> Schooner.Pretty.format(step.after)
+          "(if ok (begin) (begin (fail)))"
+
+      Defaults to `false`.
+  """
+  @spec expand(binary(), Environment.t(), keyword()) ::
+          {:ok, [Value.t()]} | {:ok, [Value.t()], [expansion_step()]} | {:error, Exception.t()}
+  def expand(source, %Environment{} = environment, opts \\ [])
+      when is_binary(source) and is_list(opts) do
+    opts = Keyword.validate!(opts, file: nil, step: :full, trace: false)
+    step = Keyword.fetch!(opts, :step)
+    trace? = Keyword.fetch!(opts, :trace)
+
+    unless step in [:full, :once] do
+      raise ArgumentError,
+            "invalid value for :step, expected :full or :once, got: #{inspect(step)}"
+    end
+
+    unless is_boolean(trace?) do
+      raise ArgumentError, "invalid value for :trace, expected a boolean, got: #{inspect(trace?)}"
+    end
+
+    {expanded, steps} = expand_front_end(source, environment, step, trace?, opts)
+    file = Keyword.fetch!(opts, :file)
+
+    # Renumber the forms first, so that they print the same with or
+    # without a trace.
+    {forms, step_forms} =
+      expanded
+      |> Enum.map(&elem(&1, 0))
+      |> Kernel.++(Enum.flat_map(steps, fn {_, before, _, after_} -> [before, after_] end))
+      |> SyntaxRules.renumber_marks()
+      |> Enum.split(length(expanded))
+
+    if trace? do
+      steps =
+        steps
+        |> Enum.zip(Enum.chunk_every(step_forms, 2))
+        |> Enum.map(fn {{macro, _, tree, _}, [before, after_]} ->
+          %{
+            macro: macro,
+            location: Location.new(file, Positions.at(tree)),
+            before: before,
+            after: after_
+          }
+        end)
+
+      {:ok, forms, steps}
+    else
+      {:ok, forms}
+    end
+  rescue
+    e -> rescue_script_error(e, __STACKTRACE__)
+  end
+
+  # Read `source` with positions, resolve its imports and expand it,
+  # without touching `environment`: only the imported macros are
+  # needed, and they go into a copy of its syntax env.
+  defp expand_front_end(source, %Environment{} = environment, step, trace?, opts) do
+    %Environment{syntax_env: syntax_env, registry: registry} = environment
+
+    in_file(opts, fn ->
+      forms = Reader.read_string_positioned(source)
+      {import_specs, body} = forms |> check_import_forms!() |> extract_imports()
+
+      syntax_env =
+        import_specs
+        |> Enum.reduce(%{}, fn {spec, tree}, acc ->
+          Map.merge(acc, resolve_checked_import!(spec, tree, registry))
+        end)
+        |> Enum.reduce(syntax_env, fn
+          {name, {:macro, transformer}}, se -> SyntaxEnv.define_macro(se, name, transformer)
+          _, se -> se
+        end)
+
+      Expander.inspect_positioned(body, syntax_env, step, trace?)
+    end)
+  end
+
+  # `eval/3` lets the `ArgumentError` from a malformed import set
+  # escape. `expand/3` reports it as a malformed `import`, as
+  # `check/3` does, placed at the form or the spec.
+  defp check_import_forms!([{[{:sym, "import"} | specs], tree} | rest] = forms) do
+    unless Value.list?(specs), do: raise_bad_import(tree)
+    check_import_forms!(rest)
+    forms
+  end
+
+  defp check_import_forms!(forms), do: forms
+
+  defp resolve_checked_import!(spec, tree, registry) do
+    resolve_import(spec, tree, registry)
+  rescue
+    ArgumentError -> raise_bad_import(tree)
+  end
+
+  defp raise_bad_import(tree) do
+    error = EvalError.exception(reason: {:bad_special_form, "import"})
+    raise Location.attach(error, Location.new(nil, Positions.at(tree)))
   end
 
   @doc ~S"""

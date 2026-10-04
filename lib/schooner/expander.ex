@@ -73,6 +73,12 @@ defmodule Schooner.Expander do
   defp cons(_car, _cdr, nil), do: nil
   defp cons(car, cdr, tree), do: Pos.cons(car, cdr, tree)
 
+  # Process dictionary keys holding the options and the steps traced
+  # so far while `inspect_positioned/4` runs. Ordinary expansion finds
+  # no options there and pays one lookup per macro use.
+  @inspect_key {__MODULE__, :inspect}
+  @steps_key {__MODULE__, :steps}
+
   @typedoc "A form paired with its position tree (`nil` when unknown)."
   @type positioned :: {Value.t(), Pos.t()}
 
@@ -267,8 +273,14 @@ defmodule Schooner.Expander do
   defp ex_form([{:sym, name} | _args] = form, t, env) do
     case lookup_with_fallback(env, name) do
       {:macro, transformer} ->
-        {new_form, new_t} = transformer.(form, t)
-        ex(new_form, new_t, env)
+        case Process.get(@inspect_key) do
+          nil ->
+            {new_form, new_t} = transformer.(form, t)
+            ex(new_form, new_t, env)
+
+          inspect ->
+            inspect_step(inspect, name, transformer, form, t, env)
+        end
 
       {:special, base} ->
         # A core special form's name appeared with a hygiene mark.
@@ -284,6 +296,71 @@ defmodule Schooner.Expander do
   defp ex_form([_head | _tail] = form, t, env), do: expand_application(form, t, env)
 
   defp ex_form(other, t, _env), do: {other, t}
+
+  # ---------------------------------------------------------------------------
+  # Inspection (`Schooner.expand/3`)
+  # ---------------------------------------------------------------------------
+
+  @doc false
+  # Expand positioned top-level forms like `expand_positioned/2`, for
+  # `Schooner.expand/3`. With `step: :once`, a macro's output is not
+  # expanded further, so only the macro uses that are not inside
+  # another macro use are expanded, once each. With `trace: true`,
+  # every macro use expanded is also returned, in the order it was
+  # expanded, as `{macro_name, use, use_tree, output}`.
+  @spec inspect_positioned([positioned()], SyntaxEnv.t(), :full | :once, boolean()) ::
+          {[positioned()], [{binary(), Value.t(), Pos.t(), Value.t()}]}
+  def inspect_positioned(forms, %SyntaxEnv{} = env, step, trace?)
+      when step in [:full, :once] and is_boolean(trace?) do
+    previous = suspend_inspection()
+    Process.put(@inspect_key, %{once?: step == :once, trace?: trace?})
+    Process.put(@steps_key, [])
+
+    try do
+      {expanded, _env} = expand_positioned(forms, env)
+      {expanded, Enum.reverse(Process.get(@steps_key))}
+    after
+      resume_inspection(previous)
+    end
+  end
+
+  # A transformer written in Elixir may expand or evaluate code of its
+  # own. It runs with the inspection suspended, so that work is
+  # expanded as usual and kept out of the trace.
+  defp inspect_step(%{once?: once?, trace?: trace?}, name, transformer, form, t, env) do
+    previous = suspend_inspection()
+
+    {new_form, new_t} =
+      try do
+        transformer.(form, t)
+      after
+        resume_inspection(previous)
+      end
+
+    if trace? do
+      step = {base_name(name), form, t, new_form}
+      Process.put(@steps_key, [step | Process.get(@steps_key)])
+    end
+
+    if once?, do: {new_form, new_t}, else: ex(new_form, new_t, env)
+  end
+
+  defp suspend_inspection do
+    {Process.delete(@inspect_key), Process.delete(@steps_key)}
+  end
+
+  defp resume_inspection({inspect, steps}) do
+    restore(@inspect_key, inspect)
+    restore(@steps_key, steps)
+  end
+
+  defp restore(key, nil), do: Process.delete(key)
+  defp restore(key, value), do: Process.put(key, value)
+
+  defp base_name(name) do
+    {base, _marks} = SyntaxRules.split_marks(name)
+    base
+  end
 
   # ---------------------------------------------------------------------------
   # Special-form expanders

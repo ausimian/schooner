@@ -90,7 +90,9 @@ defmodule Schooner.MixProject do
           Schooner.Debug,
           Schooner.Diagnostic,
           Schooner.Frame,
-          Mix.Tasks.Schooner.Check
+          Schooner.Pretty,
+          Mix.Tasks.Schooner.Check,
+          Mix.Tasks.Schooner.Expand
         ],
         Errors: [
           Schooner.Error,
@@ -124,6 +126,7 @@ defmodule Schooner.MixProject do
                     Schooner.Library,
                     Schooner.Library.NotFoundError,
                     Schooner.Location,
+                    Schooner.Pretty,
                     Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
@@ -131,7 +134,8 @@ defmodule Schooner.MixProject do
                     Schooner.Lexer.Error,
                     Schooner.Reader.Error,
                     Schooner.Expander.Error,
-                    Mix.Tasks.Schooner.Check
+                    Mix.Tasks.Schooner.Check,
+                    Mix.Tasks.Schooner.Expand
                   ])
 
   defp public_module?(module, _metadata), do: MapSet.member?(@public_modules, module)
