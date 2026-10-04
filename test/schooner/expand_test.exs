@@ -158,23 +158,38 @@ defmodule Schooner.ExpandTest do
       assert trace("(define x 1)") == []
     end
 
-    test "an expansion started during another leaves the outer one's trace intact" do
+    test "a transformer written in Elixir expands and evaluates code of its own as usual" do
       outer = :erlang.unique_integer([:positive])
-      # A transformer that runs a whole expand/3 of its own, as a macro
-      # implemented in Elixir could.
+
+      # As a macro implemented in Elixir could: evaluate a program that
+      # needs its macros fully expanded, and run an expand/3 of its own.
       nested = fn _form, tree ->
+        {:ok, 2} = Schooner.eval("(cond (#f 1) (else (let ((x 2)) x)))", env())
         {:ok, _, [_]} = Schooner.expand("(when a b)", env(), trace: true)
         {outer, tree}
       end
 
       syntax_env = SyntaxEnv.define_macro(env().syntax_env, "nested", nested)
-      forms = Reader.read_string_positioned("(unless (nested) c)")
+      forms = Reader.read_string_positioned("(list (nested) (unless c d))")
 
-      assert {[{form, _}], steps} =
-               Expander.inspect_positioned(forms, syntax_env, :full, true)
+      for step <- [:full, :once] do
+        assert {[_], steps} = Expander.inspect_positioned(forms, syntax_env, step, true)
+        assert Enum.map(steps, &elem(&1, 0)) == ["nested", "unless"]
+      end
+    end
 
-      assert Pretty.format(form) == "(if #{outer} (begin) (begin c))"
-      assert Enum.map(steps, &elem(&1, 0)) == ["unless", "nested"]
+    test "Schooner.Debug's macros" do
+      environment =
+        Environment.new(
+          pre_imports: [["scheme", "base"]],
+          libraries: [Schooner.Debug.library(sink: self())]
+        )
+
+      assert {:ok, [form]} =
+               Schooner.expand("(import (schooner debug))\n(assert ok)", environment)
+
+      assert Pretty.format(form) ==
+               "('#<primitive assert> '#<call-site> 'ok ok)"
     end
 
     test "returns the same forms as without a trace" do

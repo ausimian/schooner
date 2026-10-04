@@ -273,11 +273,13 @@ defmodule Schooner.Expander do
   defp ex_form([{:sym, name} | _args] = form, t, env) do
     case lookup_with_fallback(env, name) do
       {:macro, transformer} ->
-        {new_form, new_t} = transformer.(form, t)
-
         case Process.get(@inspect_key) do
-          nil -> ex(new_form, new_t, env)
-          inspect -> inspect_step(inspect, name, form, t, {new_form, new_t}, env)
+          nil ->
+            {new_form, new_t} = transformer.(form, t)
+            ex(new_form, new_t, env)
+
+          inspect ->
+            inspect_step(inspect, name, transformer, form, t, env)
         end
 
       {:special, base} ->
@@ -310,9 +312,7 @@ defmodule Schooner.Expander do
           {[positioned()], [{binary(), Value.t(), Pos.t(), Value.t()}]}
   def inspect_positioned(forms, %SyntaxEnv{} = env, step, trace?)
       when step in [:full, :once] and is_boolean(trace?) do
-    # Restored afterwards, so an inspection started while another runs
-    # leaves the outer one's options and steps as they were.
-    previous = {Process.get(@inspect_key), Process.get(@steps_key)}
+    previous = suspend_inspection()
     Process.put(@inspect_key, %{once?: step == :once, trace?: trace?})
     Process.put(@steps_key, [])
 
@@ -320,16 +320,23 @@ defmodule Schooner.Expander do
       {expanded, _env} = expand_positioned(forms, env)
       {expanded, Enum.reverse(Process.get(@steps_key))}
     after
-      {inspect, steps} = previous
-      restore(@inspect_key, inspect)
-      restore(@steps_key, steps)
+      resume_inspection(previous)
     end
   end
 
-  defp restore(key, nil), do: Process.delete(key)
-  defp restore(key, value), do: Process.put(key, value)
+  # A transformer written in Elixir may expand or evaluate code of its
+  # own. It runs with the inspection suspended, so that work is
+  # expanded as usual and kept out of the trace.
+  defp inspect_step(%{once?: once?, trace?: trace?}, name, transformer, form, t, env) do
+    previous = suspend_inspection()
 
-  defp inspect_step(%{once?: once?, trace?: trace?}, name, form, t, {new_form, new_t}, env) do
+    {new_form, new_t} =
+      try do
+        transformer.(form, t)
+      after
+        resume_inspection(previous)
+      end
+
     if trace? do
       step = {base_name(name), form, t, new_form}
       Process.put(@steps_key, [step | Process.get(@steps_key)])
@@ -337,6 +344,18 @@ defmodule Schooner.Expander do
 
     if once?, do: {new_form, new_t}, else: ex(new_form, new_t, env)
   end
+
+  defp suspend_inspection do
+    {Process.delete(@inspect_key), Process.delete(@steps_key)}
+  end
+
+  defp resume_inspection({inspect, steps}) do
+    restore(@inspect_key, inspect)
+    restore(@steps_key, steps)
+  end
+
+  defp restore(key, nil), do: Process.delete(key)
+  defp restore(key, value), do: Process.put(key, value)
 
   defp base_name(name) do
     case SyntaxRules.strip_mark(name) do
