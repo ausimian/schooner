@@ -84,6 +84,7 @@ defmodule Schooner.MixProject do
           Schooner.Value,
           Schooner.Env,
           Schooner.Library,
+          Schooner.Library.Loader,
           Schooner.Time
         ],
         Tooling: [
@@ -126,6 +127,7 @@ defmodule Schooner.MixProject do
                     Schooner.Value,
                     Schooner.Env,
                     Schooner.Library,
+                    Schooner.Library.Loader,
                     Schooner.Library.NotFoundError,
                     Schooner.Location,
                     Schooner.Pretty,
