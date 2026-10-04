@@ -120,3 +120,7 @@
 - `Schooner.Library.Loader` now reads `(include ...)` files with
   positions. A reader error in an included file now has the file's
   path in its location and message.
+
+### Fixed
+
+- The README quick example now uses Elixir syntax highlighting on GitHub.
