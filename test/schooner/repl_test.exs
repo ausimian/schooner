@@ -214,6 +214,24 @@ defmodule Schooner.REPLTest do
       assert output =~ "schooner> y\nerror: unbound variable: y\n"
     end
 
+    test "a failed environment leaves no processes behind" do
+      test = self()
+
+      environment = fn ->
+        {:links, links} = Process.info(self(), :links)
+        send(test, {:evaluator, self(), links})
+        raise "no environment"
+      end
+
+      assert_raise RuntimeError, fn -> repl("", environment: environment) end
+      assert_receive {:evaluator, evaluator, links}
+
+      for pid <- [evaluator | links] do
+        monitor = Process.monitor(pid)
+        assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 5000
+      end
+    end
+
     test "the evaluator stops when the REPL does, even mid-evaluation" do
       test = self()
 

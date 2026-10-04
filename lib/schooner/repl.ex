@@ -449,7 +449,10 @@ defmodule Schooner.REPL do
     send(repl, {ref, :ok, snapshot(session)})
     evaluator_loop(repl, session)
   catch
-    kind, reason -> send(repl, {ref, {:error, kind, reason, __STACKTRACE__}, nil})
+    kind, reason ->
+      send(repl, {ref, {:error, kind, reason, __STACKTRACE__}, nil})
+      # Exit abnormally, so the guard linked to this process goes too.
+      exit({:shutdown, :no_environment})
   end
 
   defp evaluator_init(repl, ref, {:restore, {session, dictionary}}) do
