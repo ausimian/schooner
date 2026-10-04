@@ -22,7 +22,7 @@ surface documentation and editor integration.
 | 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available | [#136](https://github.com/ausimian/schooner/issues/136) |
 | 3 | [Tracing and assertions](#tracing-and-assertions) | Available | [#137](https://github.com/ausimian/schooner/issues/137) |
 | 4 | [Backtraces](#backtraces) | Available | [#138](https://github.com/ausimian/schooner/issues/138) |
-| 5 | [The REPL](#the-repl) | Planned | [#139](https://github.com/ausimian/schooner/issues/139) |
+| 5 | [The REPL](#the-repl) | Available | [#139](https://github.com/ausimian/schooner/issues/139) |
 | 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Available | [#140](https://github.com/ausimian/schooner/issues/140) |
 | 7 | [Testing scripts](#testing-scripts) | Planned | [#141](https://github.com/ausimian/schooner/issues/141) |
 | 8 | [Documenting your scripting surface](#documenting-your-scripting-surface) | Planned | [#142](https://github.com/ausimian/schooner/issues/142) |
@@ -435,7 +435,7 @@ must run at full speed.
 
 ## The REPL
 
-**Status: Planned** ([#139](https://github.com/ausimian/schooner/issues/139))
+**Status: Available** ([#139](https://github.com/ausimian/schooner/issues/139))
 
 `mix schooner.repl` starts an interactive session against your
 real environment. Something that works in the REPL works in
@@ -444,36 +444,57 @@ unbound here too.
 
 ```console
 $ mix schooner.repl --env MyApp.Scripts.environment --load scripts/pricing.scm
-Schooner 1.x — environment: MyApp.Scripts.environment/0. ,help for commands.
+Schooner 1.1.0 — environment: MyApp.Scripts.environment/0. ,help for commands.
 schooner> (line-total "widget" 3)
 30
 schooner> (define (with-shipping x)
      ...>   (+ x 5))
 schooner> (with-shipping 30)
 35
-schooner> (string-upcase "hi")
-error: unbound variable: string-upcase
+schooner> (char-upcase #\a)
+error: unbound variable: char-upcase
+schooner> (import (scheme char))
+schooner> (char-upcase #\a)
+#\A
 schooner> ,env unit
-unit-price    (myapp catalog)   procedure, 1 arg
+unit-price  (myapp catalog)  procedure, 1 arg
 schooner> ,expand (when ok (go))
 (if ok (begin (go)))
-schooner> ,time (order-total big-order)
-1204.5  ; 3.1ms, 48211 reductions
+schooner> ,time (order-total '(("widget" . 2) ("gadget" . 1)))
+30  ; 0.1ms, 1650 reductions
 schooner> ,quit
 ```
 
-Definitions, imports and `define-syntax` macros persist across
-inputs. Input that ends inside an open form continues on the
-next line. `--debug` turns on [backtraces](#backtraces) for
-errors.
+`char-upcase` is in `(scheme char)`. The environment offers that
+library but doesn't import it, so a script must import it, and so
+must you.
+
+Definitions, imports and `define-syntax` macros persist from one
+entry to the next. An entry that ends inside an open form
+continues on the next line. In a terminal, each new line starts
+indented to where the code goes, as `Schooner.Pretty` lays it out:
+the body of a `define`, `lambda` or `let` two columns in, the
+arguments of a call under the first, and the bindings of a `let`
+under each other. So you type the code, not the spaces. Tab
+re-indents a line, Up and Down recall earlier entries, and pasted
+code keeps its own indentation.
+
+An error is printed and the session carries on. Ctrl-C interrupts
+an evaluation that runs too long, leaving the session as it was
+before that entry, and Ctrl-D or `,quit` leaves. `--debug` turns
+on [backtraces](#backtraces) for errors.
 
 | Command | Does |
 | --- | --- |
-| `,env [prefix]` | list bindings in scope |
+| `,env [prefix]` | list bindings in scope: name, library and what it is |
 | `,expand <form>` | show the full expansion (see [below](#inspecting-macro-expansion)) |
 | `,time <form>` | evaluate and report wall time and reductions |
 | `,load <file>` | evaluate a file into the session |
 | `,help`, `,quit` | |
+
+When standard input isn't a terminal, the REPL reads whole lines
+without editing or indenting them, so you can pipe a script into
+it. Ctrl-C then reaches the BEAM, as it does in any mix task.
 
 To build your own console (a web console, an admin-panel
 console), use the same session API the REPL is built on:
@@ -483,6 +504,10 @@ session = Schooner.Session.new(MyApp.Scripts.environment())
 {:ok, _, session} = Schooner.Session.eval(session, "(define x 41)")
 {:ok, 42, _session} = Schooner.Session.eval(session, "(+ x 1)")
 ```
+
+`Schooner.Session.bindings/1` lists what's in scope, as `,env`
+does, and `Schooner.Session.environment/1` passes the session's
+macros to `Schooner.expand/3`.
 
 ## Inspecting macro expansion
 

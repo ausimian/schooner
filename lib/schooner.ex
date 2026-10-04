@@ -381,13 +381,25 @@ defmodule Schooner do
   # resolve the program's imports against `registry` and expand its
   # body.
   defp front_end(forms, env, syntax_env, registry, opts) do
+    {bindings, env, syntax_env, body} = import_front_end(forms, env, syntax_env, registry, opts)
+    {expanded, _syntax_env} = expand_body(body, syntax_env, opts)
+    {bindings, env, expanded}
+  end
+
+  # Resolve the program's imports against `registry` and apply them to
+  # `env` and `syntax_env`. Every import is resolved before any is
+  # applied, so a failure applies none of them.
+  defp import_front_end(forms, env, syntax_env, registry, opts) do
     in_file(opts, fn ->
       {import_specs, body} = extract_imports(forms)
       bindings = resolve_imports(import_specs, registry)
       {env, syntax_env} = LibImport.apply_bindings(bindings, env, syntax_env)
-      {expanded, _syntax_env} = Expander.expand_positioned(body, syntax_env)
-      {bindings, env, expanded}
+      {bindings, env, syntax_env, body}
     end)
+  end
+
+  defp expand_body(body, syntax_env, opts) do
+    in_file(opts, fn -> Expander.expand_positioned(body, syntax_env) end)
   end
 
   defp eval_opts(opts), do: Keyword.take(opts, [:file, :debug, :backtrace_depth])
@@ -578,11 +590,28 @@ defmodule Schooner do
   end
 
   defp do_eval(forms, %Env{} = env, syntax_env, registry, opts) do
-    # Snapshot/restore the per-process control state so each top-level
-    # call starts clean. Without this, a script that pushes a handler
-    # or registers a `call/cc` tag then escapes via a host-side throw
-    # (e.g. a test that catches `Schooner.Error`) would leak state into
-    # the next call in the same process.
+    with_clean_state(opts, fn ->
+      {_bindings, env, expanded} = front_end(forms, env, syntax_env, registry, opts)
+      run_expanded(expanded, env, opts)
+    end)
+  end
+
+  defp run_expanded(expanded, env, opts) do
+    eval_opts = eval_opts(opts)
+
+    expanded
+    |> Enum.reduce(:unspecified, fn {form, tree}, _acc ->
+      Eval.eval(form, tree, env, eval_opts)
+    end)
+    |> Eval.single_value!()
+  end
+
+  # Run `fun` with clean per-process control state, restoring the
+  # caller's afterwards. Without this, a script that pushes a handler
+  # or registers a `call/cc` tag then escapes via a host-side throw
+  # (e.g. a test that catches `Schooner.Error`) would leak state into
+  # the next call in the same process.
+  defp with_clean_state(opts, fun) do
     depth = backtrace_depth(opts)
     prev_handlers = ExceptionState.snapshot()
     prev_conts = ContinuationState.snapshot()
@@ -594,14 +623,7 @@ defmodule Schooner do
     BacktraceState.reset(depth)
 
     try do
-      {_bindings, env, expanded} = front_end(forms, env, syntax_env, registry, opts)
-      eval_opts = eval_opts(opts)
-
-      expanded
-      |> Enum.reduce(:unspecified, fn {form, tree}, _acc ->
-        Eval.eval(form, tree, env, eval_opts)
-      end)
-      |> Eval.single_value!()
+      fun.()
     rescue
       # With `debug: true`, give a runtime error the calls that led to
       # it. Nothing between the raise and here records a call (see
@@ -613,6 +635,47 @@ defmodule Schooner do
       ParameterState.restore(prev_params)
       BacktraceState.restore(prev_history)
     end
+  end
+
+  @doc false
+  # The evaluation step of `Schooner.Session.eval/3`: `eval!/3` against
+  # `env`, `syntax_env` and `registry`, also returning the syntax env
+  # the source leaves behind, so that its imported macros and
+  # `define-syntax` forms persist into the next evaluation.
+  #
+  # On failure the syntax env is the one the source had reached: the
+  # given one when it failed to read or import, the one with its
+  # imports applied when it failed to expand, and the expanded one
+  # when it failed to run. Definitions evaluated before a failure stay
+  # in `env`'s globals, as they do with `eval!/3`.
+  @spec session_eval(binary(), Env.t(), SyntaxEnv.t(), Library.registry(), keyword()) ::
+          {:ok, Value.t(), SyntaxEnv.t()} | {:error, Exception.t(), SyntaxEnv.t()}
+  def session_eval(source, %Env{} = env, syntax_env, registry, opts) do
+    {_bindings, env, syntax_env, body} =
+      source |> read(opts) |> import_front_end(env, syntax_env, registry, opts)
+
+    session_expand_and_run(body, env, syntax_env, opts)
+  rescue
+    e -> script_error_with(e, __STACKTRACE__, syntax_env)
+  end
+
+  defp session_expand_and_run(body, env, syntax_env, opts) do
+    {expanded, syntax_env} = expand_body(body, syntax_env, opts)
+    session_run(expanded, env, syntax_env, opts)
+  rescue
+    e -> script_error_with(e, __STACKTRACE__, syntax_env)
+  end
+
+  defp session_run(expanded, env, syntax_env, opts) do
+    value = with_clean_state(opts, fn -> run_expanded(expanded, env, opts) end)
+    {:ok, value, syntax_env}
+  rescue
+    e -> script_error_with(e, __STACKTRACE__, syntax_env)
+  end
+
+  defp script_error_with(e, stacktrace, syntax_env) do
+    {:error, e} = rescue_script_error(e, stacktrace)
+    {:error, e, syntax_env}
   end
 
   @doc ~S"""

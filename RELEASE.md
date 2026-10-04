@@ -90,6 +90,21 @@
   that sent it. Like `(scheme time)`, the library is not in the
   default registry, so a script can only import it when the embedder
   passes it to `Schooner.Environment.new/1`.
+- `Schooner.Session` evaluates one entry after another against a
+  `Schooner.Environment`. Each entry sees the definitions, imports
+  and `define-syntax` macros of the ones before it. `eval/3` returns
+  `{:ok, value, session}` or `{:error, exception, session}`, and an
+  error leaves the session usable. `bindings/1` lists the names in
+  scope and the libraries that export them.
+- `mix schooner.repl` starts an interactive session against your
+  environment, with the same `--env` resolution as
+  `mix schooner.check`, plus `--load FILE` and `--debug`. Entries
+  that end inside an open form continue on the next line. In a
+  terminal, that line starts indented to where the code goes, Tab
+  re-indents a line, Up and Down recall earlier entries, and Ctrl-C
+  interrupts a runaway evaluation and leaves the session as it was
+  before it. The commands are `,env [prefix]`, `,expand <form>`,
+  `,time <form>`, `,load <file>`, `,help` and `,quit`.
 - `Schooner.eval/3` and `Schooner.eval!/3` accept a
   `Schooner.Environment` as well as a `Schooner.Env`.
   `Schooner.compile/3`, `Schooner.compile!/3`, and
