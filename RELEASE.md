@@ -29,6 +29,22 @@
 - `Schooner.format_error/2` renders an error for people. With
   `source:`, it adds an excerpt of the failing line with a caret
   under the column.
+- `Schooner.check/3` checks a script against a `Schooner.Environment`
+  without running it, and returns a list of `Schooner.Diagnostic`s
+  with a severity, a code, a message and a location. It reports
+  source that doesn't parse (`:read_error`); malformed special forms,
+  macro uses and import sets (`:syntax_error`); imports of libraries
+  the environment doesn't provide (`:unknown_library`); names that
+  nothing binds (`:unbound`); and calls whose argument count a known
+  procedure can't accept (`:arity`). The environment is left
+  unchanged, so it is safe to call on untrusted scripts.
+- `mix schooner.check` runs the checker over files, directories and
+  globs, printing `file:line:col: severity[code]: message` lines or,
+  with `--format json`, one JSON object. It exits with status 1 when
+  it finds errors, or warnings with `--warnings-as-errors`. Choose
+  the environment with `--env Mod.fun` or
+  `config :schooner, :tooling_environment, {Mod, :fun, args}`;
+  without either, every standard library is imported.
 - `Schooner.eval/3` and `Schooner.eval!/3` accept a
   `Schooner.Environment` as well as a `Schooner.Env`.
   `Schooner.compile/3`, `Schooner.compile!/3`, and

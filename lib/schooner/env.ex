@@ -172,6 +172,22 @@ defmodule Schooner.Env do
   @spec fetch_global(t(), binary()) :: {:ok, Value.t()} | :error
   def fetch_global(%__MODULE__{globals: ref}, name), do: globals_lookup(ref, name)
 
+  @doc false
+  # Every defined global, as a map of name to value. Raises
+  # `ArgumentError` when the env was built by another process.
+  @spec globals(t()) :: %{binary() => Value.t()}
+  def globals(%__MODULE__{globals: ref}) do
+    case :erlang.get(ref) do
+      :undefined ->
+        raise ArgumentError, "the environment was built by another process"
+
+      cells ->
+        for {name, cell} <- cells, (value = :erlang.get(cell)) != @unbound, into: %{} do
+          {name, value}
+        end
+    end
+  end
+
   @doc """
   Add or replace a top-level binding. Visible to every closure that
   captured this env, regardless of when it was created.

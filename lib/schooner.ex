@@ -552,6 +552,74 @@ defmodule Schooner do
   end
 
   @doc ~S"""
+  Check `source` against `environment` without running it, and return
+  the problems found as a list of `Schooner.Diagnostic`s. An empty
+  list means nothing was found.
+
+  The script is read, its imports are resolved against
+  `environment`'s registry, and its macros are expanded, just as
+  `eval/3` would, but **no part of it is evaluated** and
+  `environment` is left unchanged. That makes `check/3` safe to call
+  on untrusted scripts, for example when one is saved. Expansion
+  still runs the script's own `syntax-rules` macros, and a macro that
+  expands forever never returns, so bound the call with a timeout as
+  you would `eval/3`.
+
+  The checker reports:
+
+    * `:read_error` — the source doesn't parse. Nothing else is
+      checked.
+    * `:syntax_error` — a malformed special form, macro use or
+      `import` set.
+    * `:unknown_library` — an `(import ...)` of a library the
+      environment's registry doesn't have.
+    * `:unbound` — a reference to a name that isn't bound by the
+      environment, an import or a definition anywhere in the script.
+    * `:arity` — a call, with a fixed number of arguments, to a
+      procedure that can't accept that many: a primitive or procedure
+      the environment or an import binds, or one the script defines
+      once with `lambda` (or `(define (name ...) ...)`) and nothing
+      else binds.
+
+  Every form is checked, including branches that would never run, so
+  a reference to an unbound name in dead code is still reported.
+  When an import fails, the names it would have bound are unknown, so
+  `:unbound` is not reported for that script.
+
+      iex> environment = Schooner.Environment.new(pre_imports: [["scheme", "base"]])
+      iex> Schooner.check("(define (f x) (+ x y))\n(f 1 2)", environment, file: "f.scm")
+      [
+        %Schooner.Diagnostic{
+          severity: :error,
+          code: :unbound,
+          message: "unbound variable: y",
+          location: %Schooner.Location{file: "f.scm", line: 1, column: 20}
+        },
+        %Schooner.Diagnostic{
+          severity: :error,
+          code: :arity,
+          message: "arity mismatch in `f`: expected 1, got 2",
+          location: %Schooner.Location{file: "f.scm", line: 2, column: 1}
+        }
+      ]
+
+  Diagnostics are ordered by location. Every diagnostic reported today
+  is an `:error`: something that fails the script if evaluation
+  reaches it.
+
+  Options:
+
+    * `:file` — the name of the script, recorded in the location of
+      every diagnostic. Defaults to `nil`.
+  """
+  @spec check(binary(), Environment.t(), keyword()) :: [Schooner.Diagnostic.t()]
+  def check(source, %Environment{} = environment, opts \\ [])
+      when is_binary(source) and is_list(opts) do
+    opts = Keyword.validate!(opts, file: nil)
+    Schooner.Checker.check(source, environment, opts)
+  end
+
+  @doc ~S"""
   Render a script-level exception for people.
 
   The first line is the message, prefixed with the error's location
