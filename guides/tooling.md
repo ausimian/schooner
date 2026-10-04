@@ -18,7 +18,7 @@ surface documentation and editor integration.
 
 | # | Feature | Status | Issue |
 | --- | --- | --- | --- |
-| 1 | [Source locations in errors](#source-locations-in-errors) | Planned | [#135](https://github.com/ausimian/schooner/issues/135) |
+| 1 | [Source locations in errors](#source-locations-in-errors) | Available | [#135](https://github.com/ausimian/schooner/issues/135) |
 | 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Planned | [#136](https://github.com/ausimian/schooner/issues/136) |
 | 3 | [Tracing and assertions](#tracing-and-assertions) | Planned | [#137](https://github.com/ausimian/schooner/issues/137) |
 | 4 | [Backtraces](#backtraces) | Planned | [#138](https://github.com/ausimian/schooner/issues/138) |
@@ -69,7 +69,7 @@ and one script, `scripts/pricing.scm`:
 (define (order-total lines)
   (if (null? lines)
       0
-      (+ (line-total (caar lines) (cdar lines))
+      (+ (line-total (car (car lines)) (cdr (car lines)))
          (order-total (cdr lines)))))
 ```
 
@@ -93,12 +93,28 @@ way, first match wins:
 
 ## Source locations in errors
 
-**Status: Planned** ([#135](https://github.com/ausimian/schooner/issues/135))
+**Status: Available** ([#135](https://github.com/ausimian/schooner/issues/135))
 
 Every script-level exception carries a `:location` (a
-`%Schooner.Location{file, line, column}`), and its message is
-prefixed with `file:line:col`. Pass `:file` so the location names
-the script:
+`%Schooner.Location{file, line, column}`, or `nil`), and when the
+location names a file its message is prefixed with
+`file:line:col`. Pass `:file` to turn locations on and name the
+script, or `locations: true` to turn them on without a name.
+Tracking positions makes reading and expanding a script about 15%
+slower but costs nothing while it runs; without either option
+errors have `location: nil`.
+
+With locations on, reader errors, malformed special forms and other
+syntax errors, imports of missing libraries, and unbound variables
+are located. Errors raised while *applying* a procedure, such as a
+primitive's type error, an arity mismatch or an uncaught
+`(error ...)`, are located only when you pass `debug: true`, which
+also turns locations on. Debug mode wraps each primitive call in a
+`try`, which makes scripts that spend their time in primitives
+(list, string and vector work) 10–15% slower; arithmetic on
+integers is unaffected. Without it those errors have
+`location: nil`, so turn it on while you develop and test scripts,
+and wherever you want precise errors more than that speed:
 
 ```elixir
 source = File.read!("scripts/pricing.scm")
@@ -106,7 +122,7 @@ source = File.read!("scripts/pricing.scm")
 {:error, error} =
   Schooner.eval(source <> ~s|(order-total '(("widget" . "3")))|,
                 MyApp.Scripts.environment(),
-                file: "scripts/pricing.scm")
+                file: "scripts/pricing.scm", debug: true)
 
 error.location
 # => %Schooner.Location{file: "scripts/pricing.scm", line: 4, column: 3}
@@ -128,9 +144,12 @@ scripts/pricing.scm:4:3: type error in `*`: expected number, got "3"
 
 Errors raised while expanding a macro point at the macro's use
 site in your script, not into the library that defines the
-macro. Scripts run through `Schooner.compile/2` and
-`Schooner.run_compiled/2` keep their locations; pass `file:` to
-`compile`.
+macro. An error in a procedure defined by a library loaded with
+`Schooner.Library.Loader.load_file/3` points into that library's
+file; pass `debug: true` to `load_file/3` to locate errors raised
+while applying procedures in the library's code. Scripts run
+through `Schooner.compile/3` and `Schooner.run_compiled/2` keep
+their locations; pass `file:` and `debug:` to `compile`.
 
 ## Checking scripts before they run
 

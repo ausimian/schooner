@@ -31,7 +31,7 @@ defmodule Schooner.Eval.LexicalAddressingTest do
 
       assert {:lambda, _, {{"x"}, [inner]}, nil} = Analyze.analyze(form)
       assert {:lambda, _, {{"y"}, [app]}, nil} = inner
-      assert {:app, {:lref, 1, 1}, [{:lref, 0, 1}, {:gref, "z", nil}]} = app
+      assert {:app, {:lref, 1, 1}, [{:lref, 0, 1}, {:gref, "z", nil, nil}], nil} = app
     end
 
     test "non-recursive letrec* names resolve to positional slots" do
@@ -61,17 +61,17 @@ defmodule Schooner.Eval.LexicalAddressingTest do
 
       assert {:lambda, _, {_, [letrec]}, nil} = Analyze.analyze(form)
       assert {:letrec, ["f", "g"], [{:single, 0, _}, {:single, 1, f_ref}], [g_ref]} = letrec
-      assert f_ref == {:rref, 0, 0, "f", {:lref, 1, 1}}
-      assert g_ref == {:rref, 0, 1, "g", {:gref, "g", nil}}
+      assert f_ref == {:rref, 0, 0, "f", {:lref, 1, 1}, nil}
+      assert g_ref == {:rref, 0, 1, "g", {:gref, "g", nil, nil}, nil}
     end
 
     test "a marked free name carries its unmarked base as a fallback" do
       name = marked("car", 7)
-      assert {:gref, ^name, {:gref, "car", nil}} = Analyze.analyze(sym(name))
+      assert {:gref, ^name, {:gref, "car", nil, nil}, nil} = Analyze.analyze(sym(name))
 
       # The base is resolved lexically when it is in scope.
       form = [sym("lambda"), [sym("car")], sym(name)]
-      assert {:lambda, _, {_, [{:gref, ^name, {:lref, 0, 1}}]}, _} = Analyze.analyze(form)
+      assert {:lambda, _, {_, [{:gref, ^name, {:lref, 0, 1}, nil}]}, _} = Analyze.analyze(form)
     end
   end
 

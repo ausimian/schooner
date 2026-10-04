@@ -23,16 +23,25 @@ defmodule Schooner.Eval.Analyze do
   #
   #   * `{:lref, depth, index}` — element `index` of the positional
   #     frame `depth` levels up;
-  #   * `{:rref, depth, slot, name, fallback}` — slot `slot` of the
+  #   * `{:rref, depth, slot, name, fallback, pos}` — slot `slot` of the
   #     recursive frame `depth` levels up. `fallback` is the same name
   #     resolved in the scope *below* that frame, used if the frame's
   #     slot has already been released (see `Schooner.Env`), which is
   #     where a by-name lookup would continue;
-  #   * `{:gref, name, marked}` — a top-level binding. `marked` is the
+  #   * `{:gref, name, marked, pos}` — a top-level binding. `marked` is the
   #     hygiene fallback: when `name` carries a macro mark and has no
   #     binding, the name with the mark stripped is used instead, so
   #     `marked` is that base name resolved against the full scope (or
   #     `nil` for an unmarked name).
+  #
+  # ## Positions
+  #
+  # `analyze/2` walks the form's `Schooner.Reader` position tree beside
+  # it (`nil` when there is none). Applications and variable references
+  # record the `{line, column}` they start at as their last element, and
+  # an analysis error is given the location of the innermost positioned
+  # node, so a `{:raise, exception}` carries its own location. The IR
+  # holds no file name: `Schooner.Eval.compile/3` adds it.
   #
   # Top-level forms are analysed against the empty scope, so
   # `Eval.eval/2` and compiled programs must run against an env with no
@@ -56,7 +65,10 @@ defmodule Schooner.Eval.Analyze do
   # that work still happens first.
 
   alias Schooner.Eval.Error
+  alias Schooner.Expander.Positions, as: Pos
   alias Schooner.Expander.SyntaxRules
+  alias Schooner.Lexer
+  alias Schooner.Location
   alias Schooner.Value
 
   @type params ::
@@ -84,16 +96,18 @@ defmodule Schooner.Eval.Analyze do
           | {:qsplice, ir(), template()}
           | {:qvec, template()}
 
+  @type pos :: Lexer.position() | nil
+
   @type ref ::
           {:lref, non_neg_integer(), pos_integer()}
-          | {:rref, non_neg_integer(), non_neg_integer(), binary(), ref()}
-          | {:gref, binary(), ref() | nil}
+          | {:rref, non_neg_integer(), non_neg_integer(), binary(), ref(), pos()}
+          | {:gref, binary(), ref() | nil, pos()}
 
   @type ir ::
           {:const, Value.t()}
           | ref()
           | {:if, ir(), ir(), ir()}
-          | {:app, ir(), [ir()]}
+          | {:app, ir(), [ir()], pos()}
           | {:lambda, params(), {tuple(), [ir()]}, binary() | nil}
           | {:define, binary(), ir()}
           | {:define_values, params(), ir()}
@@ -106,69 +120,99 @@ defmodule Schooner.Eval.Analyze do
           | {:guard, {binary()}, [guard_clause()], [ir()]}
           | {:raise, Exception.t()}
 
-  @doc false
-  @spec analyze(Value.t()) :: ir()
-  def analyze(form), do: analyze(form, [])
+  # Local, inlined copies of the `Positions` walkers: they run for
+  # every node analysed.
+  @compile {:inline, car: 1, cdr: 1, at: 1, nth: 2}
+  defp car({:pair, _, car, _}), do: car
+  defp car(_), do: nil
+  defp cdr({:pair, _, _, cdr}), do: cdr
+  defp cdr(_), do: nil
+  defp at({:pair, pos, _, _}), do: pos
+  defp at({:atom, pos}), do: pos
+  defp at(tree), do: Pos.at(tree)
+  defp nth(t, 1), do: car(cdr(t))
+  defp nth(t, 2), do: car(cdr(cdr(t)))
+  defp nth(t, n), do: Pos.nth(t, n)
 
-  @spec analyze(Value.t(), scope()) :: ir()
-  defp analyze(form, scope) do
-    analyze_form(form, scope)
+  @doc false
+  @spec analyze(Value.t(), Pos.t()) :: ir()
+  def analyze(form, tree \\ nil), do: analyze(form, tree, [])
+
+  @spec analyze(Value.t(), Pos.t(), scope()) :: ir()
+  defp analyze(form, t, scope) do
+    analyze_form(form, t, scope)
   rescue
-    e in Error -> {:raise, e}
+    e in Error -> {:raise, locate(e, t)}
   end
 
-  defp analyze_form({:sym, name}, scope), do: resolve(name, scope)
-  defp analyze_form([], _scope), do: raise(Error, reason: :empty_application)
-  defp analyze_form([{:sym, "quote"} | tail], _scope), do: analyze_quote(tail)
-  defp analyze_form([{:sym, "if"} | tail], scope), do: analyze_if(tail, scope)
-  defp analyze_form([{:sym, "lambda"} | tail], scope), do: analyze_lambda(tail, scope)
-  defp analyze_form([{:sym, "define"} | tail], scope), do: analyze_define(tail, scope)
+  defp locate(e, t), do: Location.attach(e, Location.new(nil, at(t)))
 
-  defp analyze_form([{:sym, "define-values"} | tail], scope),
-    do: analyze_define_values(tail, scope)
+  defp analyze_form({:sym, name}, t, scope), do: resolve(name, scope, at(t))
+  defp analyze_form([], _t, _scope), do: raise(Error, reason: :empty_application)
+  defp analyze_form([{:sym, "quote"} | tail], _t, _scope), do: analyze_quote(tail)
+  defp analyze_form([{:sym, "if"} | tail], t, scope), do: analyze_if(tail, t, scope)
+  defp analyze_form([{:sym, "lambda"} | tail], t, scope), do: analyze_lambda(tail, t, scope)
+  defp analyze_form([{:sym, "define"} | tail], t, scope), do: analyze_define(tail, t, scope)
 
-  defp analyze_form([{:sym, "begin"} | tail], scope), do: {:seq, analyze_all(tail, scope)}
-  defp analyze_form([{:sym, "letrec*"} | tail], scope), do: analyze_letrec_star(tail, scope)
-  defp analyze_form([{:sym, "quasiquote"} | tail], scope), do: analyze_quasiquote(tail, scope)
-  defp analyze_form([{:sym, "guard"} | tail], scope), do: analyze_guard(tail, scope)
+  defp analyze_form([{:sym, "define-values"} | tail], t, scope),
+    do: analyze_define_values(tail, t, scope)
 
-  defp analyze_form([head | tail], scope),
-    do: {:app, analyze(head, scope), analyze_args(tail, scope)}
+  defp analyze_form([{:sym, "begin"} | tail], t, scope),
+    do: {:seq, analyze_args(tail, cdr(t), scope)}
 
-  defp analyze_form(value, _scope), do: {:const, value}
+  defp analyze_form([{:sym, "letrec*"} | tail], t, scope),
+    do: analyze_letrec_star(tail, t, scope)
 
-  defp analyze_all(forms, scope), do: Enum.map(forms, &analyze(&1, scope))
+  defp analyze_form([{:sym, "quasiquote"} | tail], t, scope),
+    do: analyze_quasiquote(tail, t, scope)
+
+  defp analyze_form([{:sym, "guard"} | tail], t, scope), do: analyze_guard(tail, t, scope)
+
+  defp analyze_form([head | tail], t, scope),
+    do: {:app, analyze(head, car(t), scope), analyze_args(tail, cdr(t), scope), at(t)}
+
+  defp analyze_form(value, _t, _scope), do: {:const, value}
 
   # The arguments before a non-list tail are still evaluated, so the
   # raise goes in the argument position after the last proper element.
-  defp analyze_args([], _scope), do: []
-  defp analyze_args([h | t], scope), do: [analyze(h, scope) | analyze_args(t, scope)]
-  defp analyze_args(_, _scope), do: [{:raise, Error.exception(reason: :improper_application)}]
+  defp analyze_args([], _t, _scope), do: []
+
+  defp analyze_args([h | rest], t, scope),
+    do: [analyze(h, car(t), scope) | analyze_args(rest, cdr(t), scope)]
+
+  defp analyze_args(_, t, _scope),
+    do: [{:raise, locate(Error.exception(reason: :improper_application), t)}]
+
+  # Pair each element of the proper list `forms` with its tree from the
+  # list's spine tree `t`.
+  defp with_trees([], _t), do: []
+  defp with_trees([h | rest], t), do: [{h, car(t)} | with_trees(rest, cdr(t))]
+  defp with_trees(_, _t), do: raise(Error, reason: {:bad_special_form, "body"})
 
   # ---------------------------------------------------------------------------
   # Variable resolution
   # ---------------------------------------------------------------------------
 
-  defp resolve(name, scope), do: resolve(name, scope, 0, scope, true)
+  defp resolve(name, scope, pos), do: resolve(name, scope, 0, scope, true, pos)
 
-  defp resolve(name, [], _depth, full, marked?) do
-    {:gref, name, if(marked?, do: marked_fallback(name, full))}
+  defp resolve(name, [], _depth, full, marked?, pos) do
+    {:gref, name, if(marked?, do: marked_fallback(name, full, pos)), pos}
   end
 
-  defp resolve(name, [{:pos, slots} | rest], depth, full, marked?) do
+  defp resolve(name, [{:pos, slots} | rest], depth, full, marked?, pos) do
     case slots do
       %{^name => index} -> {:lref, depth, index}
-      _ -> resolve(name, rest, depth + 1, full, marked?)
+      _ -> resolve(name, rest, depth + 1, full, marked?, pos)
     end
   end
 
-  defp resolve(name, [{:rec, slots} | rest], depth, full, marked?) do
+  defp resolve(name, [{:rec, slots} | rest], depth, full, marked?, pos) do
     case slots do
       %{^name => slot} ->
-        {:rref, depth, slot, name, resolve(name, rest, depth + 1, full, marked?)}
+        {:rref, depth, slot, name, resolve(name, rest, depth + 1, full, marked?, pos), pos}
 
       _ ->
-        resolve(name, rest, depth + 1, full, marked?)
+        resolve(name, rest, depth + 1, full, marked?, pos)
     end
   end
 
@@ -177,9 +221,9 @@ defmodule Schooner.Eval.Analyze do
   # unmarked base name — usually a runtime primitive like `+`. The base
   # is looked up from the top of the scope, and does not itself get a
   # second marked fallback.
-  defp marked_fallback(name, full) do
+  defp marked_fallback(name, full, pos) do
     case SyntaxRules.strip_mark(name) do
-      {:ok, base} -> resolve(base, full, 0, full, false)
+      {:ok, base} -> resolve(base, full, 0, full, false, pos)
       _ -> nil
     end
   end
@@ -199,30 +243,35 @@ defmodule Schooner.Eval.Analyze do
   defp analyze_quote([datum | []]), do: {:const, datum}
   defp analyze_quote(_), do: raise(Error, reason: {:bad_special_form, "quote"})
 
-  defp analyze_if([test | [then_e | []]], scope) do
-    {:if, analyze(test, scope), analyze(then_e, scope), {:const, :unspecified}}
+  defp analyze_if([test | [then_e | []]], t, scope) do
+    {:if, analyze(test, nth(t, 1), scope), analyze(then_e, nth(t, 2), scope),
+     {:const, :unspecified}}
   end
 
-  defp analyze_if([test | [then_e | [else_e | []]]], scope) do
-    {:if, analyze(test, scope), analyze(then_e, scope), analyze(else_e, scope)}
+  defp analyze_if([test | [then_e | [else_e | []]]], t, scope) do
+    {:if, analyze(test, nth(t, 1), scope), analyze(then_e, nth(t, 2), scope),
+     analyze(else_e, nth(t, 3), scope)}
   end
 
-  defp analyze_if(_, _scope), do: raise(Error, reason: {:bad_special_form, "if"})
+  defp analyze_if(_, _t, _scope), do: raise(Error, reason: {:bad_special_form, "if"})
 
-  defp analyze_lambda([_params_form | []], _scope) do
+  defp analyze_lambda([_params_form | []], _t, _scope) do
     raise(Error, reason: {:bad_special_form, "lambda"})
   end
 
-  defp analyze_lambda([params_form | body], scope), do: lambda(params_form, body, nil, scope)
-  defp analyze_lambda(_, _scope), do: raise(Error, reason: {:bad_special_form, "lambda"})
+  defp analyze_lambda([params_form | body], t, scope),
+    do: lambda(params_form, body, Pos.drop(t, 2), nil, scope)
+
+  defp analyze_lambda(_, _t, _scope), do: raise(Error, reason: {:bad_special_form, "lambda"})
 
   # The closure body carries the frame's names tuple alongside the
   # analysed forms so application can build the positional frame
-  # without converting the parameter list each call.
-  defp lambda(params_form, body, name, scope) do
+  # without converting the parameter list each call. `bt` is the
+  # body's spine tree.
+  defp lambda(params_form, body, bt, name, scope) do
     params = parse_params(params_form)
     {frame, names} = pos_frame(spec_names(params))
-    {:lambda, params, {names, analyze_body(body, [frame | scope])}, name}
+    {:lambda, params, {names, analyze_body(body, bt, [frame | scope])}, name}
   end
 
   defp parse_params({:sym, name}), do: {:any, name}
@@ -250,25 +299,25 @@ defmodule Schooner.Eval.Analyze do
   # define / define-values
   # ---------------------------------------------------------------------------
 
-  defp analyze_define([{:sym, name} | [expr | []]], scope) do
-    {:define, name, analyze(expr, scope)}
+  defp analyze_define([{:sym, name} | [expr | []]], t, scope) do
+    {:define, name, analyze(expr, nth(t, 2), scope)}
   end
 
-  defp analyze_define([[{:sym, _name} | _params] | []], _scope) do
+  defp analyze_define([[{:sym, _name} | _params] | []], _t, _scope) do
     raise(Error, reason: {:bad_special_form, "define"})
   end
 
-  defp analyze_define([[{:sym, name} | params_form] | body], scope) do
-    {:define, name, lambda(params_form, body, name, scope)}
+  defp analyze_define([[{:sym, name} | params_form] | body], t, scope) do
+    {:define, name, lambda(params_form, body, Pos.drop(t, 2), name, scope)}
   end
 
-  defp analyze_define(_, _scope), do: raise(Error, reason: {:bad_special_form, "define"})
+  defp analyze_define(_, _t, _scope), do: raise(Error, reason: {:bad_special_form, "define"})
 
-  defp analyze_define_values([formals | [expr | []]], scope) do
-    {:define_values, parse_define_values_formals(formals), analyze(expr, scope)}
+  defp analyze_define_values([formals | [expr | []]], t, scope) do
+    {:define_values, parse_define_values_formals(formals), analyze(expr, nth(t, 2), scope)}
   end
 
-  defp analyze_define_values(_, _scope),
+  defp analyze_define_values(_, _t, _scope),
     do: raise(Error, reason: {:bad_special_form, "define-values"})
 
   defp parse_define_values_formals(formals) do
@@ -286,26 +335,28 @@ defmodule Schooner.Eval.Analyze do
   # distinct name gets one slot (first occurrence order, matching
   # `Env.extend_rec/2`); a binding records the slot(s) it writes.
 
-  defp analyze_letrec_star([bindings_form | body], scope) when body != [] do
-    parsed = parse_bindings(bindings_form, [])
+  defp analyze_letrec_star([bindings_form | body], t, scope) when body != [] do
+    parsed = parse_bindings(bindings_form, nth(t, 1), [])
     names = parsed |> Enum.flat_map(&binding_names/1) |> Enum.uniq()
     slots = names |> Enum.with_index() |> Map.new()
     rec_scope = [{:rec, slots} | scope]
 
     bindings =
       Enum.map(parsed, fn
-        {:single, name, init} ->
-          {:single, Map.fetch!(slots, name), analyze(init, rec_scope)}
+        {:single, name, init, it} ->
+          {:single, Map.fetch!(slots, name), analyze(init, it, rec_scope)}
 
-        {:multi, spec, init} ->
+        {:multi, spec, init, it} ->
           targets = Enum.map(spec_names(spec), &Map.fetch!(slots, &1))
-          {:multi, spec, analyze(init, rec_scope), targets}
+          {:multi, spec, analyze(init, it, rec_scope), targets}
       end)
 
-    sequential_values({:letrec, names, bindings, analyze_deferred_body(body, rec_scope)})
+    body = analyze_deferred_body(body, Pos.drop(t, 2), rec_scope)
+    sequential_values({:letrec, names, bindings, body})
   end
 
-  defp analyze_letrec_star(_, _scope), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+  defp analyze_letrec_star(_, _t, _scope),
+    do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
   # `letrec*` bindings are normally `(name init)`. The body desugarer
   # emits a second internal-only shape, `{:multi_vals, params_spec}`
@@ -314,20 +365,20 @@ defmodule Schooner.Eval.Analyze do
   # elements are bound across multiple rec slots in a single step.
   # The Elixir-tagged head is unreachable from Scheme source, so the
   # surface `letrec*` syntax is unchanged.
-  defp parse_bindings([], acc), do: Enum.reverse(acc)
+  defp parse_bindings([], _t, acc), do: Enum.reverse(acc)
 
-  defp parse_bindings([[{:sym, name} | [init | []]] | rest], acc) do
-    parse_bindings(rest, [{:single, name, init} | acc])
+  defp parse_bindings([[{:sym, name} | [init | []]] | rest], t, acc) do
+    parse_bindings(rest, cdr(t), [{:single, name, init, nth(car(t), 1)} | acc])
   end
 
-  defp parse_bindings([[{:multi_vals, spec} | [init | []]] | rest], acc) do
-    parse_bindings(rest, [{:multi, spec, init} | acc])
+  defp parse_bindings([[{:multi_vals, spec} | [init | []]] | rest], t, acc) do
+    parse_bindings(rest, cdr(t), [{:multi, spec, init, nth(car(t), 1)} | acc])
   end
 
-  defp parse_bindings(_, _), do: raise(Error, reason: {:bad_special_form, "letrec*"})
+  defp parse_bindings(_, _t, _), do: raise(Error, reason: {:bad_special_form, "letrec*"})
 
-  defp binding_names({:single, name, _}), do: [name]
-  defp binding_names({:multi, spec, _}), do: spec_names(spec)
+  defp binding_names({:single, name, _, _}), do: [name]
+  defp binding_names({:multi, spec, _, _}), do: spec_names(spec)
 
   # Rewrite the candidate frame's references to positional slots when
   # every init, including its nested procedure bodies, only references
@@ -359,7 +410,7 @@ defmodule Schooner.Eval.Analyze do
 
   # Track the candidate frame through nested scopes. A reference's
   # fallback is resolved against that same scope, so it keeps `d`.
-  defp sequential_refs({:rref, d, slot, _, _}, d, ready) do
+  defp sequential_refs({:rref, d, slot, _, _, _}, d, ready) do
     if not MapSet.member?(ready, slot), do: throw(:needs_recursive_frame)
     {:lref, d, slot + 1}
   end
@@ -457,21 +508,21 @@ defmodule Schooner.Eval.Analyze do
   # counted from the same scope as the reference itself.
   defp known_all(irs, d, lam?, info), do: Enum.map(irs, &known(&1, d, lam?, info))
 
-  defp known({:app, {:rref, d, slot, _name, _fallback}, args}, d, false, info) do
+  defp known({:app, {:rref, d, slot, _name, _fallback, _pos}, args, _app_pos}, d, false, info) do
     {n, fnames} = elem(info, slot)
     if length(args) != n, do: throw(:not_known)
     {:known_call, d, slot, fnames, known_all(args, d, false, info)}
   end
 
-  defp known({:rref, d, _slot, _name, _fallback}, d, _lam?, _info), do: throw(:not_known)
+  defp known({:rref, d, _slot, _name, _fallback, _pos}, d, _lam?, _info), do: throw(:not_known)
 
-  defp known({:rref, depth, slot, name, fallback}, d, lam?, info),
-    do: {:rref, depth, slot, name, known(fallback, d, lam?, info)}
+  defp known({:rref, depth, slot, name, fallback, pos}, d, lam?, info),
+    do: {:rref, depth, slot, name, known(fallback, d, lam?, info), pos}
 
-  defp known({:gref, _name, nil} = ref, _d, _lam?, _info), do: ref
+  defp known({:gref, _name, nil, _pos} = ref, _d, _lam?, _info), do: ref
 
-  defp known({:gref, name, marked}, d, lam?, info),
-    do: {:gref, name, known(marked, d, lam?, info)}
+  defp known({:gref, name, marked, pos}, d, lam?, info),
+    do: {:gref, name, known(marked, d, lam?, info), pos}
 
   defp known({tag, _} = leaf, _d, _lam?, _info) when tag in [:const, :raise], do: leaf
   defp known({:lref, _, _} = ref, _d, _lam?, _info), do: ref
@@ -481,8 +532,8 @@ defmodule Schooner.Eval.Analyze do
       {:if, known(test, d, lam?, info), known(then_e, d, lam?, info),
        known(else_e, d, lam?, info)}
 
-  defp known({:app, head, args}, d, lam?, info),
-    do: {:app, known(head, d, lam?, info), known_all(args, d, lam?, info)}
+  defp known({:app, head, args, pos}, d, lam?, info),
+    do: {:app, known(head, d, lam?, info), known_all(args, d, lam?, info), pos}
 
   defp known({:known_call, depth, slot, fnames, args}, d, lam?, info),
     do: {:known_call, depth, slot, fnames, known_all(args, d, lam?, info)}
@@ -552,39 +603,47 @@ defmodule Schooner.Eval.Analyze do
   # `unquote-splicing` only fire at quasi level 1; nested `quasiquote`
   # raises the level, nested `unquote` lowers it.
 
-  defp analyze_quasiquote([datum | []], scope), do: {:quasi, template(datum, 1, scope)}
+  defp analyze_quasiquote([datum | []], t, scope),
+    do: {:quasi, template(datum, nth(t, 1), 1, scope)}
 
-  defp analyze_quasiquote(_, _scope),
+  defp analyze_quasiquote(_, _t, _scope),
     do: raise(Error, reason: {:bad_special_form, "quasiquote"})
 
-  defp template([{:sym, "unquote"} | [expr | []]], 1, scope), do: {:qu, analyze(expr, scope)}
+  defp template([{:sym, "unquote"} | [expr | []]], t, 1, scope),
+    do: {:qu, analyze(expr, nth(t, 1), scope)}
 
-  defp template([{:sym, "unquote"} | [expr | []]], n, scope) when n > 1 do
-    qlist([{:qc, Value.symbol("unquote")}, template(expr, n - 1, scope)])
+  defp template([{:sym, "unquote"} | [expr | []]], t, n, scope) when n > 1 do
+    qlist([{:qc, Value.symbol("unquote")}, template(expr, nth(t, 1), n - 1, scope)])
   end
 
-  defp template([{:sym, "quasiquote"} | [expr | []]], n, scope) do
-    qlist([{:qc, Value.symbol("quasiquote")}, template(expr, n + 1, scope)])
+  defp template([{:sym, "quasiquote"} | [expr | []]], t, n, scope) do
+    qlist([{:qc, Value.symbol("quasiquote")}, template(expr, nth(t, 1), n + 1, scope)])
   end
 
-  defp template([head | tail], level, scope) do
+  defp template([head | tail], t, level, scope) do
     case head do
       [{:sym, "unquote-splicing"} | [expr | []]] when level == 1 ->
-        {:qsplice, analyze(expr, scope), template(tail, level, scope)}
+        {:qsplice, analyze(expr, nth(car(t), 1), scope), template(tail, cdr(t), level, scope)}
 
       _ ->
-        qcons(template(head, level, scope), template(tail, level, scope))
+        qcons(template(head, car(t), level, scope), template(tail, cdr(t), level, scope))
     end
   end
 
-  defp template({:vector, t}, level, scope) do
-    case template(Value.list(Tuple.to_list(t)), level, scope) do
+  defp template({:vector, items}, t, level, scope) do
+    tree =
+      case t do
+        {:vector, p, trees} -> Pos.list(trees, nil, {:atom, p})
+        _ -> nil
+      end
+
+    case template(Value.list(Tuple.to_list(items)), tree, level, scope) do
       {:qc, list} -> {:qc, Value.vector(list)}
       other -> {:qvec, other}
     end
   end
 
-  defp template(other, _level, _scope), do: {:qc, other}
+  defp template(other, _t, _level, _scope), do: {:qc, other}
 
   defp qlist([]), do: {:qc, []}
   defp qlist([h | t]), do: qcons(h, qlist(t))
@@ -603,59 +662,71 @@ defmodule Schooner.Eval.Analyze do
   # guard's own scope; the clauses run in a one-slot frame binding the
   # condition variable.
 
-  defp analyze_guard([[{:sym, var} | clauses_form] | body], scope)
+  defp analyze_guard([[{:sym, var} | clauses_form] | body], t, scope)
        when is_binary(var) and body != [] do
     {frame, names} = pos_frame([var])
-    clauses = guard_clauses(clauses_form, [frame | scope])
-    {:guard, names, clauses, analyze_deferred_body(body, scope)}
+    clauses = guard_clauses(clauses_form, cdr(nth(t, 1)), t, [frame | scope])
+    {:guard, names, clauses, analyze_deferred_body(body, Pos.drop(t, 2), scope)}
   end
 
-  defp analyze_guard(_, _scope), do: raise(Error, reason: {:bad_special_form, "guard"})
+  defp analyze_guard(_, _t, _scope), do: raise(Error, reason: {:bad_special_form, "guard"})
 
-  defp guard_clauses([], _scope), do: []
+  # `ct` is the clause list's spine tree and `gt` the `guard` form's
+  # tree, where a malformed clause list is reported.
+  defp guard_clauses([], _ct, _gt, _scope), do: []
 
-  defp guard_clauses([[{:sym, "else"} | body] | _rest], scope) when body != [] do
-    [{:else, analyze_deferred_body(body, scope)}]
+  defp guard_clauses([[{:sym, "else"} | body] | _rest], ct, _gt, scope) when body != [] do
+    [{:else, analyze_deferred_body(body, cdr(car(ct)), scope)}]
   end
 
-  defp guard_clauses([clause | rest], scope),
-    do: [guard_clause(clause, scope) | guard_clauses(rest, scope)]
+  defp guard_clauses([clause | rest], ct, gt, scope),
+    do: [guard_clause(clause, car(ct), scope) | guard_clauses(rest, cdr(ct), gt, scope)]
 
-  defp guard_clauses(_, _scope), do: [bad_guard()]
+  defp guard_clauses(_, _ct, gt, _scope), do: [bad_guard(gt)]
 
-  defp guard_clause([test | []], scope), do: {:test, analyze(test, scope)}
+  defp guard_clause([test | []], t, scope), do: {:test, analyze(test, car(t), scope)}
 
-  defp guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], scope) do
-    {:arrow, analyze(test, scope), analyze(proc_expr, scope)}
+  defp guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], t, scope) do
+    {:arrow, analyze(test, car(t), scope), analyze(proc_expr, nth(t, 2), scope)}
   end
 
-  defp guard_clause([test | body], scope) when body != [] do
-    {:test_body, analyze(test, scope), analyze_deferred_body(body, scope)}
+  defp guard_clause([test | body], t, scope) when body != [] do
+    {:test_body, analyze(test, car(t), scope), analyze_deferred_body(body, cdr(t), scope)}
   end
 
-  defp guard_clause(_, _scope), do: bad_guard()
+  defp guard_clause(_, t, _scope), do: bad_guard(t)
 
-  defp bad_guard, do: {:bad, Error.exception(reason: {:bad_special_form, "guard"})}
+  defp bad_guard(t),
+    do: {:bad, locate(Error.exception(reason: {:bad_special_form, "guard"}), t)}
 
   # ---------------------------------------------------------------------------
   # Bodies
   # ---------------------------------------------------------------------------
 
   # Desugaring errors in this body fail the enclosing node (lambda,
-  # define-fn), so they surface when the closure is created.
-  defp analyze_body(body, scope), do: body |> desugar_body() |> analyze_all(scope)
+  # define-fn), so they surface when the closure is created. `bt` is the
+  # body's spine tree.
+  defp analyze_body(body, bt, scope) do
+    body
+    |> with_trees(bt)
+    |> desugar_body()
+    |> Enum.map(fn {form, t} -> analyze(form, t, scope) end)
+  end
 
   # A body whose desugaring errors surface only once the body runs.
-  defp analyze_deferred_body(body, scope) do
-    analyze_body(body, scope)
+  defp analyze_deferred_body(body, bt, scope) do
+    analyze_body(body, bt, scope)
   rescue
-    e in Error -> [{:raise, e}]
+    e in Error -> [{:raise, locate(e, bt)}]
   end
+
+  defp raise_at(reason, t), do: raise(locate(Error.exception(reason: reason), t))
 
   # r7rs §5.3.2 lets a body begin with a sequence of `define` forms
   # followed by a sequence of expressions; the defines splice into a
   # `letrec*` whose body is the rest of the forms. `desugar_body/1`
-  # performs that rewrite. Forms with no leading defines are returned
+  # performs that rewrite on `{form, tree}` pairs, placing the `letrec*`
+  # at the first definition. Forms with no leading defines are returned
   # unchanged.
   #
   # `define` after a non-define form in the same body is a syntax
@@ -671,10 +742,13 @@ defmodule Schooner.Eval.Analyze do
       {_defs, []} ->
         raise(Error, reason: :empty_body)
 
-      {defs, rest} ->
-        bindings = build_letrec_bindings(defs)
-        letrec_form = [{:sym, "letrec*"} | [bindings | rest]]
-        [letrec_form | []]
+      {[first | _] = defs, rest} ->
+        dt = elem(first, tuple_size(first) - 1)
+        {bindings, binding_trees} = defs |> Enum.map(&letrec_binding/1) |> Enum.unzip()
+        {forms, trees} = Enum.unzip(rest)
+        letrec_form = [{:sym, "letrec*"} | [bindings | forms]]
+        letrec_tree = Pos.list([car(dt), Pos.list(binding_trees, nil, dt) | trees], nil, dt)
+        [{letrec_form, letrec_tree}]
     end
   end
 
@@ -686,31 +760,32 @@ defmodule Schooner.Eval.Analyze do
   # the expander emits a `(begin (define ...) (define ...) ...)`
   # for each record type and the splicing here makes those defines
   # behave as if they were written at the body level directly.
-  defp scan_defines([[{:sym, "begin"} | inner] | rest], acc) do
-    scan_defines(splice_begin(inner, rest), acc)
+  defp scan_defines([{[{:sym, "begin"} | inner], t} | rest], acc) do
+    scan_defines(splice_begin(inner, cdr(t), rest, t), acc)
   end
 
-  defp scan_defines([form | rest], acc) do
-    case parse_internal_define(form) do
+  defp scan_defines([{form, t} | rest] = body, acc) do
+    case parse_internal_define(form, t) do
       nil ->
         check_no_more_defines(rest)
-        {Enum.reverse(acc), [form | rest]}
+        {Enum.reverse(acc), body}
 
       binding ->
         scan_defines(rest, [binding | acc])
     end
   end
 
-  defp parse_internal_define([{:sym, "define"} | body]) do
+  defp parse_internal_define([{:sym, "define"} | body], t) do
     case body do
       [{:sym, name} | [expr | []]] ->
-        {:single, name, expr}
+        {:single, name, expr, nth(t, 2), t}
 
       [[{:sym, name} | params] | body_forms] when body_forms != [] ->
-        {:single, name, [{:sym, "lambda"} | [params | body_forms]]}
+        lambda_tree = Pos.cons(car(t), Pos.cons(cdr(nth(t, 1)), Pos.drop(t, 2), t), t)
+        {:single, name, [{:sym, "lambda"} | [params | body_forms]], lambda_tree, t}
 
       _ ->
-        raise(Error, reason: {:bad_special_form, "define"})
+        raise_at({:bad_special_form, "define"}, t)
     end
   end
 
@@ -719,47 +794,47 @@ defmodule Schooner.Eval.Analyze do
   # evaluated once, and its values are spread across the formals'
   # lexical slots in lock-step — no mutation, no auxiliary tmp visible to
   # the user.
-  defp parse_internal_define([{:sym, "define-values"} | body]) do
+  defp parse_internal_define([{:sym, "define-values"} | body], t) do
     case body do
       [formals | [expr | []]] ->
-        {:multi, parse_define_values_formals(formals), expr}
+        {:multi, parse_define_values_formals(formals), expr, nth(t, 2), t}
 
       _ ->
-        raise(Error, reason: {:bad_special_form, "define-values"})
+        raise_at({:bad_special_form, "define-values"}, t)
     end
+  rescue
+    e in Error -> reraise locate(e, t), __STACKTRACE__
   end
 
-  defp parse_internal_define(_), do: nil
+  defp parse_internal_define(_, _t), do: nil
 
   defp check_no_more_defines([]), do: :ok
 
-  defp check_no_more_defines([[{:sym, "begin"} | inner] | rest]) do
-    check_no_more_defines(splice_begin(inner, rest))
+  defp check_no_more_defines([{[{:sym, "begin"} | inner], t} | rest]) do
+    check_no_more_defines(splice_begin(inner, cdr(t), rest, t))
   end
 
-  defp check_no_more_defines([form | rest]) do
-    if parse_internal_define(form) != nil do
-      raise(Error, reason: :define_after_expression)
+  defp check_no_more_defines([{form, t} | rest]) do
+    if parse_internal_define(form, t) != nil do
+      raise_at(:define_after_expression, t)
     else
       check_no_more_defines(rest)
     end
   end
 
-  defp splice_begin([], rest), do: rest
-  defp splice_begin([h | t], rest), do: [h | splice_begin(t, rest)]
-  defp splice_begin(_, _), do: raise(Error, reason: {:bad_special_form, "begin"})
+  defp splice_begin([], _it, rest, _t), do: rest
 
-  defp build_letrec_bindings([]), do: []
+  defp splice_begin([h | more], it, rest, t),
+    do: [{h, car(it)} | splice_begin(more, cdr(it), rest, t)]
 
-  defp build_letrec_bindings([{:single, name, init} | rest]) do
-    binding = [{:sym, name} | [init | []]]
-    [binding | build_letrec_bindings(rest)]
-  end
+  defp splice_begin(_, _it, _rest, t), do: raise_at({:bad_special_form, "begin"}, t)
 
-  # Emits the internal `{:multi_vals, spec}` binding head described at
-  # `parse_bindings/2`.
-  defp build_letrec_bindings([{:multi, spec, init} | rest]) do
-    binding = [{:multi_vals, spec} | [init | []]]
-    [binding | build_letrec_bindings(rest)]
-  end
+  # Each definition becomes a `letrec*` binding. A `define-values`
+  # emits the internal `{:multi_vals, spec}` binding head described at
+  # `parse_bindings/3`.
+  defp letrec_binding({:single, name, init, it, dt}),
+    do: {[{:sym, name} | [init | []]], Pos.list([nth(dt, 1), it], nil, dt)}
+
+  defp letrec_binding({:multi, spec, init, it, dt}),
+    do: {[{:multi_vals, spec} | [init | []]], Pos.list([nth(dt, 1), it], nil, dt)}
 end
