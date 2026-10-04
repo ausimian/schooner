@@ -197,8 +197,10 @@ defmodule Schooner.REPL.Input do
   defp scan([g | rest], state) when g in [")", "]"] do
     state = %{advance(state, g) | prefix: nil, comments: 0}
 
+    # Back in the list around it, the `#;` comments still pending there
+    # apply again.
     case state.stack do
-      [_ | stack] -> scan(rest, %{state | stack: stack})
+      [frame | stack] -> scan(rest, %{state | stack: stack, comments: frame.outer_comments})
       [] -> scan(rest, state)
     end
   end
@@ -243,10 +245,13 @@ defmodule Schooner.REPL.Input do
       data?: data? or quoted? or outer_data?,
       count: 0,
       head: nil,
-      first_arg: nil
+      first_arg: nil,
+      # The `#;` comments still pending in the list around this one:
+      # `#; #;(a b) c` comments out the list and then `c`.
+      outer_comments: state.comments
     }
 
-    %{advance(state, open) | stack: [frame | state.stack]}
+    %{advance(state, open) | stack: [frame | state.stack], comments: 0}
   end
 
   # Count an item starting at the current position, or at the prefix

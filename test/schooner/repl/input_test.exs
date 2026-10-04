@@ -166,6 +166,14 @@ defmodule Schooner.REPL.InputTest do
       (foo #;(a
               ^
       """,
+      """
+      (foo #; #;(a b) c
+       ^
+      """,
+      """
+      (foo #; #;(a #;b c) d
+       ^
+      """,
       # Closed lists, strings, comments and characters don't count.
       """
       (define (f x)
