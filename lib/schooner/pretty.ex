@@ -285,26 +285,25 @@ defmodule Schooner.Pretty do
 
   defp flat(value, _cx), do: Value.write_iodata(value)
 
+  # A name of the script's own that looks like a renamed one is quoted,
+  # so the two can't be confused.
   defp symbol(name, cx) do
     case SyntaxRules.split_marks(name) do
-      # A name of the script's own that looks like a renamed one is
-      # quoted, so the two can't be confused, and so is a name starting
-      # with `@`, which would not read back. Either reads back the same.
-      {_base, []} ->
-        written = Value.write_iodata({:sym, name})
-
-        if bare?(written) and
-             (String.starts_with?(name, "@") or
-                (cx.names == :marked and String.contains?(name, "·"))),
-           do: ["|", written, "|"],
-           else: written
-
-      {base, _marks} when cx.names == :plain ->
-        Value.write_iodata({:sym, base})
-
-      {base, marks} ->
-        Value.write_iodata({:sym, Enum.join([base | marks], "·")})
+      {_base, []} -> write_symbol(name, cx.names == :marked and String.contains?(name, "·"))
+      {base, _marks} when cx.names == :plain -> write_symbol(base, false)
+      {base, marks} -> write_symbol(Enum.join([base | marks], "·"), false)
     end
+  end
+
+  # `name` as `Value.write/1` writes it, quoted when `quote?` or when it
+  # starts with `@`, which would otherwise not read back (and after a
+  # `,` would read as `,@`). A quoted name reads back the same.
+  defp write_symbol(name, quote?) do
+    written = Value.write_iodata({:sym, name})
+
+    if bare?(written) and (quote? or String.starts_with?(name, "@")),
+      do: ["|", written, "|"],
+      else: written
   end
 
   defp bare?([?| | _]), do: false

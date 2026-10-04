@@ -149,6 +149,13 @@ defmodule Schooner.PrettyTest do
       end
     end
 
+    test "a renamed symbol starting with @ is quoted too" do
+      form = Value.list([{:sym, "unquote"}, marked("@foo", ["1"])])
+      assert Pretty.format(form) == ",|@foo·1|"
+      assert Pretty.format(form, names: :plain) == ",|@foo|"
+      assert read!(Pretty.format(form, names: :plain)) == read!("(unquote |@foo|)")
+    end
+
     test "only (quote x) with one datum is abbreviated" do
       assert format("(quote a b)", []) == "(quote a b)"
       assert format("(quote)", []) == "(quote)"
