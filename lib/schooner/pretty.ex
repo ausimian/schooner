@@ -253,7 +253,12 @@ defmodule Schooner.Pretty do
 
   defp indent(n), do: :binary.copy(" ", n)
 
-  defp body_count(name, args) do
+  @doc false
+  # The number of distinguished arguments of the form `(name args...)`
+  # when it is a body form (see `@body_forms`), and `nil` otherwise.
+  # `Schooner.REPL.Input` indents typed code by the same rules.
+  @spec body_count(binary(), [Value.t()]) :: non_neg_integer() | nil
+  def body_count(name, args) do
     case {SyntaxRules.split_marks(name), args} do
       # Named `let`: the name and the bindings.
       {{"let", _}, [{:sym, _} | _]} -> 2
