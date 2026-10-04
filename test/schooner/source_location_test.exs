@@ -152,6 +152,29 @@ defmodule Schooner.SourceLocationTest do
       assert at(e) == {"t.scm", 2, 3}
     end
 
+    test "an error a guard catches but does not handle keeps the raise site" do
+      e = error!("(guard (e (#f 1))\n  (error \"x\"))", debug: true)
+      assert %Schooner.Error{} = e
+      assert at(e) == {"t.scm", 2, 3}
+
+      src = "(guard (e (#f 1))\n  (raise 5))"
+      {:ok, compiled} = Schooner.compile(src, env(), file: "t.scm", debug: true)
+      assert {:error, e} = Schooner.run_compiled(compiled, env())
+      assert e.value == 5
+      assert at(e) == {"t.scm", 2, 3}
+    end
+
+    test "a guard that handles a raise still returns its value" do
+      assert {:ok, 42} =
+               Schooner.eval("(guard (e (#t (+ e 1))) (raise 41))", env(), debug: true)
+    end
+
+    test "applying a guard => clause's procedure is placed at the clause" do
+      e = error!("(guard (e\n  (#t => 1))\n  (raise 2))", debug: true)
+      assert e.reason == {:not_a_procedure, 1}
+      assert at(e) == {"t.scm", 2, 3}
+    end
+
     test "an error in a callback is placed in the callback, not at map" do
       e = error!("(map (lambda (x)\n  (car x)) '(1))", debug: true)
       assert at(e) == {"t.scm", 2, 3}

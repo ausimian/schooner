@@ -85,7 +85,7 @@ defmodule Schooner.Eval.Analyze do
   @type guard_clause ::
           {:else, [ir()]}
           | {:test, ir()}
-          | {:arrow, ir(), ir()}
+          | {:arrow, ir(), ir(), pos()}
           | {:test_body, ir(), [ir()]}
           | {:bad, Exception.t()}
 
@@ -587,8 +587,8 @@ defmodule Schooner.Eval.Analyze do
   defp known_clause({:bad, _} = bad, _d, _lam?, _info), do: bad
   defp known_clause({:test, test}, d, lam?, info), do: {:test, known(test, d, lam?, info)}
 
-  defp known_clause({:arrow, test, proc}, d, lam?, info),
-    do: {:arrow, known(test, d, lam?, info), known(proc, d, lam?, info)}
+  defp known_clause({:arrow, test, proc, pos}, d, lam?, info),
+    do: {:arrow, known(test, d, lam?, info), known(proc, d, lam?, info), pos}
 
   defp known_clause({:test_body, test, body}, d, lam?, info),
     do: {:test_body, known(test, d, lam?, info), known_all(body, d, lam?, info)}
@@ -687,7 +687,7 @@ defmodule Schooner.Eval.Analyze do
   defp guard_clause([test | []], t, scope), do: {:test, analyze(test, car(t), scope)}
 
   defp guard_clause([test | [{:sym, "=>"} | [proc_expr | []]]], t, scope) do
-    {:arrow, analyze(test, car(t), scope), analyze(proc_expr, nth(t, 2), scope)}
+    {:arrow, analyze(test, car(t), scope), analyze(proc_expr, nth(t, 2), scope), at(t)}
   end
 
   defp guard_clause([test | body], t, scope) when body != [] do

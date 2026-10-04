@@ -683,6 +683,10 @@ defmodule Schooner.Eval do
         fun.(args)
       rescue
         e -> reraise Location.attach(e, loc), __STACKTRACE__
+      catch
+        # A raise caught by a `guard` escapes as a throw; carry this
+        # call's location with it in case the guard does not handle it.
+        :throw, {:schooner_guard, tag, raised} -> throw({:schooner_guard, tag, raised, loc})
       end
     end
   end
@@ -963,15 +967,37 @@ defmodule Schooner.Eval do
       # unwound past any parameterize/handler frames between the raise
       # site and this guard.
       :throw, {:schooner_guard, ^tag, raised} ->
-        handler_env = Env.push_frame(env, {names, raised})
+        handle_raised(names, clauses, env, raised, nil)
 
-        case eval_guard_clauses(clauses, handler_env) do
-          {:matched, value} -> value
-          :no_match -> ExceptionState.raise_value(raised)
-        end
+      # In debug mode the throw also carries the raise site's location
+      # (see `apply_located/3`).
+      :throw, {:schooner_guard, ^tag, raised, loc} ->
+        handle_raised(names, clauses, env, raised, loc)
     after
       ExceptionState.restore(prev)
     end
+  end
+
+  defp handle_raised(names, clauses, env, raised, loc) do
+    handler_env = Env.push_frame(env, {names, raised})
+
+    case eval_guard_clauses(clauses, handler_env) do
+      {:matched, value} -> value
+      :no_match -> reraise_from(raised, loc)
+    end
+  end
+
+  # Re-raise a value no clause handled, keeping the original raise
+  # site's location: on the error that escapes to the host, or on the
+  # throw to an outer `guard`.
+  defp reraise_from(raised, nil), do: ExceptionState.raise_value(raised)
+
+  defp reraise_from(raised, loc) do
+    ExceptionState.raise_value(raised)
+  rescue
+    e -> reraise Location.attach(e, loc), __STACKTRACE__
+  catch
+    :throw, {:schooner_guard, tag, value} -> throw({:schooner_guard, tag, value, loc})
   end
 
   defp build_guard_handler(tag) do
@@ -987,8 +1013,10 @@ defmodule Schooner.Eval do
 
   defp compile_guard_clause({:test, test}, cx), do: {:test, comp(test, cx)}
 
-  defp compile_guard_clause({:arrow, test, proc_expr}, cx),
-    do: {:arrow, comp(test, cx), comp(proc_expr, cx)}
+  # In debug mode the clause keeps its location, so applying its
+  # procedure is located like any other application.
+  defp compile_guard_clause({:arrow, test, proc_expr, pos}, cx),
+    do: {:arrow, comp(test, cx), comp(proc_expr, cx), if(cx.debug, do: loc(cx, pos))}
 
   defp compile_guard_clause({:test_body, test, body}, cx),
     do: {:test_body, comp(test, cx), compile_body(body, cx)}
@@ -1011,14 +1039,14 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard_clause({:arrow, test, proc_expr}, env) do
+  defp eval_guard_clause({:arrow, test, proc_expr, loc}, env) do
     case test.(env) do
       false ->
         :no_match
 
       val ->
         proc = proc_expr.(env)
-        {:matched, apply_proc(proc, [val])}
+        {:matched, if(loc, do: apply_located(proc, [val], loc), else: apply_proc(proc, [val]))}
     end
   end
 
