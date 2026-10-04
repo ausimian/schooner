@@ -75,6 +75,9 @@
   introduces are printed with a number, as `tmp·1`, so they can be
   told apart from the script's own; `names: :plain` prints them
   without it.
+- `mix schooner.expand <file | -e source>` prints a script's
+  expansion, with `--once`, `--trace`, `--plain`, `--width` and the
+  same `--env` resolution as `mix schooner.check`.
 - `Schooner.Debug.library/1` builds `(schooner debug)`, an opt-in
   library for print debugging. Its `(trace label expr)` sends
   `label: value` to a sink and returns the value unchanged, including

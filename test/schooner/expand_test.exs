@@ -312,4 +312,36 @@ defmodule Schooner.ExpandTest do
                Schooner.eval("char-upcase", environment)
     end
   end
+
+  describe "guides/tooling.md" do
+    @guide File.read!("guides/tooling.md")
+
+    defp section, do: hd(Regex.run(~r/## Inspecting macro expansion\n.*?(?=\n## )/s, @guide))
+
+    test "marks the section available" do
+      assert section() =~ "**Status: Available** ([#140]"
+
+      assert @guide =~
+               "| 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Available |"
+    end
+
+    test "the expand/3 example" do
+      [_, call, expected] =
+        Regex.run(
+          ~r/```elixir\n(\{:ok, \[form\]\} = Schooner\.expand.*?)\n# (.*?)\n```/s,
+          section()
+        )
+
+      call =
+        call
+        |> String.replace(
+          "MyApp.Scripts.environment()",
+          "Schooner.Environment.new(pre_imports: [[\"scheme\", \"base\"]])"
+        )
+        |> String.replace("IO.puts(", "(")
+
+      {printed, _} = Code.eval_string(call)
+      assert printed == expected
+    end
+  end
 end
