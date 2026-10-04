@@ -122,7 +122,17 @@ defmodule Schooner.REPL.Input do
   # than the lexer: anything that isn't a delimiter, a string, a
   # comment or a `|...|` identifier is an atom.
   defp scan(text) do
-    state = %{line: 0, column: 0, mode: :code, depth: 0, stack: [], prefix: nil, comments: 0}
+    state = %{
+      line: 0,
+      column: 0,
+      mode: :code,
+      depth: 0,
+      stack: [],
+      prefix: nil,
+      comments: 0,
+      held_prefix: nil
+    }
+
     text |> String.graphemes() |> scan(state)
   end
 
@@ -182,7 +192,7 @@ defmodule Schooner.REPL.Input do
 
   # A datum comment: the next datum isn't an item. They can stack.
   defp scan(["#", ";" | rest], state),
-    do: scan(rest, %{advance(state, "#;") | comments: state.comments + 1})
+    do: scan(rest, state |> hold_prefix() |> advance("#;"))
 
   defp scan(["#", "\\", char | rest], state) do
     {atom, rest} = Enum.split_while(rest, &(not delimiter?(&1)))
@@ -198,12 +208,12 @@ defmodule Schooner.REPL.Input do
   defp scan([g | rest], state) when g in ["(", "["], do: scan(rest, open(state, g, false))
 
   defp scan([g | rest], state) when g in [")", "]"] do
-    state = %{advance(state, g) | prefix: nil, comments: 0}
+    state = %{advance(state, g) | prefix: nil, comments: 0, held_prefix: nil}
 
     # Back in the list around it, the `#;` comments still pending there
     # apply again.
     case state.stack do
-      [frame | stack] -> scan(rest, %{state | stack: stack, comments: frame.outer_comments})
+      [frame | stack] -> scan(rest, %{state | stack: stack} |> Map.merge(frame.outer))
       [] -> scan(rest, state)
     end
   end
@@ -249,18 +259,30 @@ defmodule Schooner.REPL.Input do
       count: 0,
       head: nil,
       first_arg: nil,
-      # The `#;` comments still pending in the list around this one:
-      # `#; #;(a b) c` comments out the list and then `c`.
-      outer_comments: state.comments
+      # What is still pending in the list around this one, for when it
+      # closes: `#;` comments (`#; #;(a b) c` comments out the list and
+      # then `c`), and a prefix one of them interrupted.
+      outer: Map.take(state, [:prefix, :comments, :held_prefix])
     }
 
-    %{advance(state, open) | stack: [frame | state.stack], comments: 0}
+    %{
+      advance(state, open)
+      | stack: [frame | state.stack],
+        prefix: nil,
+        comments: 0,
+        held_prefix: nil
+    }
   end
 
   # Count an item starting at the current position, or at the prefix
   # (`'`, `,`, ...) in front of it, in the innermost open list. A datum
-  # a `#;` comments out isn't counted.
-  defp item(%{comments: comments} = state, _symbol) when comments > 0,
+  # a `#;` comments out isn't counted, and its own prefix goes with it.
+  # After the last one, the prefix the comments interrupted applies to
+  # the next datum, as in `'#;x (a b)`.
+  defp item(%{comments: 1} = state, _symbol),
+    do: %{state | prefix: state.held_prefix, comments: 0, held_prefix: nil}
+
+  defp item(%{comments: comments} = state, _symbol) when comments > 1,
     do: %{state | prefix: nil, comments: comments - 1}
 
   defp item(%{stack: []} = state, _symbol), do: %{state | prefix: nil}
@@ -292,6 +314,13 @@ defmodule Schooner.REPL.Input do
     do: %{state | prefix: {state.line, state.column, quoted?}}
 
   defp prefix(state, _quoted?), do: state
+
+  # A `#;`: hold a pending prefix until the datums it comments out are
+  # skipped.
+  defp hold_prefix(%{comments: 0} = state),
+    do: %{state | comments: 1, held_prefix: state.prefix, prefix: nil}
+
+  defp hold_prefix(state), do: %{state | comments: state.comments + 1, prefix: nil}
 
   defp advance(state, text) do
     if newline?(text),

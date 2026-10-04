@@ -175,6 +175,20 @@ defmodule Schooner.REPL.InputTest do
       (foo #; #;(a #;b c) d
        ^
       """,
+      # A prefix before a `#;` applies to the datum after the comment,
+      # and one after it goes with the datum commented out.
+      """
+      (foo '#;x (a b
+                 ^
+      """,
+      """
+      (foo '#;(x y) (a b
+                     ^
+      """,
+      """
+      (foo #;'x (a b
+                   ^
+      """,
       # A `#\` the newline completes leaves the next line's columns as
       # they are.
       "(foo #\\\n(bar baz\n     ^\n",
