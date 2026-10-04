@@ -88,6 +88,16 @@ defmodule Schooner.Eval do
 
   @rec_uninitialised Env.rec_uninitialised()
   @unbound Env.unbound()
+  @call_site :"$schooner_call_site"
+
+  @doc false
+  # A constant that macros pass as the first argument of a call they
+  # build when the procedure needs to know where it was called from, as
+  # `Schooner.Debug`'s do. `compile/3` replaces it with the call's
+  # location (or `nil` when locations are off), so it costs nothing at
+  # run time. It is not a Scheme value and never reaches a script.
+  @spec call_site() :: atom()
+  def call_site, do: @call_site
 
   @doc """
   Coerce a multi-value to a single value. Auto-unwraps a 1-element
@@ -230,6 +240,9 @@ defmodule Schooner.Eval do
       end
     end
   end
+
+  defp comp({:app, head, [{:const, @call_site} | args], pos}, cx),
+    do: comp({:app, head, [{:const, loc(cx, pos)} | args], pos}, cx)
 
   # A two-argument call through an unmarked global named like one of
   # the inlined arithmetic or comparison primitives. The global's cell
@@ -983,16 +996,19 @@ defmodule Schooner.Eval do
 
     case eval_guard_clauses(clauses, handler_env) do
       {:matched, value} -> value
-      :no_match -> reraise_from(raised, loc)
+      :no_match -> raise_located(raised, loc)
     end
   end
 
-  # Re-raise a value no clause handled, keeping the original raise
-  # site's location: on the error that escapes to the host, or on the
-  # throw to an outer `guard`.
-  defp reraise_from(raised, nil), do: ExceptionState.raise_value(raised)
+  @doc false
+  # Raise `raised` through the Scheme handlers, as `raise` does, placing
+  # it at `loc`: on the error that escapes to the host, or on the throw
+  # to an outer `guard`. A `guard` re-raises a value no clause handled
+  # this way to keep the original raise site's location.
+  @spec raise_located(Value.t(), Location.t() | nil) :: no_return()
+  def raise_located(raised, nil), do: ExceptionState.raise_value(raised)
 
-  defp reraise_from(raised, loc) do
+  def raise_located(raised, loc) do
     ExceptionState.raise_value(raised)
   rescue
     e -> reraise Location.attach(e, loc), __STACKTRACE__

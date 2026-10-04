@@ -2,7 +2,8 @@ defmodule Schooner.Primitive.Error do
   @moduledoc """
   Exception raised by built-in primitives for domain-specific failures:
   type errors, division by zero, out-of-range indices and sizes,
-  improper lists, and results Schooner cannot represent.
+  improper lists, results Schooner cannot represent, and a
+  `Schooner.Debug` sink that fails.
 
   Kept distinct from `Schooner.Eval.Error` because primitives report a
   different vocabulary of failures than the evaluator. Tests can match
@@ -91,5 +92,9 @@ defmodule Schooner.Primitive.Error do
 
   defp format({:invalid_radix_for_inexact, op}) do
     "`#{op}`: only radix 10 is supported for inexact numbers"
+  end
+
+  defp format({:debug_sink, op, banner}) do
+    "the debug sink failed in `#{op}`: #{banner}"
   end
 end

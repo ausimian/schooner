@@ -45,6 +45,17 @@
   the environment with `--env Mod.fun` or
   `config :schooner, :tooling_environment, {Mod, :fun, args}`;
   without either, every standard library is imported.
+- `Schooner.Debug.library/1` builds `(schooner debug)`, an opt-in
+  library for print debugging. Its `(trace label expr)` sends
+  `label: value` to a sink and returns the value unchanged, including
+  multiple values; `(print obj ...)` sends its arguments' `display`
+  text; and `(assert expr)` or `(assert expr message)` raises an
+  error, catchable with `guard`, whose message quotes the source of
+  `expr`. The `:sink` is `{:logger, level}`, a pid, or a 1-arity
+  function, and each message comes with the location of the form
+  that sent it. Like `(scheme time)`, the library is not in the
+  default registry, so a script can only import it when the embedder
+  passes it to `Schooner.Environment.new/1`.
 - `Schooner.eval/3` and `Schooner.eval!/3` accept a
   `Schooner.Environment` as well as a `Schooner.Env`.
   `Schooner.compile/3`, `Schooner.compile!/3`, and
