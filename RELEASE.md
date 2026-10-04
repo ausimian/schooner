@@ -124,3 +124,5 @@
 ### Fixed
 
 - The README quick example now uses Elixir syntax highlighting on GitHub.
+- Large scripts compile faster: the lexer no longer copies the remaining
+  source after every identifier, number or character literal.
