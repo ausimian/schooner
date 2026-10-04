@@ -7,7 +7,10 @@ defmodule Schooner.REPL.Cells do
   # code up by them.
   #
   # A wide grapheme (East Asian wide and fullwidth characters, and most
-  # emoji) takes two cells, and any other one. A tab, which only a paste
+  # emoji) takes two cells, and any other one. The ranges are the
+  # common ones, not the whole Unicode East Asian Width table, so a
+  # rarer wide character, or an emoji written as a narrow character and
+  # a variation selector, counts as one. A tab, which only a paste
   # inserts, takes the cells up to the next tab stop, every eight cells
   # from the left of the screen. The editor shows it as those spaces, so
   # the count holds whatever tab stops the terminal has.
@@ -27,8 +30,12 @@ defmodule Schooner.REPL.Cells do
     0xFE30..0xFE4F,
     0xFF00..0xFF60,
     0xFFE0..0xFFE6,
+    # Regional indicators, which pair up as flags.
+    0x1F1E6..0x1F1FF,
     0x1F300..0x1F64F,
+    0x1F680..0x1F6FF,
     0x1F900..0x1F9FF,
+    0x1FA00..0x1FAFF,
     0x20000..0x3FFFD
   ]
 

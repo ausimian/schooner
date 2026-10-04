@@ -257,6 +257,11 @@ defmodule Schooner.REPL.EditorTest do
 
       {_, editor} = type(new(), "界界", 12)
       assert editor.screen_row == 1
+
+      for emoji <- ["🇺🇸", "🚀", "🫠"] do
+        {:continue, _editor, output} = Editor.key(new(), emoji, 80)
+        assert IO.iodata_to_binary(output) =~ "\r\e[12C"
+      end
     end
 
     test "shows a pasted tab as spaces to the next tab stop, and counts them" do
