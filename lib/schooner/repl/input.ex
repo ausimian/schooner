@@ -186,7 +186,8 @@ defmodule Schooner.REPL.Input do
 
   defp scan(["#", "\\", char | rest], state) do
     {atom, rest} = Enum.split_while(rest, &(not delimiter?(&1)))
-    state = state |> item(nil) |> advance("#\\" <> char <> Enum.join(atom))
+    # The character may be a newline, which starts a line.
+    state = state |> item(nil) |> advance("#\\") |> advance(char) |> advance(Enum.join(atom))
     scan(rest, state)
   end
 

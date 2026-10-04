@@ -175,6 +175,9 @@ defmodule Schooner.REPL.InputTest do
       (foo #; #;(a #;b c) d
        ^
       """,
+      # A `#\` the newline completes leaves the next line's columns as
+      # they are.
+      "(foo #\\\n(bar baz\n     ^\n",
       # Closed lists, strings, comments and characters don't count.
       """
       (define (f x)
