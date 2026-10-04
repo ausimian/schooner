@@ -25,7 +25,8 @@ defmodule Schooner.REPL.InputTest do
             "'",
             "`(a ,",
             "(a .",
-            "(f #\\( "
+            "(f #\\( ",
+            "(write-char #\\"
           ] do
         refute Input.complete?(text), inspect(text)
       end

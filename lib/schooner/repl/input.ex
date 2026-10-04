@@ -31,6 +31,8 @@ defmodule Schooner.REPL.Input do
     :unterminated_string,
     :unterminated_block_comment,
     :unterminated_bar_identifier,
+    # `#\` at the end: the newline that follows completes it.
+    :unterminated_char_literal,
     :datum_comment_at_eof
   ]
 
