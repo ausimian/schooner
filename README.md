@@ -97,3 +97,9 @@ runnable example and a workaround.
 | Libraries shipped (opt-in)   | `(scheme time)` via `Schooner.Time` — embedders pass `Schooner.Time.library()` to `Schooner.Environment.new/1`. Not in the default registry so the sandbox stays pure unless wall-clock access is deliberately granted. Also a worked example of the embeddable-library pattern (see [Host Functions](guides/host-functions.md)). |
 | Libraries omitted            | `(scheme file)`, `(scheme load)`, `(scheme repl)`, `(scheme process-context)`, `(scheme eval)`, `(scheme r5rs)`.                                          |
 | I/O                          | No file ports, no string ports beyond what `(scheme read)` needs internally, no `read-line`. `display` / `write` / `newline` / `write-string` are present in the string-port flavour: they return the rendered text instead of writing to a port. |
+
+## Tooling
+
+The [Tooling](guides/tooling.md) guide covers writing, checking and
+debugging scripts: error locations, a static checker, tracing,
+backtraces, a REPL and a macro expander.

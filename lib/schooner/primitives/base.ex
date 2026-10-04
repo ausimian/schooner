@@ -1392,6 +1392,13 @@ defmodule Schooner.Primitives.Base do
   defp split_heads_tails([[h | t] | r], hs, ts),
     do: split_heads_tails(r, [h | hs], [t | ts])
 
+  @doc false
+  # True for the primitives that tail-call a Scheme procedure, `apply`
+  # and `call-with-values`. `Schooner.Eval` calls these without a `try`
+  # in debug mode so that the tail call stays proper.
+  @spec tail_calls_scheme?(fun()) :: boolean()
+  def tail_calls_scheme?(fun), do: fun === (&apply_/1) or fun === (&call_with_values_proc/1)
+
   # r7rs §6.10: `(apply proc arg1 ... argn list)`. The leading args are
   # passed positionally, the trailing list is spliced. The tail call to
   # `Eval.apply_proc/2` keeps the proper-tail-call invariant intact —

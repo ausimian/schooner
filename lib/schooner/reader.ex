@@ -362,7 +362,7 @@ defmodule Schooner.Reader do
     case skip_datum_comments(tokens) do
       [{:rparen, _, _} | rest] ->
         datum = Value.list(Enum.reverse(dacc))
-        pos_tree = build_list_pos(Enum.reverse(pacc), {:atom, start}, start)
+        pos_tree = build_list_pos(pacc, {:atom, start}, start)
         {datum, pos_tree, rest}
 
       [{:dot, _, dot_pos} | rest] ->
@@ -391,7 +391,7 @@ defmodule Schooner.Reader do
         case skip_datum_comments(rest) do
           [{:rparen, _, _} | rest2] ->
             datum = Value.improper_list(Enum.reverse(dacc), tail)
-            pos_tree = build_list_pos(Enum.reverse(pacc), tail_pos, start)
+            pos_tree = build_list_pos(pacc, tail_pos, start)
             {datum, pos_tree, rest2}
 
           [{_, _, pos} | _] ->
@@ -403,11 +403,12 @@ defmodule Schooner.Reader do
     end
   end
 
+  # `pacc` holds the element trees last first, so folding over it
+  # builds the spine from the tail outwards.
   defp build_list_pos([], tail_pos, _start), do: tail_pos
 
-  defp build_list_pos([head | rest], tail_pos, start) do
-    {:pair, start, head, build_list_pos(rest, tail_pos, start)}
-  end
+  defp build_list_pos([head | rest], tail_pos, start),
+    do: build_list_pos(rest, {:pair, start, head, tail_pos}, start)
 
   defp read_vector_pos(tokens, start), do: do_read_vector_pos(tokens, [], [], start)
 

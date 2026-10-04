@@ -68,6 +68,7 @@ defmodule Schooner.MixProject do
         "guides/host-functions.md",
         "guides/sandbox.md",
         "guides/deviations.md",
+        "guides/tooling.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -83,7 +84,18 @@ defmodule Schooner.MixProject do
           Schooner.Value,
           Schooner.Env,
           Schooner.Library,
+          Schooner.Library.Loader,
           Schooner.Time
+        ],
+        Tooling: [
+          Schooner.Debug,
+          Schooner.Diagnostic,
+          Schooner.Frame,
+          Schooner.Pretty,
+          Schooner.Session,
+          Mix.Tasks.Schooner.Check,
+          Mix.Tasks.Schooner.Expand,
+          Mix.Tasks.Schooner.Repl
         ],
         Errors: [
           Schooner.Error,
@@ -107,19 +119,29 @@ defmodule Schooner.MixProject do
                     Schooner,
                     Schooner.Environment,
                     Schooner.Compiled,
+                    Schooner.Debug,
+                    Schooner.Diagnostic,
+                    Schooner.Frame,
                     Schooner.Host,
                     Schooner.Host.TypeError,
                     Schooner.Value,
                     Schooner.Env,
                     Schooner.Library,
+                    Schooner.Library.Loader,
                     Schooner.Library.NotFoundError,
+                    Schooner.Location,
+                    Schooner.Pretty,
+                    Schooner.Session,
                     Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
                     Schooner.Primitive.Error,
                     Schooner.Lexer.Error,
                     Schooner.Reader.Error,
-                    Schooner.Expander.Error
+                    Schooner.Expander.Error,
+                    Mix.Tasks.Schooner.Check,
+                    Mix.Tasks.Schooner.Expand,
+                    Mix.Tasks.Schooner.Repl
                   ])
 
   defp public_module?(module, _metadata), do: MapSet.member?(@public_modules, module)

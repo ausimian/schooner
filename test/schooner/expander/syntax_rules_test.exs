@@ -25,7 +25,7 @@ defmodule Schooner.Expander.SyntaxRulesTest do
     datum
   end
 
-  defp expand(transformer, source), do: transformer.(form(source))
+  defp expand(transformer, source), do: transformer.(form(source), nil) |> elem(0)
 
   defp unmark({:sym, name}) do
     case SyntaxRules.strip_mark(name) do

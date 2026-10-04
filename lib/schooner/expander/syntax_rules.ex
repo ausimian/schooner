@@ -56,10 +56,19 @@ defmodule Schooner.Expander.SyntaxRules do
   introduced binders such as the `t` in `(let ((t e1)) ...)` keep
   the mark through both the binding and reference sites, which is
   what makes the macro hygienic.
+
+  ## Positions
+
+  A transformer takes the macro use and its `Schooner.Reader` position
+  tree (or `nil`) and returns the expansion with a tree for it. Pattern
+  variables are bound to `{form, tree}`, so each substituted sub-form
+  keeps its own tree, and every node the template introduces is placed
+  at the macro use.
   """
 
   alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Expander.Error
+  alias Schooner.Expander.Positions, as: Pos
   alias Schooner.Value
 
   @ellipsis "..."
@@ -73,25 +82,34 @@ defmodule Schooner.Expander.SyntaxRules do
   ))
 
   @doc """
-  Compile a `syntax-rules` form into a transformer of arity 1 (the
-  form being expanded) → expanded form.
+  Compile a `syntax-rules` form into a transformer of arity 2: the form
+  being expanded and its position tree (or `nil`) → the expanded form
+  and its position tree.
 
   The transformer raises `Schooner.Eval.Error` with reason
   `{:bad_special_form, name}` if no rule matches the supplied form:
   the same error a malformed core special form produces.
   """
-  @spec compile(Value.t()) :: (Value.t() -> Value.t())
+  @spec compile(Value.t()) :: (Value.t(), Pos.t() -> {Value.t(), Pos.t()})
   def compile([{:sym, "syntax-rules"} | tail]) do
     {literals, rules_form} = parse_spec_head(tail)
     rules = parse_rules(rules_form, literals)
 
-    fn form ->
+    fn form, tree ->
       mark = :erlang.unique_integer([:positive])
-      dispatch(rules, form, mark)
+      dispatch(rules, form, tree, mark)
     end
   end
 
   def compile(_), do: raise(Error, reason: {:bad_syntax, "syntax-rules"})
+
+  # Local, inlined copies of `Positions.car/1` and `Positions.cdr/1`:
+  # these run for every element of every form expanded.
+  @compile {:inline, car: 1, cdr: 1}
+  defp car({:pair, _, car, _}), do: car
+  defp car(_), do: nil
+  defp cdr({:pair, _, _, cdr}), do: cdr
+  defp cdr(_), do: nil
 
   @doc """
   If `name` carries a hygiene mark, return `{:ok, base_name}` with the
@@ -112,6 +130,78 @@ defmodule Schooner.Expander.SyntaxRules do
       _ ->
         [base, _mark] = :binary.split(name, @mark_separator)
         {:ok, base}
+    end
+  end
+
+  @doc false
+  # Split a name into its base name and its marks, oldest first: `[]`
+  # for an unmarked name, and more than one for an identifier a macro
+  # introduced into the output of another macro's template. A mark is
+  # a separator followed by digits at the end of the name, so a NUL
+  # the script wrote itself (`|a\x0;b|`) is left in the base name.
+  @spec split_marks(binary()) :: {binary(), [binary()]}
+  def split_marks(name) when is_binary(name) do
+    [first | segments] = :binary.split(name, @mark_separator, [:global])
+    {marks, rest} = segments |> Enum.reverse() |> Enum.split_while(&mark?/1)
+    {Enum.join([first | Enum.reverse(rest)], @mark_separator), Enum.reverse(marks)}
+  end
+
+  defp mark?(<<_, _::binary>> = segment),
+    do: for(<<c <- segment>>, do: c in ?0..?9) |> Enum.all?()
+
+  defp mark?(_segment), do: false
+
+  @doc false
+  # Renumber the hygiene marks in `values` 1, 2, 3, ... in the order
+  # they first appear, walking each value depth first, so expansions
+  # print the same on every run. A mark keeps its number across all of
+  # `values`, so identifiers that were the same stay the same, and
+  # different ones stay different.
+  @spec renumber_marks([Value.t()]) :: [Value.t()]
+  def renumber_marks(values) when is_list(values) do
+    {values, _numbers} = Enum.map_reduce(values, %{}, &renumber/2)
+    values
+  end
+
+  defp renumber({:sym, name} = sym, numbers) do
+    case split_marks(name) do
+      {_base, []} ->
+        {sym, numbers}
+
+      {base, marks} ->
+        {marks, numbers} = Enum.map_reduce(marks, numbers, &renumber_mark/2)
+        {{:sym, Enum.reduce(marks, base, &mark_name(&2, &1))}, numbers}
+    end
+  end
+
+  defp renumber([h | t], numbers) do
+    {h, numbers} = renumber(h, numbers)
+    {t, numbers} = renumber(t, numbers)
+    {[h | t], numbers}
+  end
+
+  defp renumber({:vector, items}, numbers) do
+    {items, numbers} = items |> Tuple.to_list() |> Enum.map_reduce(numbers, &renumber/2)
+    {{:vector, List.to_tuple(items)}, numbers}
+  end
+
+  # An expanded `define-record-type` embeds its type's name, renamed
+  # like the definitions when a macro introduced it.
+  defp renumber({:record_type, name, id}, numbers) do
+    {{:sym, name}, numbers} = renumber({:sym, name}, numbers)
+    {{:record_type, name, id}, numbers}
+  end
+
+  defp renumber(other, numbers), do: {other, numbers}
+
+  defp renumber_mark(mark, numbers) do
+    case numbers do
+      %{^mark => n} ->
+        {n, numbers}
+
+      _ ->
+        n = map_size(numbers) + 1
+        {n, Map.put(numbers, mark, n)}
     end
   end
 
@@ -396,7 +486,7 @@ defmodule Schooner.Expander.SyntaxRules do
   # Dispatch — try each rule in order
   # ---------------------------------------------------------------------------
 
-  defp dispatch([], form, _mark) do
+  defp dispatch([], form, _tree, _mark) do
     # A use that matches no rule raises the same `Schooner.Eval.Error`
     # `{:bad_special_form, name}` as a malformed core special form, so
     # a malformed `let` and a malformed `if` fail the same way even
@@ -404,12 +494,18 @@ defmodule Schooner.Expander.SyntaxRules do
     raise EvalError, reason: {:bad_special_form, form_keyword(form)}
   end
 
-  defp dispatch([{cpat, ctmpl} | rest], form, mark) do
-    case match(cpat, form, %{}) do
-      {:ok, env} -> instantiate(ctmpl, env, mark)
-      :no_match -> dispatch(rest, form, mark)
+  defp dispatch([{cpat, ctmpl} | rest], form, tree, mark) do
+    case match(cpat, form, tree, %{}) do
+      {:ok, env} -> instantiate(ctmpl, env, mark, leaf(tree))
+      :no_match -> dispatch(rest, form, tree, mark)
     end
   end
+
+  # The tree of every leaf the template introduces: one shared term at
+  # the macro use's position, or `nil` when the use has no tree, in
+  # which case no trees are built at all.
+  defp leaf(nil), do: nil
+  defp leaf(tree), do: {:atom, Pos.at(tree)}
 
   defp form_keyword([{:sym, name} | _]), do: name
   defp form_keyword(_), do: "<form>"
@@ -418,79 +514,85 @@ defmodule Schooner.Expander.SyntaxRules do
   # Pattern matching
   # ---------------------------------------------------------------------------
 
-  defp match(:wild, _input, env), do: {:ok, env}
+  # `tree` is the input's position tree, walked alongside it so that
+  # each pattern variable is bound to `{form, tree}`.
+  defp match(:wild, _input, _tree, env), do: {:ok, env}
 
   # `[]` shows up both as a compiled pattern (from a `()` literal)
   # and as the "no dotted tail" sentinel inside a `{:list, _, []}`
   # term. In either reading the matching rule is the same: only
   # the empty list satisfies it.
-  defp match([], [], env), do: {:ok, env}
-  defp match([], _, _), do: :no_match
+  defp match([], [], _tree, env), do: {:ok, env}
+  defp match([], _, _tree, _), do: :no_match
 
-  defp match({:literal, name}, {:sym, sym}, env) do
+  defp match({:literal, name}, {:sym, sym}, _tree, env) do
     if same_identifier?(sym, name), do: {:ok, env}, else: :no_match
   end
 
-  defp match({:literal, _}, _, _), do: :no_match
+  defp match({:literal, _}, _, _tree, _), do: :no_match
 
-  defp match({:pvar, name, _depth}, input, env) do
-    {:ok, Map.put(env, name, input)}
+  defp match({:pvar, name, _depth}, input, tree, env) do
+    {:ok, Map.put(env, name, {input, tree})}
   end
 
-  defp match({:const, v}, input, env) do
+  defp match({:const, v}, input, _tree, env) do
     if Value.equal?(v, input), do: {:ok, env}, else: :no_match
   end
 
-  defp match({:list, head_pats, tail_pat}, input, env) do
-    case match_each(head_pats, input, env) do
-      {:ok, env2, rest} -> match(tail_pat, rest, env2)
+  defp match({:list, head_pats, tail_pat}, input, tree, env) do
+    case match_each(head_pats, input, tree, env) do
+      {:ok, env2, rest, rest_tree} -> match(tail_pat, rest, rest_tree, env2)
       :no_match -> :no_match
     end
   end
 
-  defp match({:list_ell, pre, ell, post, tail}, input, env) do
-    match_list_ell(pre, ell, post, tail, input, env)
+  defp match({:list_ell, pre, ell, post, tail}, input, tree, env) do
+    match_list_ell(pre, ell, post, tail, input, tree, env)
   end
 
-  defp match({:vector, items}, {:vector, t}, env) do
+  defp match({:vector, items}, {:vector, t}, tree, env) do
     list = Value.list(Tuple.to_list(t))
 
-    case match_each(items, list, env) do
-      {:ok, env2, []} -> {:ok, env2}
+    case match_each(items, list, vector_tree(tree), env) do
+      {:ok, env2, [], _} -> {:ok, env2}
       _ -> :no_match
     end
   end
 
-  defp match({:vector_ell, pre, ell, post}, {:vector, t}, env) do
+  defp match({:vector_ell, pre, ell, post}, {:vector, t}, tree, env) do
     list = Value.list(Tuple.to_list(t))
-    match_list_ell(pre, ell, post, [], list, env)
+    match_list_ell(pre, ell, post, [], list, vector_tree(tree), env)
   end
 
-  defp match(_, _, _), do: :no_match
+  defp match(_, _, _, _), do: :no_match
 
-  defp match_each([], rest, env), do: {:ok, env, rest}
+  # A vector's items are matched as a list, so walk them as one.
+  defp vector_tree({:vector, pos, trees}), do: Pos.list(trees, nil, {:atom, pos})
+  defp vector_tree(_), do: nil
 
-  defp match_each([p | rest_pats], [h | t], env) do
-    case match(p, h, env) do
-      {:ok, env2} -> match_each(rest_pats, t, env2)
+  defp match_each([], rest, tree, env), do: {:ok, env, rest, tree}
+
+  defp match_each([p | rest_pats], [h | t], tree, env) do
+    case match(p, h, car(tree), env) do
+      {:ok, env2} -> match_each(rest_pats, t, cdr(tree), env2)
       :no_match -> :no_match
     end
   end
 
-  defp match_each(_, _, _), do: :no_match
+  defp match_each(_, _, _, _), do: :no_match
 
-  defp match_list_ell(pre_pats, ell_pat, post_pats, tail_pat, input, env) do
-    case match_each(pre_pats, input, env) do
-      {:ok, env2, rest_after_pre} ->
-        match_after_pre(ell_pat, post_pats, tail_pat, rest_after_pre, env2)
+  defp match_list_ell(pre_pats, ell_pat, post_pats, tail_pat, input, tree, env) do
+    case match_each(pre_pats, input, tree, env) do
+      {:ok, env2, rest_after_pre, rest_tree} ->
+        match_after_pre(ell_pat, post_pats, tail_pat, rest_after_pre, rest_tree, env2)
 
       :no_match ->
         :no_match
     end
   end
 
-  defp match_after_pre(ell_pat, post_pats, tail_pat, input, env) do
-    {items, tail_input} = collect_proper(input)
+  defp match_after_pre(ell_pat, post_pats, tail_pat, input, tree, env) do
+    {items, tail_input, tail_tree} = collect_proper(input, tree)
     num_post = length(post_pats)
     num_items = length(items)
 
@@ -501,9 +603,10 @@ defmodule Schooner.Expander.SyntaxRules do
 
       with {:ok, ell_bindings} <- match_ellipsis(ell_pat, ell_items),
            env2 <- merge_bindings(env, ell_bindings),
-           rest_form <- list_with_tail(post_items, tail_input),
-           {:ok, env3, leftover} <- match_each(post_pats, rest_form, env2),
-           {:ok, env4} <- match(tail_pat, leftover, env3) do
+           {rest_form, rest_tree} <- items_with_tail(post_items, tail_input, tail_tree, tree),
+           {:ok, env3, leftover, leftover_tree} <-
+             match_each(post_pats, rest_form, rest_tree, env2),
+           {:ok, env4} <- match(tail_pat, leftover, leftover_tree, env3) do
         {:ok, env4}
       else
         _ -> :no_match
@@ -511,14 +614,35 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
-  defp collect_proper([]), do: {[], []}
+  # The proper elements of `input`, each as `{form, tree}`, and its
+  # tail with the tail's tree.
+  defp collect_proper([], tree), do: {[], [], tree}
 
-  defp collect_proper([h | t]) do
-    {rest, tail} = collect_proper(t)
-    {[h | rest], tail}
+  defp collect_proper([h | t], tree) do
+    {rest, tail, tail_tree} = collect_proper(t, cdr(tree))
+    {[{h, car(tree)} | rest], tail, tail_tree}
   end
 
-  defp collect_proper(other), do: {[], other}
+  defp collect_proper(other, tree), do: {[], other, tree}
+
+  defp items_with_tail(items, tail, tail_tree, tree) do
+    {forms, trees} = Enum.unzip(items)
+    {list_with_tail(forms, tail), tree && Pos.list(trees, tail_tree, tree)}
+  end
+
+  # `items_with_tail/4` in one pass, for template instantiation. With
+  # no `leaf`, only the form is built.
+  defp build_list([], tail, tail_tree, _leaf), do: {tail, tail_tree}
+
+  defp build_list([{form, _tree} | rest], tail, tail_tree, nil) do
+    {rest, nil} = build_list(rest, tail, tail_tree, nil)
+    {[form | rest], nil}
+  end
+
+  defp build_list([{form, tree} | rest], tail, tail_tree, {:atom, pos} = leaf) do
+    {rest, rest_tree} = build_list(rest, tail, tail_tree, leaf)
+    {[form | rest], {:pair, pos, tree, rest_tree}}
+  end
 
   defp list_with_tail([], tail), do: tail
   defp list_with_tail([h | t], tail), do: [h | list_with_tail(t, tail)]
@@ -532,8 +656,8 @@ defmodule Schooner.Expander.SyntaxRules do
     |> finalise_ellipsis()
   end
 
-  defp accumulate_ellipsis_iter(item, {:ok, acc}, ell_pat, pvars) do
-    case match(ell_pat, item, %{}) do
+  defp accumulate_ellipsis_iter({item, tree}, {:ok, acc}, ell_pat, pvars) do
+    case match(ell_pat, item, tree, %{}) do
       {:ok, item_env} -> {:cont, {:ok, push_ellipsis_iter(acc, item_env, pvars)}}
       :no_match -> {:halt, :no_match}
     end
@@ -574,44 +698,49 @@ defmodule Schooner.Expander.SyntaxRules do
   # Template instantiation
   # ---------------------------------------------------------------------------
 
-  defp instantiate([], _env, _mark), do: []
+  # Each clause returns the instantiated form with its position tree.
+  # Pattern variables bring their own trees; everything the template
+  # introduces is placed at the macro use, whose leaf tree is `leaf`.
+  defp instantiate([], _env, _mark, leaf), do: {[], leaf}
 
-  defp instantiate({:t_sym, name}, _env, mark) do
+  defp instantiate({:t_sym, name}, _env, mark, leaf) do
     if MapSet.member?(@core_keywords, name) do
-      {:sym, name}
+      {{:sym, name}, leaf}
     else
-      {:sym, mark_name(name, mark)}
+      {{:sym, mark_name(name, mark)}, leaf}
     end
   end
 
-  defp instantiate({:t_pvar, name, _depth}, env, _mark) do
+  defp instantiate({:t_pvar, name, _depth}, env, _mark, _leaf) do
     case Map.fetch(env, name) do
       {:ok, {:ellipsis_list, _}} ->
         raise Error, reason: {:bad_template, "pattern variable `#{name}` used outside ellipsis"}
 
-      {:ok, value} ->
-        value
+      {:ok, bound} ->
+        bound
 
       :error ->
         raise Error, reason: {:bad_template, "unbound pattern variable `#{name}`"}
     end
   end
 
-  defp instantiate({:t_const, value}, _env, _mark), do: value
+  defp instantiate({:t_const, value}, _env, _mark, leaf), do: {value, leaf}
 
-  defp instantiate({:t_quote, q_datum}, env, _mark) do
-    [{:sym, "quote"} | [instantiate_quoted(q_datum, env) | []]]
+  # Quoted data is never analysed, so its tree is a single leaf.
+  defp instantiate({:t_quote, q_datum}, env, _mark, leaf) do
+    form = [{:sym, "quote"} | [instantiate_quoted(q_datum, env) | []]]
+    {form, leaf && {:pair, elem(leaf, 1), leaf, {:pair, elem(leaf, 1), leaf, leaf}}}
   end
 
-  defp instantiate({:t_list, items, tail}, env, mark) do
-    head_forms = expand_template_items(items, env, mark)
-    tail_form = instantiate(tail, env, mark)
-    list_with_tail(head_forms, tail_form)
+  defp instantiate({:t_list, items, tail}, env, mark, leaf) do
+    items = expand_template_items(items, env, mark, leaf)
+    {tail_form, tail_tree} = instantiate(tail, env, mark, leaf)
+    build_list(items, tail_form, tail_tree, leaf)
   end
 
-  defp instantiate({:t_vector, items}, env, mark) do
-    forms = expand_template_items(items, env, mark)
-    {:vector, List.to_tuple(forms)}
+  defp instantiate({:t_vector, items}, env, mark, leaf) do
+    {forms, trees} = items |> expand_template_items(env, mark, leaf) |> Enum.unzip()
+    {{:vector, List.to_tuple(forms)}, leaf && {:vector, elem(leaf, 1), trees}}
   end
 
   defp instantiate_quoted(:q_null, _env), do: []
@@ -624,7 +753,7 @@ defmodule Schooner.Expander.SyntaxRules do
         raise Error,
           reason: {:bad_template, "pattern variable `#{name}` used outside ellipsis (in quote)"}
 
-      {:ok, value} ->
+      {:ok, {value, _tree}} ->
         value
 
       :error ->
@@ -677,19 +806,19 @@ defmodule Schooner.Expander.SyntaxRules do
       iterate_quoted_ellipsis(tails, q, n, env, pvars_used)
   end
 
-  defp expand_template_items([], _env, _mark), do: []
+  defp expand_template_items([], _env, _mark, _leaf), do: []
 
-  defp expand_template_items([{tmpl, 0} | rest], env, mark) do
-    [instantiate(tmpl, env, mark) | expand_template_items(rest, env, mark)]
+  defp expand_template_items([{tmpl, 0} | rest], env, mark, leaf) do
+    [instantiate(tmpl, env, mark, leaf) | expand_template_items(rest, env, mark, leaf)]
   end
 
-  defp expand_template_items([{tmpl, n} | rest], env, mark) when n >= 1 do
-    expand_ellipsis(tmpl, n, env, mark) ++ expand_template_items(rest, env, mark)
+  defp expand_template_items([{tmpl, n} | rest], env, mark, leaf) when n >= 1 do
+    expand_ellipsis(tmpl, n, env, mark, leaf) ++ expand_template_items(rest, env, mark, leaf)
   end
 
-  defp expand_ellipsis(tmpl, 0, env, mark), do: [instantiate(tmpl, env, mark)]
+  defp expand_ellipsis(tmpl, 0, env, mark, leaf), do: [instantiate(tmpl, env, mark, leaf)]
 
-  defp expand_ellipsis(tmpl, n, env, mark) when n >= 1 do
+  defp expand_ellipsis(tmpl, n, env, mark, leaf) when n >= 1 do
     pvars_used = template_pvars_at_depth(tmpl, n)
 
     if pvars_used == [] do
@@ -699,7 +828,7 @@ defmodule Schooner.Expander.SyntaxRules do
     pvars_used
     |> pvar_lists(env)
     |> validate_pvar_lengths(pvars_used)
-    |> iterate_ellipsis(tmpl, n, env, mark, pvars_used)
+    |> iterate_ellipsis(tmpl, n, env, mark, leaf, pvars_used)
   end
 
   # Walk the driving pvars' `:ellipsis_list`s in lockstep, peeling one
@@ -707,15 +836,15 @@ defmodule Schooner.Expander.SyntaxRules do
   # keeps the work O(N) rather than O(N²) from indexing each list.
   # `validate_pvar_lengths/2` has already checked that the lists have
   # equal length, so stopping when the first is empty is enough.
-  defp iterate_ellipsis([[] | _], _tmpl, _n, _env, _mark, _pvars), do: []
-  defp iterate_ellipsis([], _tmpl, _n, _env, _mark, _pvars), do: []
+  defp iterate_ellipsis([[] | _], _tmpl, _n, _env, _mark, _leaf, _pvars), do: []
+  defp iterate_ellipsis([], _tmpl, _n, _env, _mark, _leaf, _pvars), do: []
 
-  defp iterate_ellipsis(lists, tmpl, n, env, mark, pvars_used) do
+  defp iterate_ellipsis(lists, tmpl, n, env, mark, leaf, pvars_used) do
     {heads, tails} = peel_lists(lists, [], [])
     sub_env = put_pvars(env, pvars_used, heads)
 
-    expand_ellipsis(tmpl, n - 1, sub_env, mark) ++
-      iterate_ellipsis(tails, tmpl, n, env, mark, pvars_used)
+    expand_ellipsis(tmpl, n - 1, sub_env, mark, leaf) ++
+      iterate_ellipsis(tails, tmpl, n, env, mark, leaf, pvars_used)
   end
 
   defp peel_lists([], head_acc, tail_acc),

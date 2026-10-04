@@ -135,6 +135,9 @@ script:
   and is unreachable until the embedder lists it on
   `Schooner.Environment.new/1`; default sandboxes have no
   wall-clock access.
+  `(schooner debug)` (`Schooner.Debug`) is opt-in in the same
+  way: its `trace` and `print` send text to a sink the embedder
+  chooses, and default sandboxes have no such output.
 - **Cannot mutate.** Schooner's value model has no
   destructive operations. `set!`, `set-car!`, `set-cdr!`,
   `string-set!`, `vector-set!`, `bytevector-u8-set!`, record

@@ -34,8 +34,8 @@ defmodule Schooner.Env do
   ## Frame shapes
 
   The evaluator resolves every lexical variable reference to a
-  `{depth, slot}` address at analysis time (see
-  `Schooner.Eval.Analyze`), so the frames it pushes are *positional*:
+  `{depth, slot}` address when it analyses the program, before it
+  runs, so the frames it pushes are *positional*:
   a tuple whose element 0 is a tuple of the frame's names and whose
   remaining elements are the values in the same order. The names are
   carried so `lookup/2` can still resolve by name; the evaluator
@@ -171,6 +171,22 @@ defmodule Schooner.Env do
   @doc false
   @spec fetch_global(t(), binary()) :: {:ok, Value.t()} | :error
   def fetch_global(%__MODULE__{globals: ref}, name), do: globals_lookup(ref, name)
+
+  @doc false
+  # Every defined global, as a map of name to value. Raises
+  # `ArgumentError` when the env was built by another process.
+  @spec globals(t()) :: %{binary() => Value.t()}
+  def globals(%__MODULE__{globals: ref}) do
+    case :erlang.get(ref) do
+      :undefined ->
+        raise ArgumentError, "the environment was built by another process"
+
+      cells ->
+        for {name, cell} <- cells, (value = :erlang.get(cell)) != @unbound, into: %{} do
+          {name, value}
+        end
+    end
+  end
 
   @doc """
   Add or replace a top-level binding. Visible to every closure that

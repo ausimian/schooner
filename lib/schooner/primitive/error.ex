@@ -2,19 +2,34 @@ defmodule Schooner.Primitive.Error do
   @moduledoc """
   Exception raised by built-in primitives for domain-specific failures:
   type errors, division by zero, out-of-range indices and sizes,
-  improper lists, and results Schooner cannot represent.
+  improper lists, results Schooner cannot represent, and a
+  `Schooner.Debug` sink that fails.
 
   Kept distinct from `Schooner.Eval.Error` because primitives report a
   different vocabulary of failures than the evaluator. Tests can match
   on `:reason` without coupling to the message wording.
+
+  `:location` is the `Schooner.Location` of the call that failed. It is
+  only filled in when the script runs with `debug: true`; see "Source
+  locations" in `Schooner`. With `debug: true`, `:scheme_backtrace`
+  lists the procedure calls that led to the error, most recent first
+  (see `Schooner.Frame`); otherwise it is `nil`.
   """
 
-  defexception [:reason, :message]
+  alias Schooner.Location
+
+  defexception [:reason, :message, :location, :scheme_backtrace]
 
   @impl true
   def exception(opts) do
     reason = Keyword.fetch!(opts, :reason)
-    %__MODULE__{reason: reason, message: format(reason)}
+    location = Keyword.get(opts, :location)
+
+    %__MODULE__{
+      reason: reason,
+      location: location,
+      message: Location.prefix(location) <> format(reason)
+    }
   end
 
   defp format({:type_error, op, expected, got}) do
@@ -79,5 +94,9 @@ defmodule Schooner.Primitive.Error do
 
   defp format({:invalid_radix_for_inexact, op}) do
     "`#{op}`: only radix 10 is supported for inexact numbers"
+  end
+
+  defp format({:debug_sink, op, banner}) do
+    "the debug sink failed in `#{op}`: #{banner}"
   end
 end

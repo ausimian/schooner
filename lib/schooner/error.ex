@@ -15,18 +15,36 @@ defmodule Schooner.Error do
   here when unhandled. Host code should use those helpers for errors
   scripts can catch; raising `Schooner.Error` directly bypasses Scheme
   handlers.
+
+  `:location` is the `Schooner.Location` of the call that raised the
+  value. It is only filled in when the script runs with `debug: true`;
+  see "Source locations" in `Schooner`. With `debug: true`,
+  `:scheme_backtrace` lists the procedure calls that led to the raise,
+  most recent first (see `Schooner.Frame`); otherwise it is `nil`.
   """
 
+  alias Schooner.Location
   alias Schooner.Value
 
-  @type t :: %__MODULE__{value: Value.t(), message: binary() | nil}
+  @type t :: %__MODULE__{
+          value: Value.t(),
+          message: binary() | nil,
+          location: Location.t() | nil,
+          scheme_backtrace: [Schooner.Frame.t()] | nil
+        }
 
-  defexception [:value, :message]
+  defexception [:value, :message, :location, :scheme_backtrace]
 
   @impl true
   def exception(opts) do
     value = Keyword.fetch!(opts, :value)
-    %__MODULE__{value: value, message: format(value)}
+    location = Keyword.get(opts, :location)
+
+    %__MODULE__{
+      value: value,
+      location: location,
+      message: Location.prefix(location) <> format(value)
+    }
   end
 
   @doc """

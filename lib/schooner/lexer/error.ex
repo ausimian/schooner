@@ -7,23 +7,42 @@ defmodule Schooner.Lexer.Error do
     * `:reason` — a structured term identifying the failure mode (atom or
       tagged tuple); meant to be machine-matchable in tests
     * `:position` — `{line, column}` of the offending input
+    * `:location` — the same position as a `Schooner.Location`, naming
+      the file when the caller supplied one
 
   `:message` is derived from `:reason` and `:position`, so tests can
-  assert on those fields without coupling to the wording.
+  assert on those fields without coupling to the wording. When the
+  location names a file, the message is `file:line:col: ` followed by
+  the description instead.
   """
 
-  defexception [:reason, :position, :message]
+  alias Schooner.Location
+
+  defexception [:reason, :position, :message, :location]
 
   @impl true
   def exception(opts) do
     reason = Keyword.fetch!(opts, :reason)
     position = Keyword.fetch!(opts, :position)
-    %__MODULE__{reason: reason, position: position, message: format(reason, position)}
+    location = Keyword.get(opts, :location, Location.new(nil, position))
+
+    %__MODULE__{
+      reason: reason,
+      position: position,
+      location: location,
+      message: format(reason, location)
+    }
   end
 
-  defp format(reason, {line, col}) do
-    "#{describe(reason)} at line #{line}, column #{col}"
-  end
+  @doc false
+  def put_location(%__MODULE__{reason: reason, position: position}, %Location{file: file}),
+    do: exception(reason: reason, position: position, location: Location.new(file, position))
+
+  defp format(reason, %Location{file: file} = location) when is_binary(file),
+    do: Location.prefix(location) <> describe(reason)
+
+  defp format(reason, %Location{line: line, column: col}),
+    do: "#{describe(reason)} at line #{line}, column #{col}"
 
   defp describe(:unterminated_string), do: "unterminated string literal"
   defp describe(:unterminated_block_comment), do: "unterminated block comment"

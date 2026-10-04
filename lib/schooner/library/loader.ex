@@ -6,8 +6,8 @@ defmodule Schooner.Library.Loader do
   ## Supported declaration heads
 
     * `(import spec ...)` — pull bindings from already-registered
-      libraries. Composes with all of the modifiers handled by
-      `Schooner.Library.Import`.
+      libraries, with any of the r7rs import modifiers: `only`,
+      `except`, `prefix` and `rename`.
     * `(begin form ...)` — body forms evaluated in the library's
       private env.
     * `(export name ...)` — names visible to importers. Each entry is
@@ -41,6 +41,15 @@ defmodule Schooner.Library.Loader do
   malformed path datum found during that pass is reported without a
   line number; once the pass succeeds, the main walker re-reads the
   same files with positions and quotes any subsequent error precisely.
+
+  Libraries always record source locations. Script-level errors
+  raised while expanding or evaluating a library body, or later by a
+  procedure the library defines, carry the
+  `Schooner.Location` of the form in the file it was read from: the
+  library's own file, or the included file. Pass `debug: true` to
+  `load_file/3` or `load_string/3` to also locate errors raised while
+  applying procedures inside the library's code (see "Source
+  locations" in `Schooner`).
   """
 
   alias Schooner.Env
@@ -49,6 +58,7 @@ defmodule Schooner.Library.Loader do
   alias Schooner.Expander.SyntaxEnv
   alias Schooner.Library
   alias Schooner.Library.Import, as: LibImport
+  alias Schooner.Location
   alias Schooner.Reader
   alias Schooner.Value
 
@@ -56,6 +66,7 @@ defmodule Schooner.Library.Loader do
 
   @typedoc "Path-resolution context threaded through declaration processing."
   @type ctx :: %{
+          optional(:debug) => boolean(),
           base_dir: binary() | nil,
           root_dir: binary() | nil,
           path: binary() | nil
@@ -98,10 +109,21 @@ defmodule Schooner.Library.Loader do
     {env, syntax_env} =
       LibImport.apply_bindings(binding_set, Env.new(), Expander.bootstrap_env())
 
+    # Expand every body form before evaluating any of them, each with
+    # the file it was read from.
     {expanded, post_syntax_env} =
-      Expander.expand_program_with_env(parts.body, syntax_env)
+      Enum.reduce(parts.body, {[], syntax_env}, fn {form, tree, file}, {acc, senv} ->
+        {forms, senv} =
+          with_file(file, fn -> Expander.expand_positioned([{form, tree}], senv) end)
 
-    Enum.each(expanded, fn form -> Eval.eval(form, env) end)
+        {[Enum.map(forms, fn {f, t} -> {f, t, file} end) | acc], senv}
+      end)
+
+    eval_opts = [debug: Map.get(ctx, :debug, false)]
+
+    for chunk <- Enum.reverse(expanded), {form, tree, file} <- chunk do
+      Eval.eval(form, tree, env, [file: file] ++ eval_opts)
+    end
 
     library_exports = build_exports(parts.exports, env, post_syntax_env, name, ctx)
 
@@ -129,11 +151,16 @@ defmodule Schooner.Library.Loader do
   graph. Cycles that mix file-local libraries with already-registered
   libraries cannot occur because the registry is append-only.
   """
-  @spec load_file(binary(), Library.registry()) :: Library.registry()
-  def load_file(path, registry \\ Library.standard()) when is_binary(path) do
+  @spec load_file(binary(), Library.registry(), keyword()) :: Library.registry()
+  def load_file(path, registry \\ Library.standard(), opts \\ []) when is_binary(path) do
     abs_path = Path.expand(path)
     source = File.read!(abs_path)
-    load_string(source, registry, base_dir: Path.dirname(abs_path), path: abs_path)
+
+    load_string(
+      source,
+      registry,
+      [base_dir: Path.dirname(abs_path), path: abs_path] ++ Keyword.take(opts, [:debug])
+    )
   end
 
   @doc """
@@ -145,8 +172,10 @@ defmodule Schooner.Library.Loader do
       `(include-library-declarations …)` paths and confine all include
       paths. Defaults to `nil`, which rejects both relative and absolute
       includes.
-    * `:path` — file path threaded into diagnostics. Defaults to `nil`
-      (anonymous source).
+    * `:path` — file path threaded into diagnostics and error
+      locations. Defaults to `nil` (anonymous source).
+    * `:debug` — when `true`, locate errors raised while applying
+      procedures inside the libraries' code. Defaults to `false`.
   """
   @spec load_string(binary(), Library.registry(), keyword()) :: Library.registry()
   def load_string(source, registry \\ Library.standard(), opts \\ [])
@@ -159,11 +188,15 @@ defmodule Schooner.Library.Loader do
 
     path = Keyword.get(opts, :path)
 
-    ctx = %{base_dir: base_dir, root_dir: base_dir, path: path}
+    ctx = %{
+      base_dir: base_dir,
+      root_dir: base_dir,
+      path: path,
+      debug: Keyword.get(opts, :debug, false)
+    }
 
     libs =
-      source
-      |> Reader.read_string_positioned()
+      with_file(path, fn -> Reader.read_string_positioned(source) end)
       |> Enum.map(fn
         {[{:sym, "define-library"} | _] = d, p} ->
           {d, p}
@@ -188,8 +221,14 @@ defmodule Schooner.Library.Loader do
     %{acc | imports: acc.imports ++ Value.to_list(specs)}
   end
 
-  defp apply_decl([{:sym, "begin"} | forms], _pos, acc, _registry, _ctx) do
-    %{acc | body: acc.body ++ Value.to_list(forms)}
+  defp apply_decl([{:sym, "begin"} | forms], pos_tree, acc, _registry, ctx) do
+    forms =
+      forms
+      |> Value.to_list()
+      |> Enum.zip(tail_positions(pos_tree, 1))
+      |> Enum.map(fn {form, tree} -> {form, tree, ctx.path} end)
+
+    %{acc | body: acc.body ++ forms}
   end
 
   defp apply_decl([{:sym, "export"} | names], pos_tree, acc, _registry, _ctx) do
@@ -217,8 +256,8 @@ defmodule Schooner.Library.Loader do
       |> Enum.flat_map(fn {path_datum, path_pos} ->
         path = expect_string(path_datum, "include", path_pos, ctx)
         resolved = resolve_include_path(path, ctx, path_pos)
-        {datums, _} = read_include_file(resolved, path, path_pos, ctx, false)
-        datums
+        {datums, trees} = read_include_file(resolved, path, path_pos, ctx, true)
+        datums |> Enum.zip(trees) |> Enum.map(fn {datum, tree} -> {datum, tree, resolved} end)
       end)
 
     %{acc | body: acc.body ++ forms}
@@ -310,7 +349,7 @@ defmodule Schooner.Library.Loader do
   defp read_include_file(resolved, original, pos, ctx, with_positions?) do
     case File.read(resolved) do
       {:ok, source} when with_positions? ->
-        Enum.unzip(Reader.read_string_positioned(source))
+        Enum.unzip(with_file(resolved, fn -> Reader.read_string_positioned(source) end))
 
       {:ok, source} ->
         {Reader.read_string(source), []}
@@ -555,6 +594,14 @@ defmodule Schooner.Library.Loader do
   defp synthetic_pos_tree(_other), do: {:atom, nil}
 
   defp default_ctx, do: %{base_dir: nil, root_dir: nil, path: nil}
+
+  # Name `file` in the location of a script error raised by `fun`
+  # before the file was known: by the reader or the expander.
+  defp with_file(file, fun) do
+    fun.()
+  rescue
+    e -> reraise Location.put_file(e, file), __STACKTRACE__
+  end
 
   defp library_source(%{path: nil}, _pos_tree, _datum), do: :native
 
