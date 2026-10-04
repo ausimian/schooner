@@ -288,6 +288,15 @@ defmodule Schooner.ExpandTest do
       assert Exception.message(e) =~ "t.scm:2:1: "
     end
 
+    test "a malformed import, at the form or the spec" do
+      for {source, column} <- [{"(import . x)", 1}, {"(import (scheme base) x)", 23}] do
+        assert {:error, %Schooner.Eval.Error{reason: {:bad_special_form, "import"}} = e} =
+                 Schooner.expand(source, env(), file: "t.scm")
+
+        assert e.location == %Location{file: "t.scm", line: 1, column: column}
+      end
+    end
+
     test "invalid options raise" do
       assert_raise ArgumentError, ~r/:step/, fn -> Schooner.expand("1", env(), step: :twice) end
       assert_raise ArgumentError, ~r/:trace/, fn -> Schooner.expand("1", env(), trace: 1) end

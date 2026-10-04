@@ -97,6 +97,12 @@ defmodule Mix.Tasks.Schooner.ExpandTest do
     end
   end
 
+  test "a malformed import is printed as an error, and fails" do
+    assert_raise Mix.Error, ~r/^1:1: malformed `import` form/, fn ->
+      run_task(["-e", "(import . x)"])
+    end
+  end
+
   test "arguments" do
     for argv <- [[], ["a.scm", "b.scm"], ["a.scm", "-e", "1"]] do
       assert_raise Mix.Error, ~r/expects one file, or -e/, fn -> run_task(argv) end

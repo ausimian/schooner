@@ -818,11 +818,14 @@ defmodule Schooner do
     %Environment{syntax_env: syntax_env, registry: registry} = environment
 
     in_file(opts, fn ->
-      {import_specs, body} = extract_imports(Reader.read_string_positioned(source))
+      forms = Reader.read_string_positioned(source)
+      {import_specs, body} = forms |> check_import_forms!() |> extract_imports()
 
       syntax_env =
         import_specs
-        |> resolve_imports(registry)
+        |> Enum.reduce(%{}, fn {spec, tree}, acc ->
+          Map.merge(acc, resolve_checked_import!(spec, tree, registry))
+        end)
         |> Enum.reduce(syntax_env, fn
           {name, {:macro, transformer}}, se -> SyntaxEnv.define_macro(se, name, transformer)
           _, se -> se
@@ -830,6 +833,28 @@ defmodule Schooner do
 
       Expander.inspect_positioned(body, syntax_env, step, trace?)
     end)
+  end
+
+  # `eval/3` lets the `ArgumentError` from a malformed import set
+  # escape. `expand/3` reports it as a malformed `import`, as
+  # `check/3` does, placed at the form or the spec.
+  defp check_import_forms!([{[{:sym, "import"} | specs], tree} | rest] = forms) do
+    unless Value.list?(specs), do: raise_bad_import(tree)
+    check_import_forms!(rest)
+    forms
+  end
+
+  defp check_import_forms!(forms), do: forms
+
+  defp resolve_checked_import!(spec, tree, registry) do
+    resolve_import(spec, tree, registry)
+  rescue
+    ArgumentError -> raise_bad_import(tree)
+  end
+
+  defp raise_bad_import(tree) do
+    error = EvalError.exception(reason: {:bad_special_form, "import"})
+    raise Location.attach(error, Location.new(nil, Positions.at(tree)))
   end
 
   @doc ~S"""
