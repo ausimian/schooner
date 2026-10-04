@@ -89,6 +89,7 @@ defmodule Schooner.MixProject do
         Tooling: [
           Schooner.Debug,
           Schooner.Diagnostic,
+          Schooner.Frame,
           Mix.Tasks.Schooner.Check
         ],
         Errors: [
@@ -115,6 +116,7 @@ defmodule Schooner.MixProject do
                     Schooner.Compiled,
                     Schooner.Debug,
                     Schooner.Diagnostic,
+                    Schooner.Frame,
                     Schooner.Host,
                     Schooner.Host.TypeError,
                     Schooner.Value,

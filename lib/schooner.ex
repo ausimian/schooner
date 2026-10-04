@@ -87,16 +87,33 @@ defmodule Schooner do
   `debug: true`: primitive type and domain errors, arity mismatches,
   applying a non-procedure, an uncaught `raise` or `(error ...)`, and
   `Schooner.Host.TypeError`s raised by host functions. Debug mode
-  wraps each primitive call in a `try`, which makes scripts that spend
-  their time in primitives (list, string and vector work) 10–15%
-  slower; arithmetic on integers is unaffected. Without it these
-  errors have `location: nil`.
+  wraps each primitive call in a `try` and records every call for a
+  backtrace (see "Backtraces" below), which together make call-heavy
+  scripts two to three times slower. Without it these errors have
+  `location: nil`.
 
   An error inside a macro expansion is placed in the user's source:
   forms the macro introduces take the position of the macro use, and
   the user's own sub-forms keep theirs. An error in a procedure
   defined by a library loaded from a file is placed in that file (see
   `Schooner.Library.Loader`).
+
+  ## Backtraces
+
+  Proper tail calls leave no Scheme call stack behind, so with
+  `debug: true` the evaluator keeps a history of the last
+  `:backtrace_depth` procedure calls (32 by default) and attaches it to
+  any error that escapes, as `:scheme_backtrace`: a list of
+  `Schooner.Frame`s, most recent first. Calls that have returned are
+  dropped from it, so it lists the calls that were still running, each
+  followed by the tail calls it made. Being bounded, the history never
+  grows however long a loop runs. `format_error/2` renders it below
+  the excerpt.
+
+  Debug mode is chosen when the program is compiled to closures, so
+  without it the closures contain no history code at all and
+  `:scheme_backtrace` is `nil`. With it, every call is recorded; that
+  is most of debug mode's cost.
   """
 
   alias Schooner.Compiled
@@ -104,12 +121,14 @@ defmodule Schooner do
   alias Schooner.Environment
   alias Schooner.Eval
   alias Schooner.Eval.Analyze
+  alias Schooner.Eval.BacktraceState
   alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.Error, as: EvalError
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
   alias Schooner.Expander
   alias Schooner.Expander.Positions
+  alias Schooner.Frame
   alias Schooner.Lexer
   alias Schooner.Library
   alias Schooner.Library.Import, as: LibImport
@@ -234,8 +253,12 @@ defmodule Schooner do
       errors (see "Source locations" in the moduledoc). Defaults to
       `true` when `:file` or `:debug` is given and `false` otherwise.
     * `:debug` — when `true`, also locate errors raised while applying
-      a procedure, at a cost on every primitive call. Implies
-      `locations: true`. Defaults to `false`.
+      a procedure, at a cost on every primitive call, and attach a
+      Scheme backtrace to errors (see "Backtraces" in the moduledoc).
+      Implies `locations: true`. Defaults to `false`.
+    * `:backtrace_depth` — with `debug: true`, the number of procedure
+      calls the backtrace history keeps. A positive integer; defaults
+      to 32.
     * `:implicit_imports` — controls implicit imports prepended
       to a script that declares none of its own. Only accepted with a
       `Schooner.Env`; a `Schooner.Environment` bakes its imports in at
@@ -365,7 +388,22 @@ defmodule Schooner do
     end)
   end
 
-  defp eval_opts(opts), do: Keyword.take(opts, [:file, :debug])
+  defp eval_opts(opts), do: Keyword.take(opts, [:file, :debug, :backtrace_depth])
+
+  # The size of the backtrace history to keep, or `nil` without `debug`.
+  defp backtrace_depth(opts) do
+    if Keyword.get(opts, :debug, false) do
+      case Keyword.get(opts, :backtrace_depth, BacktraceState.default_depth()) do
+        depth when is_integer(depth) and depth > 0 ->
+          depth
+
+        other ->
+          raise ArgumentError,
+                "invalid value for :backtrace_depth — expected a positive integer, got: " <>
+                  inspect(other)
+      end
+    end
+  end
 
   @doc """
   Invoke a Scheme procedure value from Elixir. Returns
@@ -406,14 +444,14 @@ defmodule Schooner do
   `{:error, exception}` on any source-level failure. Use
   `compile!/1,2` for the raising variant.
 
-  The compiled artifact can be passed to `run_compiled/2`
+  The compiled artifact can be passed to `run_compiled/3`
   repeatedly against any compatible environment. Macros are
   expanded at compile time; variable bindings from `(import ...)`
   declarations are pre-resolved and baked into the artifact.
 
-  Options are `:file`, `:locations` and `:debug`, as for `eval!/3`.
-  They are kept in the artifact, so `run_compiled/2` reports the same
-  locations.
+  Options are `:file`, `:locations`, `:debug` and `:backtrace_depth`,
+  as for `eval!/3`. They are kept in the artifact, so `run_compiled/3`
+  reports the same locations.
   """
   @spec compile(binary(), Environment.t(), keyword()) ::
           {:ok, Compiled.t()} | {:error, Exception.t()}
@@ -469,7 +507,7 @@ defmodule Schooner do
   @doc """
   Evaluate a `%Schooner.Compiled{}` against `env_struct`. Returns
   `{:ok, value}` on success, `{:error, exception}` for any
-  script-level failure. Use `run_compiled!/2` for the raising
+  script-level failure. Use `run_compiled!/3` for the raising
   variant.
 
   The compiled program's pre-resolved variable bindings are
@@ -478,36 +516,48 @@ defmodule Schooner do
   always in scope regardless of `env_struct`'s registry. Macros
   are not re-expanded — the program's macro shape is frozen at
   compile time.
+
+  Options override those the program was compiled with:
+
+    * `:debug` — as for `eval!/3`. The program is compiled to closures
+      on each run, so one artifact can run with or without it. Errors
+      are located only if the program was compiled with locations.
+    * `:backtrace_depth` — as for `eval!/3`.
   """
-  @spec run_compiled(Compiled.t(), Environment.t()) ::
+  @spec run_compiled(Compiled.t(), Environment.t(), keyword()) ::
           {:ok, Value.t()} | {:error, Exception.t()}
-  def run_compiled(compiled, env_struct) do
-    {:ok, run_compiled!(compiled, env_struct)}
+  def run_compiled(compiled, env_struct, opts \\ []) when is_list(opts) do
+    {:ok, run_compiled!(compiled, env_struct, opts)}
   rescue
     e -> rescue_script_error(e, __STACKTRACE__)
   end
 
   @doc """
-  Bang form of `run_compiled/2` — raises on script-level failure.
+  Bang form of `run_compiled/3` — raises on script-level failure.
   """
-  @spec run_compiled!(Compiled.t(), Environment.t()) :: Value.t()
-  def run_compiled!(compiled, env_struct) do
+  @spec run_compiled!(Compiled.t(), Environment.t(), keyword()) :: Value.t()
+  def run_compiled!(compiled, env_struct, opts \\ []) when is_list(opts) do
+    opts = Keyword.validate!(opts, [:debug, :backtrace_depth])
+
     do_run_program(
       Compiled.program(compiled),
       Compiled.var_bindings(compiled),
       Environment.env(env_struct),
       Environment.syntax_env(env_struct),
-      Compiled.opts(compiled)
+      Keyword.merge(Compiled.opts(compiled), opts)
     )
   end
 
   defp do_run_program(program, var_bindings, env, syntax_env, opts) do
+    depth = backtrace_depth(opts)
     prev_handlers = ExceptionState.snapshot()
     prev_conts = ContinuationState.snapshot()
     prev_params = ParameterState.snapshot()
+    prev_history = BacktraceState.snapshot()
     ExceptionState.reset()
     ContinuationState.reset()
     ParameterState.reset()
+    BacktraceState.reset(depth)
 
     try do
       {env, _syntax_env} = LibImport.apply_bindings(var_bindings, env, syntax_env)
@@ -515,10 +565,13 @@ defmodule Schooner do
       program
       |> Enum.reduce(:unspecified, fn node, _acc -> Eval.exec(node, env, opts) end)
       |> Eval.single_value!()
+    rescue
+      e -> reraise BacktraceState.attach(e), __STACKTRACE__
     after
       ExceptionState.restore(prev_handlers)
       ContinuationState.restore(prev_conts)
       ParameterState.restore(prev_params)
+      BacktraceState.restore(prev_history)
     end
   end
 
@@ -528,12 +581,15 @@ defmodule Schooner do
     # or registers a `call/cc` tag then escapes via a host-side throw
     # (e.g. a test that catches `Schooner.Error`) would leak state into
     # the next call in the same process.
+    depth = backtrace_depth(opts)
     prev_handlers = ExceptionState.snapshot()
     prev_conts = ContinuationState.snapshot()
     prev_params = ParameterState.snapshot()
+    prev_history = BacktraceState.snapshot()
     ExceptionState.reset()
     ContinuationState.reset()
     ParameterState.reset()
+    BacktraceState.reset(depth)
 
     try do
       {_bindings, env, expanded} = front_end(forms, env, syntax_env, registry, opts)
@@ -544,10 +600,16 @@ defmodule Schooner do
         Eval.eval(form, tree, env, eval_opts)
       end)
       |> Eval.single_value!()
+    rescue
+      # With `debug: true`, give a runtime error the calls that led to
+      # it. Nothing between the raise and here records a call (see
+      # `Schooner.Eval.BacktraceState`), so the history is the raise's.
+      e -> reraise BacktraceState.attach(e), __STACKTRACE__
     after
       ExceptionState.restore(prev_handlers)
       ContinuationState.restore(prev_conts)
       ParameterState.restore(prev_params)
+      BacktraceState.restore(prev_history)
     end
   end
 
@@ -627,12 +689,30 @@ defmodule Schooner do
   `source: binary` — the text of the script the location points into —
   a short excerpt follows, with a caret under the failing column:
 
-      iex> source = "(define x 1)\n(car x)"
+      iex> source = "(define x 1)\n(car y)"
+      iex> {:error, e} =
+      ...>   Schooner.eval(source, Schooner.Env.new(), implicit_imports: :all, file: "demo.scm")
+      iex> Schooner.format_error(e, source: source)
+      "demo.scm:2:6: unbound variable: y\n  |\n2 | (car y)\n  |      ^"
+
+  An error raised with `debug: true` also has a Scheme backtrace (see
+  "Backtraces" in the moduledoc), which is listed last, one call per
+  line, most recent first. A call in tail position is marked
+  `(tail call)`:
+
+      iex> source = "(define (f x) (car x))\n(define (g x) (+ 1 (f x)))\n(g 1)"
       iex> {:error, e} =
       ...>   Schooner.eval(source, Schooner.Env.new(),
       ...>     implicit_imports: :all, file: "demo.scm", debug: true)
-      iex> Schooner.format_error(e, source: source)
-      "demo.scm:2:1: type error in `car`: expected pair, got 1\n  |\n2 | (car x)\n  | ^"
+      iex> Schooner.format_error(e) |> String.split("\n")
+      [
+        "demo.scm:1:15: type error in `car`: expected pair, got 1",
+        "",
+        "Scheme backtrace (most recent first):",
+        "  car  demo.scm:1:15 (tail call)",
+        "  f    demo.scm:2:20",
+        "  g    demo.scm:3:1"
+      ]
 
   Options:
 
@@ -643,17 +723,40 @@ defmodule Schooner do
   def format_error(exception, opts \\ []) when is_exception(exception) and is_list(opts) do
     message = Exception.message(exception)
 
-    case Map.get(exception, :location) do
-      %Location{file: nil} = loc ->
-        "#{loc}: #{message}" <> excerpt(loc, Keyword.get(opts, :source))
+    located =
+      case Map.get(exception, :location) do
+        %Location{file: nil} = loc ->
+          "#{loc}: #{message}" <> excerpt(loc, Keyword.get(opts, :source))
 
-      %Location{} = loc ->
-        message <> excerpt(loc, Keyword.get(opts, :source))
+        %Location{} = loc ->
+          message <> excerpt(loc, Keyword.get(opts, :source))
 
-      _ ->
-        message
-    end
+        _ ->
+          message
+      end
+
+    located <> backtrace(Map.get(exception, :scheme_backtrace))
   end
+
+  defp backtrace([_ | _] = frames) do
+    width = frames |> Enum.map(&String.length(&1.name)) |> Enum.max()
+
+    lines =
+      Enum.map(frames, fn %Frame{name: name, location: loc, tail?: tail?} ->
+        where = if loc, do: to_string(loc), else: "(unknown location)"
+
+        [
+          "\n  ",
+          String.pad_trailing(name, width + 2),
+          where,
+          if(tail?, do: " (tail call)", else: "")
+        ]
+      end)
+
+    IO.iodata_to_binary(["\n\nScheme backtrace (most recent first):" | lines])
+  end
+
+  defp backtrace(_frames), do: ""
 
   defp excerpt(_loc, nil), do: ""
 

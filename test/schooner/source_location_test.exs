@@ -326,7 +326,11 @@ defmodule Schooner.SourceLocationTest do
              t.scm:2:3: type error in `+`: expected number, got "a"
                |
              2 |   (+ x "a"))
-               |   ^\
+               |   ^
+
+             Scheme backtrace (most recent first):
+               +  t.scm:2:3 (tail call)
+               f  t.scm:3:1\
              """
     end
 
@@ -338,7 +342,9 @@ defmodule Schooner.SourceLocationTest do
                "t.scm:12:2: type error in `car`: expected pair, got 1\n" <>
                  "   |\n" <>
                  "12 | \t(car 1)\n" <>
-                 "   | \t^"
+                 "   | \t^\n\n" <>
+                 "Scheme backtrace (most recent first):\n" <>
+                 "  car  t.scm:12:2"
     end
 
     test "places the caret by codepoint column under combining characters" do

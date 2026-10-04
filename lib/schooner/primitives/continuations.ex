@@ -40,6 +40,7 @@ defmodule Schooner.Primitives.Continuations do
   """
 
   alias Schooner.Eval
+  alias Schooner.Eval.BacktraceState
   alias Schooner.Eval.ContinuationState
   alias Schooner.Eval.Error
   alias Schooner.Primitive.Error, as: PrimError
@@ -63,16 +64,22 @@ defmodule Schooner.Primitives.Continuations do
   # call/cc
   # ---------------------------------------------------------------------------
 
+  # An escape puts back the backtrace history (see
+  # `Schooner.Eval.BacktraceState`) as it was on entry, dropping the
+  # frames of the extent it abandons, however `call/cc` was reached.
   defp call_cc([proc]) do
     require_procedure!("call/cc", proc)
     tag = make_ref()
     cont = make_continuation(tag)
+    history = BacktraceState.snapshot()
     ContinuationState.register(tag)
 
     try do
       Eval.apply_proc(proc, [cont])
     catch
-      :throw, {:schooner_continuation, ^tag, value} -> value
+      :throw, {:schooner_continuation, ^tag, value} ->
+        BacktraceState.restore(history)
+        value
     after
       ContinuationState.deregister(tag)
     end
@@ -101,17 +108,27 @@ defmodule Schooner.Primitives.Continuations do
   # exception, or escape via a continuation invocation. As r7rs
   # requires, the `after` thunk runs *outside* its own `dynamic-wind`
   # extent, which `try/after` provides.
+  #
+  # `after` runs with the backtrace history (see
+  # `Schooner.Eval.BacktraceState`) as it was on entry, so an error it
+  # raises does not list the abandoned body's calls. The history on exit
+  # is then put back: when an error is unwinding through here, that is
+  # the raise's, so the error reports where it came from.
   defp dynamic_wind([before_thunk, thunk, after_thunk]) do
     require_procedure!("dynamic-wind", before_thunk)
     require_procedure!("dynamic-wind", thunk)
     require_procedure!("dynamic-wind", after_thunk)
 
     _ = Eval.apply_proc(before_thunk, [])
+    on_entry = BacktraceState.snapshot()
 
     try do
       Eval.apply_proc(thunk, [])
     after
+      on_exit = BacktraceState.snapshot()
+      BacktraceState.restore(on_entry)
       _ = Eval.apply_proc(after_thunk, [])
+      BacktraceState.restore(on_exit)
     end
   end
 

@@ -21,7 +21,7 @@ surface documentation and editor integration.
 | 1 | [Source locations in errors](#source-locations-in-errors) | Available | [#135](https://github.com/ausimian/schooner/issues/135) |
 | 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available | [#136](https://github.com/ausimian/schooner/issues/136) |
 | 3 | [Tracing and assertions](#tracing-and-assertions) | Available | [#137](https://github.com/ausimian/schooner/issues/137) |
-| 4 | [Backtraces](#backtraces) | Planned | [#138](https://github.com/ausimian/schooner/issues/138) |
+| 4 | [Backtraces](#backtraces) | Available | [#138](https://github.com/ausimian/schooner/issues/138) |
 | 5 | [The REPL](#the-repl) | Planned | [#139](https://github.com/ausimian/schooner/issues/139) |
 | 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Planned | [#140](https://github.com/ausimian/schooner/issues/140) |
 | 7 | [Testing scripts](#testing-scripts) | Planned | [#141](https://github.com/ausimian/schooner/issues/141) |
@@ -111,11 +111,11 @@ are located. Errors raised while *applying* a procedure, such as a
 primitive's type error, an arity mismatch or an uncaught
 `(error ...)`, are located only when you pass `debug: true`, which
 also turns locations on. Debug mode wraps each primitive call in a
-`try`, which makes scripts that spend their time in primitives
-(list, string and vector work) 10–15% slower; arithmetic on
-integers is unaffected. Without it those errors have
-`location: nil`, so turn it on while you develop and test scripts,
-and wherever you want precise errors more than that speed:
+`try` and records every call for a [backtrace](#backtraces), which
+together make call-heavy scripts two to three times slower. Without
+it those errors have `location: nil`, so turn it on while you
+develop and test scripts, and wherever you want precise errors more
+than that speed:
 
 ```elixir
 source = File.read!("scripts/pricing.scm")
@@ -130,7 +130,8 @@ error.location
 ```
 
 `Schooner.format_error/2` renders the error for people. With
-`source:` it adds an excerpt:
+`source:` it adds an excerpt, and with `debug: true` the error also
+carries the [backtrace](#backtraces) printed after it:
 
 ```elixir
 IO.puts(Schooner.format_error(error, source: source))
@@ -141,6 +142,11 @@ scripts/pricing.scm:4:3: type error in `*`: expected number, got "3"
   |
 4 |   (* (unit-price sku) qty))
   |   ^
+
+Scheme backtrace (most recent first):
+  *            scripts/pricing.scm:4:3 (tail call)
+  line-total   scripts/pricing.scm:9:10
+  order-total  scripts/pricing.scm:11:1
 ```
 
 Errors raised while expanding a macro point at the macro's use
@@ -149,8 +155,9 @@ macro. An error in a procedure defined by a library loaded with
 `Schooner.Library.Loader.load_file/3` points into that library's
 file; pass `debug: true` to `load_file/3` to locate errors raised
 while applying procedures in the library's code. Scripts run
-through `Schooner.compile/3` and `Schooner.run_compiled/2` keep
-their locations; pass `file:` and `debug:` to `compile`.
+through `Schooner.compile/3` and `Schooner.run_compiled/3` keep
+their locations; pass `file:` and `debug:` to `compile`, or
+`debug: true` to `run_compiled/3` for one run.
 
 ## Checking scripts before they run
 
@@ -321,38 +328,110 @@ error.message
 
 ## Backtraces
 
-**Status: Planned** ([#138](https://github.com/ausimian/schooner/issues/138))
+**Status: Available** ([#138](https://github.com/ausimian/schooner/issues/138))
 
 Schooner implements proper tail calls on top of the BEAM's
 last-call optimisation, so there is no Scheme call stack to look
-at after an error. With `debug: true`, the evaluator keeps a
-bounded history of recent procedure calls and attaches it to any
-error that escapes:
+at after an error, and the Elixir stacktrace shows only evaluator
+internals. With `debug: true`, the evaluator keeps a bounded
+history of recent procedure calls and attaches it to any error
+that escapes. Taking the error from
+[Source locations in errors](#source-locations-in-errors):
 
 ```elixir
 {:error, error} =
-  Schooner.eval(source, MyApp.Scripts.environment(),
+  Schooner.eval(source <> ~s|(order-total '(("widget" . "3")))|,
+                MyApp.Scripts.environment(),
                 file: "scripts/pricing.scm", debug: true)
 
-IO.puts(Schooner.format_error(error, source: source))
+IO.puts(Schooner.format_error(error))
 ```
 
 ```text
 scripts/pricing.scm:4:3: type error in `*`: expected number, got "3"
-  |
-4 |   (* (unit-price sku) qty))
-  |   ^
 
 Scheme backtrace (most recent first):
-  line-total    scripts/pricing.scm:9:10
-  order-total   scripts/pricing.scm:11:1
+  *            scripts/pricing.scm:4:3 (tail call)
+  line-total   scripts/pricing.scm:9:10
+  order-total  scripts/pricing.scm:11:1
 ```
 
-The raw frames are in `error.scheme_backtrace` as
-`%Schooner.Frame{name, location, tail?}`. The history is a ring
-buffer (`:backtrace_depth`, default 32), so tail calls appear
-in it but a long-running loop can't grow it without limit. With
-`debug: false` (the default), no history is kept.
+Read it from the bottom up: the top-level call to `order-total` on
+line 11 called `line-total` on line 9, which called `*` from tail
+position and failed. The history follows calls as they return, so
+`unit-price`, which `line-total` called and which returned, isn't
+listed. A call marked `(tail call)` replaced the procedure that
+made it, so the frame below it is the call it replaced rather than
+a caller waiting for its result. A tail-recursive loop shows up as
+a run of tail calls. Given `scripts/sum.scm`:
+
+```scheme
+(define (sum-firsts lists acc)
+  (if (null? lists)
+      acc
+      (sum-firsts (cdr lists) (+ acc (car (car lists))))))
+
+(sum-firsts '((1) (2) (3) 4) 0)
+```
+
+the fourth iteration fails:
+
+```text
+scripts/sum.scm:4:38: type error in `car`: expected pair, got 4
+
+Scheme backtrace (most recent first):
+  car         scripts/sum.scm:4:38
+  sum-firsts  scripts/sum.scm:4:7 (tail call)
+  sum-firsts  scripts/sum.scm:4:7 (tail call)
+  sum-firsts  scripts/sum.scm:4:7 (tail call)
+  sum-firsts  scripts/sum.scm:6:1
+```
+
+The history is a ring buffer of the last 32 calls; pass
+`:backtrace_depth` to keep more or fewer. A loop overwrites its
+oldest entries rather than growing the buffer, so a script that
+tail-recurses a million times runs in constant memory with
+`debug: true` too.
+
+The raw frames are in `error.scheme_backtrace`, most recent first,
+as `%Schooner.Frame{name, location, tail?}`. `name` is the name the
+procedure was defined with, a primitive's name, `"<lambda>"` for
+an anonymous procedure, or `"<parameter>"` for a parameter object.
+With `debug: false` (the default), no
+history is kept and `scheme_backtrace` is `nil`. Debug mode is
+chosen when the program is compiled to closures, so without it they
+contain no history code at all. A compiled program can run with
+`Schooner.run_compiled(compiled, environment, debug: true)`, and
+errors are located if it was compiled with `file:` or
+`locations: true`.
+
+Some calls aren't recorded:
+
+- Arithmetic and comparison on two integers (`+`, `-`, `*`, `=`,
+  `<`, `>`, `<=`, `>=`) runs inline and can't fail, so it isn't
+  recorded. With any other arguments these calls are recorded like
+  any other.
+- A procedure that a primitive calls, such as the procedure given
+  to `map`, `for-each`, `apply`, `call/cc`, `dynamic-wind` or
+  `with-exception-handler`, has no frame of its own: the primitive's
+  frame stands in for it. The calls it makes are recorded. Tail
+  calls it makes stay in the history until the primitive returns,
+  so a procedure that `map` calls several times may leave a frame
+  from each call.
+
+Procedures that the evaluator calls directly rather than through a
+closure, such as a named `let` loop, are recorded like any other
+call, under their name.
+
+Escapes keep the history consistent. When `guard` catches a raise,
+or a continuation from `call/cc` is invoked, the calls between the
+escape and its target are dropped, so a later error doesn't list
+them as callers. When no `guard` clause matches, the raise
+continues with the history it had when it was raised.
+
+Recording every call is most of what makes debug mode two to three
+times slower on call-heavy scripts. Leave `debug` off where scripts
+must run at full speed.
 
 ## The REPL
 

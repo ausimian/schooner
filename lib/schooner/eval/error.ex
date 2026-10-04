@@ -8,11 +8,14 @@ defmodule Schooner.Eval.Error do
 
   `:location` is the `Schooner.Location` of the form that failed, or
   `nil` when it is not known. See "Source locations" in `Schooner`.
+  With `debug: true`, `:scheme_backtrace` lists the procedure calls
+  that led to the error, most recent first (see `Schooner.Frame`);
+  otherwise it is `nil`.
   """
 
   alias Schooner.Location
 
-  defexception [:reason, :message, :location]
+  defexception [:reason, :message, :location, :scheme_backtrace]
 
   @impl true
   def exception(opts) do

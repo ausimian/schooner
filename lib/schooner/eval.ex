@@ -9,7 +9,7 @@ defmodule Schooner.Eval do
   closures — one `fn env -> ... end` per node, built once — so
   executing a program is a chain of closure calls with no per-node
   dispatch. `Schooner.compile/2` stores the analysed IR (plain data,
-  safe to cache or persist) and `Schooner.run_compiled/2` compiles it
+  safe to cache or persist) and `Schooner.run_compiled/3` compiles it
   to closures on each run.
 
   ## Tail-call invariant
@@ -61,6 +61,21 @@ defmodule Schooner.Eval do
   so tail calls through it stay proper; errors raised inside them are
   located only if the code they call locates them.
 
+  ## Backtraces
+
+  With `debug: true`, every application also records the procedure's
+  name, the call's location and whether the call is in tail position in
+  `Schooner.Eval.BacktraceState`, whose moduledoc describes the history
+  this keeps. `compile/3` tracks tail position as it compiles: a call
+  that is not in tail position saves the history before applying the
+  procedure and restores it afterwards, and a call in tail position
+  records its entry and tail-calls the procedure as before. Direct
+  `:known_call`s are recorded like any other call. A two-integer
+  operation that `compile_inline/7` runs inline is not recorded, since
+  it cannot fail; anything else through that path is. Without `debug`
+  compiled code records nothing; a `guard` still saves and restores the
+  history, in case the code it calls was compiled with `debug`.
+
   The evaluator only consumes the core forms produced by
   `Schooner.Expander`: `quote`, `if`, `lambda`, top-level `define`,
   `define-values`, `begin`, `letrec*`, `quasiquote`, `guard`,
@@ -77,6 +92,7 @@ defmodule Schooner.Eval do
 
   alias Schooner.Env
   alias Schooner.Eval.Analyze
+  alias Schooner.Eval.BacktraceState
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
@@ -165,18 +181,27 @@ defmodule Schooner.Eval do
 
     * `:file` — the file name recorded in the locations of errors.
     * `:debug` — when `true`, also locate errors raised while applying
-      a procedure. See "Source locations" above.
+      a procedure, and record applications for backtraces. See "Source
+      locations" and "Backtraces" above.
   """
   @spec compile(Analyze.ir(), reference(), keyword()) :: code()
   def compile(ir, globals, opts \\ []) do
+    # A top-level form is not in tail position: the entry point goes
+    # on to the next form when it returns.
     comp(ir, %{
       globals: globals,
       file: Keyword.get(opts, :file),
-      debug: Keyword.get(opts, :debug, false)
+      debug: Keyword.get(opts, :debug, false),
+      tail: false
     })
   end
 
   defp loc(%{file: file}, pos), do: Location.new(file, pos)
+
+  # `cx.tail` is true while compiling an expression in tail position.
+  # Only debug-mode code reads it.
+  defp non_tail(%{tail: false} = cx), do: cx
+  defp non_tail(cx), do: %{cx | tail: false}
   defp comp({:const, value}, _cx), do: fn _env -> value end
 
   # The two shallowest depths cover almost every reference, so match
@@ -229,7 +254,7 @@ defmodule Schooner.Eval do
   end
 
   defp comp({:if, test, then_e, else_e}, cx) do
-    test = comp(test, cx)
+    test = comp(test, non_tail(cx))
     then_c = comp(then_e, cx)
     else_c = comp(else_e, cx)
 
@@ -259,12 +284,12 @@ defmodule Schooner.Eval do
   defp comp({:app, _head, _args, _pos} = node, cx), do: compile_any_app(node, cx)
 
   defp comp({:lambda, params, {names, body}, name}, cx) do
-    body = compile_body(body, cx)
+    body = compile_body(body, %{cx | tail: true})
     fn env -> Value.closure(params, {names, body}, env, name) end
   end
 
   defp comp({:define, name, expr}, cx) do
-    expr = comp(expr, cx)
+    expr = comp(expr, non_tail(cx))
 
     fn env ->
       Env.define(env, name, single_value!(expr.(env)))
@@ -273,14 +298,14 @@ defmodule Schooner.Eval do
   end
 
   defp comp({:define_values, spec, expr}, cx) do
-    expr = comp(expr, cx)
+    expr = comp(expr, non_tail(cx))
     fn env -> eval_define_values(spec, expr, env) end
   end
 
   defp comp({:seq, body}, cx), do: compile_body(body, cx)
 
   defp comp({:letseq, names, bindings, body}, cx) do
-    bindings = Enum.map(bindings, &compile_binding(&1, cx))
+    bindings = Enum.map(bindings, &compile_binding(&1, non_tail(cx)))
     frame = List.to_tuple([names | List.duplicate(@rec_uninitialised, tuple_size(names))])
     body = compile_body(body, cx)
 
@@ -291,7 +316,7 @@ defmodule Schooner.Eval do
   end
 
   defp comp({:letrec, names, bindings, body}, cx) do
-    bindings = Enum.map(bindings, &compile_binding(&1, cx))
+    bindings = Enum.map(bindings, &compile_binding(&1, non_tail(cx)))
     body = compile_body(body, cx)
     fn env -> eval_letrec_star(names, bindings, body, env) end
   end
@@ -302,7 +327,11 @@ defmodule Schooner.Eval do
   # by-name lookup passes over it, followed by each lambda's compiled
   # body. The frame is built once, here.
   defp comp({:fixrec, lambdas, body}, cx) do
-    frame = List.to_tuple([{} | Enum.map(lambdas, fn {_names, b} -> compile_body(b, cx) end)])
+    lambda_cx = %{cx | tail: true}
+
+    frame =
+      List.to_tuple([{} | Enum.map(lambdas, fn {_names, b} -> compile_body(b, lambda_cx) end)])
+
     body = compile_body(body, cx)
     fn %Env{lex: lex} = env -> body.(%{env | lex: [frame | lex]}) end
   end
@@ -310,8 +339,35 @@ defmodule Schooner.Eval do
   # A direct call to lambda `slot` of the `:fixrec` frame `depth`
   # levels up. The callee's frame goes on top of the `:fixrec` frame,
   # exactly where `apply_proc/2` would have put it on top of the
-  # closure's env, and the compiled body is tail-called.
-  defp comp({:known_call, depth, slot, names, args}, cx) do
+  # closure's env, and the compiled body is tail-called. In debug mode
+  # the call is recorded first, as any other application would be.
+  defp comp({:known_call, depth, slot, names, args, name, pos}, %{debug: true} = cx) do
+    index = slot + 1
+    codes = Enum.map(args, &comp(&1, non_tail(cx)))
+    loc = loc(cx, pos)
+    tail? = cx.tail
+
+    if tail? do
+      fn %Env{lex: lex} = env ->
+        frame = List.to_tuple([names | eval_args(codes, env)])
+        [fix | _] = rest = drop_frames(lex, depth)
+        BacktraceState.push(BacktraceState.snapshot(), name, loc, true)
+        elem(fix, index).(%{env | lex: [frame | rest]})
+      end
+    else
+      fn %Env{lex: lex} = env ->
+        frame = List.to_tuple([names | eval_args(codes, env)])
+        [fix | _] = rest = drop_frames(lex, depth)
+        history = BacktraceState.snapshot()
+        BacktraceState.push(history, name, loc, false)
+        result = elem(fix, index).(%{env | lex: [frame | rest]})
+        BacktraceState.restore(history)
+        result
+      end
+    end
+  end
+
+  defp comp({:known_call, depth, slot, names, args, _name, _pos}, cx) do
     index = slot + 1
 
     case Enum.map(args, &comp(&1, cx)) do
@@ -348,9 +404,12 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp comp({:quasi, template}, cx), do: compile_template(template, cx)
+  defp comp({:quasi, template}, cx), do: compile_template(template, non_tail(cx))
 
+  # Neither the body nor the clauses are in tail position: the body
+  # runs inside the handler's extent and the clauses inside a `catch`.
   defp comp({:guard, names, clauses, body}, cx) do
+    cx = non_tail(cx)
     clauses = Enum.map(clauses, &compile_guard_clause(&1, cx))
     body = compile_body(body, cx)
     fn env -> eval_guard(names, clauses, body, env) end
@@ -364,8 +423,8 @@ defmodule Schooner.Eval do
   # One clause per inlined primitive, so each closure carries its own
   # BEAM operator. Head first, then arguments left to right, as for any
   # application; anything but the standard procedure applied to two
-  # integers takes the ordinary `apply_proc/2` path, or `apply_located/3`
-  # when compiling with `debug: true`.
+  # integers takes the ordinary `apply_proc/2` path, or the recording
+  # `apply_located/5` when compiling with `debug: true`.
   for {name, op} <- [
         {"+", :+},
         {"-", :-},
@@ -377,8 +436,8 @@ defmodule Schooner.Eval do
         {">=", :>=}
       ] do
     defp compile_inline(unquote(name), fun, cell, a, b, pos, %{debug: false} = cx) do
-      a = comp(a, cx)
-      b = comp(b, cx)
+      a = comp(a, non_tail(cx))
+      b = comp(b, non_tail(cx))
       loc = loc(cx, pos)
 
       fn env ->
@@ -402,9 +461,10 @@ defmodule Schooner.Eval do
     end
 
     defp compile_inline(unquote(name), fun, cell, a, b, pos, cx) do
-      a = comp(a, cx)
-      b = comp(b, cx)
+      a = comp(a, non_tail(cx))
+      b = comp(b, non_tail(cx))
       loc = loc(cx, pos)
+      apply = applier(cx)
 
       fn env ->
         proc =
@@ -421,7 +481,7 @@ defmodule Schooner.Eval do
             :erlang.unquote(op)(x, y)
 
           _ ->
-            apply_located(proc, [x, y], loc)
+            apply.(proc, [x, y], loc)
         end
       end
     end
@@ -434,6 +494,7 @@ defmodule Schooner.Eval do
   # arities build their argument list inline. Head first, then
   # arguments left to right.
   defp compile_app({:app, head, args, _pos}, cx) do
+    cx = non_tail(cx)
     head = comp(head, cx)
 
     case Enum.map(args, &comp(&1, cx)) do
@@ -470,27 +531,30 @@ defmodule Schooner.Eval do
   end
 
   # `compile_app/2` for `debug: true`: the same closures, applying
-  # through `apply_located/3` so that errors raised while applying the
-  # procedure carry the application's location.
+  # through `apply_located/5` so that errors raised while applying the
+  # procedure carry the application's location and the application is
+  # recorded for backtraces.
   defp compile_app_located({:app, head, args, pos}, cx) do
+    apply = applier(cx)
+    cx = non_tail(cx)
     head = comp(head, cx)
     loc = loc(cx, pos)
 
     case Enum.map(args, &comp(&1, cx)) do
       [] ->
-        fn env -> apply_located(single_value!(head.(env)), [], loc) end
+        fn env -> apply.(single_value!(head.(env)), [], loc) end
 
       [a] ->
         fn env ->
           proc = single_value!(head.(env))
-          apply_located(proc, [single_value!(a.(env))], loc)
+          apply.(proc, [single_value!(a.(env))], loc)
         end
 
       [a, b] ->
         fn env ->
           proc = single_value!(head.(env))
           x = single_value!(a.(env))
-          apply_located(proc, [x, single_value!(b.(env))], loc)
+          apply.(proc, [x, single_value!(b.(env))], loc)
         end
 
       [a, b, c] ->
@@ -498,15 +562,31 @@ defmodule Schooner.Eval do
           proc = single_value!(head.(env))
           x = single_value!(a.(env))
           y = single_value!(b.(env))
-          apply_located(proc, [x, y, single_value!(c.(env))], loc)
+          apply.(proc, [x, y, single_value!(c.(env))], loc)
         end
 
       codes ->
         fn env ->
           proc = single_value!(head.(env))
-          apply_located(proc, eval_args(codes, env), loc)
+          apply.(proc, eval_args(codes, env), loc)
         end
     end
+  end
+
+  # How a debug-mode application in `cx`'s position applies its
+  # procedure: a tail call records itself and tail-calls the procedure;
+  # any other call keeps its entries only for the extent of the call.
+  defp applier(%{tail: true}), do: &apply_tail/3
+  defp applier(_cx), do: &apply_non_tail/3
+
+  defp apply_tail(proc, args, loc),
+    do: apply_located(proc, args, loc, true, BacktraceState.snapshot())
+
+  defp apply_non_tail(proc, args, loc) do
+    history = BacktraceState.snapshot()
+    result = apply_located(proc, args, loc, false, history)
+    BacktraceState.restore(history)
+    result
   end
 
   # A body (or `begin`) compiles to one closure that runs each form in
@@ -515,7 +595,7 @@ defmodule Schooner.Eval do
   defp compile_body([last], cx), do: comp(last, cx)
 
   defp compile_body([head | rest], cx) do
-    head = comp(head, cx)
+    head = comp(head, non_tail(cx))
     rest = compile_body(rest, cx)
 
     fn env ->
@@ -659,15 +739,24 @@ defmodule Schooner.Eval do
 
   # `apply_proc/2` for applications compiled with `debug: true`: errors
   # raised while applying `proc` are given the application's location
-  # `loc`, unless something nearer the failure already located them.
-  # Closures are still tail-called. A primitive runs inside a `try`,
-  # except one that tail-calls back into Scheme, which would otherwise
-  # keep the `try`'s frame for the rest of the computation.
+  # `loc`, unless something nearer the failure already located them, and
+  # the application is recorded on top of `history`, the current
+  # backtrace history, `tail?` saying whether the call is in tail
+  # position. Closures are still tail-called. A primitive runs inside a
+  # `try`, except one that tail-calls back into Scheme, which would
+  # otherwise keep the `try`'s frame for the rest of the computation. A
+  # primitive that returns leaves the history as it found it, dropping
+  # whatever the procedures it called recorded: `apply_non_tail/3` puts
+  # it back for a call not in tail position, and the primitive does
+  # for one in tail position.
   defp apply_located(
          {:closure, {:fixed, n, _}, {names, body}, %Env{lex: lex} = env, name},
          args,
-         loc
+         loc,
+         tail?,
+         history
        ) do
+    BacktraceState.push(history, name, loc, tail?)
     frame = List.to_tuple([names | args])
 
     if tuple_size(frame) == n + 1 do
@@ -677,12 +766,14 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp apply_located({:closure, params, {names, body}, env, name}, args, loc) do
+  defp apply_located({:closure, params, {names, body}, env, name}, args, loc, tail?, history) do
+    BacktraceState.push(history, name, loc, tail?)
     values = params |> bind_params(args, name, loc) |> Enum.map(&elem(&1, 1))
     body.(Env.push_frame(env, List.to_tuple([names | values])))
   end
 
-  defp apply_located({:primitive, name, arity, fun}, args, loc) do
+  defp apply_located({:primitive, name, arity, fun}, args, loc, tail?, history) do
+    BacktraceState.push(history, name, loc, tail?)
     got = length(args)
 
     if not arity_ok?(arity, got) do
@@ -692,27 +783,33 @@ defmodule Schooner.Eval do
     if reenters?(name, fun) do
       fun.(args)
     else
-      try do
-        fun.(args)
-      rescue
-        e -> reraise Location.attach(e, loc), __STACKTRACE__
-      catch
-        # A raise caught by a `guard` escapes as a throw; carry this
-        # call's location with it in case the guard does not handle it.
-        :throw, {:schooner_guard, tag, raised} -> throw({:schooner_guard, tag, raised, loc})
-      end
+      result =
+        try do
+          fun.(args)
+        rescue
+          e -> reraise Location.attach(e, loc), __STACKTRACE__
+        catch
+          # A raise caught by a `guard` escapes as a throw; carry this
+          # call's location with it in case the guard does not handle it.
+          :throw, {:schooner_guard, tag, raised} -> throw({:schooner_guard, tag, raised, loc})
+        end
+
+      if tail?, do: BacktraceState.restore(history)
+      result
     end
   end
 
-  defp apply_located({:parameter, id, init, _converter}, [], _loc) do
+  defp apply_located({:parameter, id, init, _converter}, [], loc, tail?, history) do
+    BacktraceState.push(history, "<parameter>", loc, tail?)
     ParameterState.lookup(id, init)
   end
 
-  defp apply_located({:parameter, _, _, _}, args, loc) do
+  defp apply_located({:parameter, _, _, _}, args, loc, tail?, history) do
+    BacktraceState.push(history, "<parameter>", loc, tail?)
     raise Error, reason: {:arity_mismatch, "parameter", {:exact, 0}, length(args)}, location: loc
   end
 
-  defp apply_located(other, _args, loc),
+  defp apply_located(other, _args, loc, _tail?, _history),
     do: raise(Error, reason: {:not_a_procedure, other}, location: loc)
 
   # Only `apply` and `call-with-values` tail-call back into Scheme;
@@ -722,7 +819,7 @@ defmodule Schooner.Eval do
   defp reenters?("call-with-values", fun), do: Base.tail_calls_scheme?(fun)
   defp reenters?(_name, _fun), do: false
 
-  # The located variant is only called from `apply_located/3`; inlining
+  # The located variant is only called from `apply_located/5`; inlining
   # keeps the plain path free of the extra call.
   @compile {:inline, bind_params: 3}
   defp bind_params(spec, args, fname), do: bind_params(spec, args, fname, nil)
@@ -960,6 +1057,14 @@ defmodule Schooner.Eval do
   # `apply_proc/2` invokes it with the same machinery as a user
   # handler — `with-exception-handler` and `guard` are
   # indistinguishable from the raise side.
+  #
+  # When a backtrace history is being kept, it is saved on entry and
+  # put back when a raise is caught, so the clauses run without the
+  # frames of the abandoned body. A re-raise of a value no clause
+  # handled first puts back the history as it was at the raise, as the
+  # raise is continued from there. This holds whether or not the guard
+  # itself was compiled with `debug: true`, since the body may call
+  # code that was.
   defp eval_guard(names, clauses, body, env) do
     tag = make_ref()
     handler = build_guard_handler(tag)
@@ -969,6 +1074,7 @@ defmodule Schooner.Eval do
     # popped by `ExceptionState.raise_value/1`, and a blind pop
     # would discard an outer handler we didn't install.
     prev = ExceptionState.snapshot()
+    history = BacktraceState.snapshot()
     ExceptionState.push(handler)
 
     try do
@@ -980,23 +1086,38 @@ defmodule Schooner.Eval do
       # unwound past any parameterize/handler frames between the raise
       # site and this guard.
       :throw, {:schooner_guard, ^tag, raised} ->
-        handle_raised(names, clauses, env, raised, nil)
+        handle_raised(names, clauses, env, raised, nil, history)
 
       # In debug mode the throw also carries the raise site's location
-      # (see `apply_located/3`).
+      # (see `apply_located/5`).
       :throw, {:schooner_guard, ^tag, raised, loc} ->
-        handle_raised(names, clauses, env, raised, loc)
+        handle_raised(names, clauses, env, raised, loc, history)
     after
       ExceptionState.restore(prev)
     end
   end
 
-  defp handle_raised(names, clauses, env, raised, loc) do
+  defp handle_raised(names, clauses, env, raised, loc, nil) do
     handler_env = Env.push_frame(env, {names, raised})
 
     case eval_guard_clauses(clauses, handler_env) do
       {:matched, value} -> value
       :no_match -> raise_located(raised, loc)
+    end
+  end
+
+  defp handle_raised(names, clauses, env, raised, loc, history) do
+    at_raise = BacktraceState.snapshot()
+    BacktraceState.restore(history)
+    handler_env = Env.push_frame(env, {names, raised})
+
+    case eval_guard_clauses(clauses, handler_env) do
+      {:matched, value} ->
+        value
+
+      :no_match ->
+        BacktraceState.restore(at_raise)
+        raise_located(raised, loc)
     end
   end
 
@@ -1029,10 +1150,11 @@ defmodule Schooner.Eval do
 
   defp compile_guard_clause({:test, test}, cx), do: {:test, comp(test, cx)}
 
-  # In debug mode the clause keeps its location, so applying its
-  # procedure is located like any other application.
+  # In debug mode the clause applies its procedure like any other
+  # debug-mode application, located and recorded, whether or not the
+  # program has locations.
   defp compile_guard_clause({:arrow, test, proc_expr, pos}, cx),
-    do: {:arrow, comp(test, cx), comp(proc_expr, cx), if(cx.debug, do: loc(cx, pos))}
+    do: {:arrow, comp(test, cx), comp(proc_expr, cx), cx.debug, loc(cx, pos)}
 
   defp compile_guard_clause({:test_body, test, body}, cx),
     do: {:test_body, comp(test, cx), compile_body(body, cx)}
@@ -1055,14 +1177,16 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard_clause({:arrow, test, proc_expr, loc}, env) do
+  defp eval_guard_clause({:arrow, test, proc_expr, debug?, loc}, env) do
     case test.(env) do
       false ->
         :no_match
 
       val ->
         proc = proc_expr.(env)
-        {:matched, if(loc, do: apply_located(proc, [val], loc), else: apply_proc(proc, [val]))}
+
+        {:matched,
+         if(debug?, do: apply_non_tail(proc, [val], loc), else: apply_proc(proc, [val]))}
     end
   end
 

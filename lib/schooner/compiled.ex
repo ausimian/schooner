@@ -1,7 +1,7 @@
 defmodule Schooner.Compiled do
   @moduledoc """
   Opaque artifact produced by `Schooner.compile/2` and consumed by
-  `Schooner.run_compiled/2`.
+  `Schooner.run_compiled/3`.
 
   A `%Compiled{}` holds the **analysed core IR** of a program
   together with the **runtime variable bindings** that the program's
@@ -15,7 +15,7 @@ defmodule Schooner.Compiled do
 
   ## Reuse semantics
 
-  The same `%Compiled{}` can be passed to `Schooner.run_compiled/2`
+  The same `%Compiled{}` can be passed to `Schooner.run_compiled/3`
   many times against many `Schooner.Environment`s, which is what
   makes it worth caching. The captured `var_bindings` are re-applied
   to the runtime env on every call; macros expanded at compile
@@ -31,7 +31,7 @@ defmodule Schooner.Compiled do
   The IR records the source position of each application and variable
   reference, and the struct keeps the `:file` and `:debug` options
   given to `Schooner.compile/3`, so errors raised by
-  `Schooner.run_compiled/2` carry the same locations as those raised by
+  `Schooner.run_compiled/3` carry the same locations as those raised by
   `Schooner.eval/3`. The artifact is still plain data. Artifacts built
   by an earlier Schooner version must be recompiled.
 

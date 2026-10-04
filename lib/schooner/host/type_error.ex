@@ -12,19 +12,23 @@ defmodule Schooner.Host.TypeError do
 
   `:location` is the `Schooner.Location` of the script call that
   reached the host function. It is only filled in when the script runs
-  with `debug: true`; see "Source locations" in `Schooner`.
+  with `debug: true`; see "Source locations" in `Schooner`. With
+  `debug: true`, `:scheme_backtrace` lists the procedure calls that
+  led to the error, most recent first (see `Schooner.Frame`); otherwise
+  it is `nil`.
   """
 
   alias Schooner.Location
 
-  defexception [:op, :expected, :got, :message, :location]
+  defexception [:op, :expected, :got, :message, :location, :scheme_backtrace]
 
   @type t :: %__MODULE__{
           op: binary(),
           expected: binary(),
           got: term(),
           message: binary(),
-          location: Location.t() | nil
+          location: Location.t() | nil,
+          scheme_backtrace: [Schooner.Frame.t()] | nil
         }
 
   @impl true
