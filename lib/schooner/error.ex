@@ -18,7 +18,9 @@ defmodule Schooner.Error do
 
   `:location` is the `Schooner.Location` of the call that raised the
   value. It is only filled in when the script runs with `debug: true`;
-  see "Source locations" in `Schooner`.
+  see "Source locations" in `Schooner`. With `debug: true`,
+  `:scheme_backtrace` lists the procedure calls that led to the raise,
+  most recent first (see `Schooner.Frame`); otherwise it is `nil`.
   """
 
   alias Schooner.Location
@@ -27,10 +29,11 @@ defmodule Schooner.Error do
   @type t :: %__MODULE__{
           value: Value.t(),
           message: binary() | nil,
-          location: Location.t() | nil
+          location: Location.t() | nil,
+          scheme_backtrace: [Schooner.Frame.t()] | nil
         }
 
-  defexception [:value, :message, :location]
+  defexception [:value, :message, :location, :scheme_backtrace]
 
   @impl true
   def exception(opts) do

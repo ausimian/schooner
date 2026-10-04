@@ -348,7 +348,9 @@ defmodule Schooner.Checker do
     walk_all(body, cx, acc)
   end
 
-  defp walk({:known_call, _depth, _slot, _names, args}, cx, acc), do: walk_all(args, cx, acc)
+  defp walk({:known_call, _depth, _slot, _names, args, _name, _pos}, cx, acc),
+    do: walk_all(args, cx, acc)
+
   defp walk({:quasi, template}, cx, acc), do: walk_template(template, cx, acc)
 
   defp walk({:guard, _names, clauses, body}, cx, acc) do

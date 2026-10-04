@@ -16,9 +16,9 @@
     raised while applying a procedure, such as primitive type errors,
     arity mismatches, applying a non-procedure, an uncaught `raise`
     or `(error ...)`, and `Schooner.Host.TypeError`. Debug mode wraps
-    each primitive call in a `try`, which makes scripts that spend
-    their time in primitives 10–15% slower. Without it these errors
-    have `location: nil`.
+    each primitive call in a `try` and records calls for backtraces
+    (below), which together make call-heavy scripts two to three
+    times slower. Without it these errors have `location: nil`.
   - An error inside a macro expansion points at the user's code, not
     at the library that defines the macro.
   - Libraries loaded with `Schooner.Library.Loader` always record
@@ -29,6 +29,21 @@
 - `Schooner.format_error/2` renders an error for people. With
   `source:`, it adds an excerpt of the failing line with a caret
   under the column.
+- Scheme backtraces in debug mode. With `debug: true`, the evaluator
+  keeps a history of the last 32 procedure calls (set
+  `:backtrace_depth` to change it) and attaches it to a script error
+  as `:scheme_backtrace`, a list of `Schooner.Frame` structs holding
+  each call's procedure name, location and whether it was a tail
+  call, most recent first. Calls that have returned are dropped, and
+  escapes through `guard` and `call/cc` drop the frames they abandon,
+  so the backtrace lists the calls still running when the error was
+  raised. The history is bounded, so a tail-recursive loop still runs
+  in constant memory. `Schooner.format_error/2` prints the backtrace
+  after the message. Without `debug`, no history is kept and running
+  a script costs the same as before.
+- `Schooner.run_compiled/3` and `Schooner.run_compiled!/3` take
+  `debug:` and `:backtrace_depth` options, so one compiled program
+  can run with or without debug mode.
 - `Schooner.check/3` checks a script against a `Schooner.Environment`
   without running it, and returns a list of `Schooner.Diagnostic`s
   with a severity, a code, a message and a location. It reports

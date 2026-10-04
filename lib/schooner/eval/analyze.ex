@@ -115,7 +115,7 @@ defmodule Schooner.Eval.Analyze do
           | {:letrec, [binary()], [binding()], [ir()]}
           | {:letseq, tuple(), [binding()], [ir()]}
           | {:fixrec, [{tuple(), [ir()]}], [ir()]}
-          | {:known_call, non_neg_integer(), non_neg_integer(), tuple(), [ir()]}
+          | {:known_call, non_neg_integer(), non_neg_integer(), tuple(), [ir()], binary(), pos()}
           | {:quasi, template()}
           | {:guard, {binary()}, [guard_clause()], [ir()]}
           | {:raise, Exception.t()}
@@ -454,11 +454,12 @@ defmodule Schooner.Eval.Analyze do
   #
   # and each call to one of its lambdas becomes
   #
-  #     {:known_call, depth, slot, names_tuple, args}
+  #     {:known_call, depth, slot, names_tuple, args, name, pos}
   #
   # which the evaluator runs by pushing the callee's argument frame and
   # tail-calling its compiled body, with no closure, process-dictionary
-  # frame, lookup or arity check.
+  # frame, lookup or arity check. `name` and `pos` are the operator's
+  # name and the call's position, for debug-mode backtraces.
   #
   # A call from inside a nested `lambda` disqualifies the `letrec*`:
   # that closure can outlive the form, and calling it later must still
@@ -508,10 +509,10 @@ defmodule Schooner.Eval.Analyze do
   # counted from the same scope as the reference itself.
   defp known_all(irs, d, lam?, info), do: Enum.map(irs, &known(&1, d, lam?, info))
 
-  defp known({:app, {:rref, d, slot, _name, _fallback, _pos}, args, _app_pos}, d, false, info) do
+  defp known({:app, {:rref, d, slot, name, _fallback, _pos}, args, app_pos}, d, false, info) do
     {n, fnames} = elem(info, slot)
     if length(args) != n, do: throw(:not_known)
-    {:known_call, d, slot, fnames, known_all(args, d, false, info)}
+    {:known_call, d, slot, fnames, known_all(args, d, false, info), name, app_pos}
   end
 
   defp known({:rref, d, _slot, _name, _fallback, _pos}, d, _lam?, _info), do: throw(:not_known)
@@ -535,8 +536,8 @@ defmodule Schooner.Eval.Analyze do
   defp known({:app, head, args, pos}, d, lam?, info),
     do: {:app, known(head, d, lam?, info), known_all(args, d, lam?, info), pos}
 
-  defp known({:known_call, depth, slot, fnames, args}, d, lam?, info),
-    do: {:known_call, depth, slot, fnames, known_all(args, d, lam?, info)}
+  defp known({:known_call, depth, slot, fnames, args, name, pos}, d, lam?, info),
+    do: {:known_call, depth, slot, fnames, known_all(args, d, lam?, info), name, pos}
 
   defp known({:lambda, params, {fnames, body}, name}, d, _lam?, info),
     do: {:lambda, params, {fnames, known_all(body, d + 1, true, info)}, name}
