@@ -60,6 +60,43 @@ defmodule Schooner do
   For richer sandbox composition (registering host libraries,
   pre-imports, etc.), construct a `Schooner.Environment` via
   `Schooner.Environment.new/1` and pass it to `eval/2`.
+
+  ## Source locations
+
+  Script-level exceptions carry a `:location` field: a
+  `Schooner.Location` with the `file`, `line` and `column` of the form
+  that failed, or `nil`. Locations are recorded when you ask for them
+  by passing `file:` (or `locations: true`) to `eval/3` or
+  `compile/3`; the message is then prefixed with `file:line:col: `.
+  `format_error/2` renders an error with a source excerpt.
+
+  Tracking positions makes reading and expanding a script about 15%
+  slower; it costs nothing while the script runs. Without `file:` or
+  `locations: true`, scripts are read without positions and errors
+  have `location: nil`.
+
+  With locations on, these errors are always located:
+
+    * lexer and reader errors;
+    * malformed special forms and other syntax and expansion errors;
+    * an `(import ...)` of a missing library;
+    * unbound variables, and `letrec` bindings used before they are
+      initialised.
+
+  Errors raised while applying a procedure are located only with
+  `debug: true`: primitive type and domain errors, arity mismatches,
+  applying a non-procedure, an uncaught `raise` or `(error ...)`, and
+  `Schooner.Host.TypeError`s raised by host functions. Debug mode
+  wraps each primitive call in a `try`, which makes scripts that spend
+  their time in primitives (list, string and vector work) 10–15%
+  slower; arithmetic on integers is unaffected. Without it these
+  errors have `location: nil`.
+
+  An error inside a macro expansion is placed in the user's source:
+  forms the macro introduces take the position of the macro use, and
+  the user's own sub-forms keep theirs. An error in a procedure
+  defined by a library loaded from a file is placed in that file (see
+  `Schooner.Library.Loader`).
   """
 
   alias Schooner.Compiled
@@ -72,8 +109,11 @@ defmodule Schooner do
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
   alias Schooner.Expander
+  alias Schooner.Expander.Positions
+  alias Schooner.Lexer
   alias Schooner.Library
   alias Schooner.Library.Import, as: LibImport
+  alias Schooner.Location
   alias Schooner.Reader
   alias Schooner.Value
 
@@ -95,10 +135,13 @@ defmodule Schooner do
   # the script has no explicit `(import ...)` of its own. Pre-parsed at
   # compile time so the option path does not pay reader cost on every
   # call.
-  @default_implicit_imports_forms Reader.read_string(
-                                    "(import (scheme base) (scheme cxr) (scheme char) " <>
-                                      "(scheme inexact) (scheme complex) (scheme write) " <>
-                                      "(scheme read) (scheme case-lambda) (scheme lazy))"
+  @default_implicit_imports_forms Enum.map(
+                                    Reader.read_string(
+                                      "(import (scheme base) (scheme cxr) (scheme char) " <>
+                                        "(scheme inexact) (scheme complex) (scheme write) " <>
+                                        "(scheme read) (scheme case-lambda) (scheme lazy))"
+                                    ),
+                                    &{&1, nil}
                                   )
 
   @doc """
@@ -160,14 +203,13 @@ defmodule Schooner do
   `{:ok, value}` on success, `{:error, exception}` for any
   script-level failure. Use `eval!/3` for the raising variant.
 
-  Options match `eval!/3`. The `Environment` overload of `eval/2`
-  does not accept options — pre-imports and library composition
-  are baked into the `Environment` at construction time.
+  `env` may be a `Schooner.Env` or a `Schooner.Environment`. Options
+  match `eval!/3`.
   """
-  @spec eval(binary(), Env.t(), keyword()) ::
+  @spec eval(binary(), Env.t() | Environment.t(), keyword()) ::
           {:ok, Value.t()} | {:error, Exception.t()}
-  def eval(source, %Env{} = env, opts) when is_binary(source) and is_list(opts) do
-    {:ok, eval!(source, env, opts)}
+  def eval(source, env_or_environment, opts) when is_binary(source) and is_list(opts) do
+    {:ok, eval!(source, env_or_environment, opts)}
   rescue
     e -> rescue_script_error(e, __STACKTRACE__)
   end
@@ -176,14 +218,8 @@ defmodule Schooner do
   Bang form of `eval/2` — raises on script-level failure.
   """
   @spec eval!(binary(), Env.t() | Environment.t()) :: Value.t()
-  def eval!(source, %Env{} = env) when is_binary(source) do
-    eval!(source, env, [])
-  end
-
-  def eval!(source, %Environment{env: env, syntax_env: syntax_env, registry: registry})
-      when is_binary(source) do
-    forms = Reader.read_string(source)
-    do_eval(forms, env, syntax_env, registry)
+  def eval!(source, env_or_environment) when is_binary(source) do
+    eval!(source, env_or_environment, [])
   end
 
   @doc """
@@ -191,8 +227,19 @@ defmodule Schooner do
 
   Options:
 
+    * `:file` — the name of the script, recorded in the `:location`
+      of any error and prefixed to its message. Passing it turns on
+      `:locations`. Defaults to `nil`.
+    * `:locations` — when `true`, record the source location of
+      errors (see "Source locations" in the moduledoc). Defaults to
+      `true` when `:file` or `:debug` is given and `false` otherwise.
+    * `:debug` — when `true`, also locate errors raised while applying
+      a procedure, at a cost on every primitive call. Implies
+      `locations: true`. Defaults to `false`.
     * `:implicit_imports` — controls implicit imports prepended
-      to a script that declares none of its own.
+      to a script that declares none of its own. Only accepted with a
+      `Schooner.Env`; a `Schooner.Environment` bakes its imports in at
+      construction time.
         * `:none` (default) — no implicit imports. Bindings come
           exclusively from `env` and the script's own
           `(import ...)` declarations. Use this for untrusted
@@ -202,11 +249,56 @@ defmodule Schooner do
           `(import ...)` of its own: an explicit import means
           the script has chosen a narrower surface.
   """
-  @spec eval!(binary(), Env.t(), keyword()) :: Value.t()
+  @spec eval!(binary(), Env.t() | Environment.t(), keyword()) :: Value.t()
   def eval!(source, %Env{} = env, opts) when is_binary(source) and is_list(opts) do
-    forms = Reader.read_string(source)
+    forms = read(source, opts)
     forms = apply_implicit_imports(forms, opts)
-    do_eval(forms, env, Expander.bootstrap_env(), Library.standard())
+    do_eval(forms, env, Expander.bootstrap_env(), Library.standard(), opts)
+  end
+
+  def eval!(source, %Environment{} = environment, opts)
+      when is_binary(source) and is_list(opts) do
+    if Keyword.has_key?(opts, :implicit_imports) do
+      raise ArgumentError,
+            ":implicit_imports is not supported with a Schooner.Environment, " <>
+              "which fixes its imports when it is built"
+    end
+
+    %Environment{env: env, syntax_env: syntax_env, registry: registry} = environment
+    do_eval(read(source, opts), env, syntax_env, registry, opts)
+  end
+
+  # Positions are only read, and carried through expansion and
+  # analysis, when the caller asks for locations: that work slows the
+  # front end, so a caller who does not want locations does not pay
+  # for it.
+  defp read(source, opts) do
+    if locations?(opts) do
+      in_file(opts, fn -> Reader.read_string_positioned(source) end)
+    else
+      try do
+        source |> Reader.read_string() |> Enum.map(&{&1, nil})
+      rescue
+        # Lexer and reader errors carry their position anyway; with
+        # locations off they have no location, like every other error.
+        e in [Lexer.Error, Reader.Error] -> reraise %{e | location: nil}, __STACKTRACE__
+      end
+    end
+  end
+
+  defp locations?(opts) do
+    Keyword.get_lazy(opts, :locations, fn ->
+      Keyword.get(opts, :file) != nil or Keyword.get(opts, :debug, false)
+    end)
+  end
+
+  # Name the script's file in the location of an error raised by `fun`
+  # before the file was known: by the reader, import resolution or the
+  # expander.
+  defp in_file(opts, fun) do
+    fun.()
+  rescue
+    e -> reraise Location.put_file(e, Keyword.get(opts, :file)), __STACKTRACE__
   end
 
   defp apply_implicit_imports(forms, opts) do
@@ -215,7 +307,7 @@ defmodule Schooner do
         forms
 
       :all ->
-        {explicit_imports, _body} = LibImport.extract_program_imports(forms)
+        {explicit_imports, _body} = extract_imports(forms)
 
         case explicit_imports do
           [] -> @default_implicit_imports_forms ++ forms
@@ -228,6 +320,52 @@ defmodule Schooner do
                 inspect(other)
     end
   end
+
+  # The leading `(import ...)` forms of a positioned program, as a list
+  # of `{spec, tree}` pairs, and the rest of the program.
+  defp extract_imports(forms), do: extract_imports(forms, [])
+
+  defp extract_imports([{[{:sym, "import"} | specs], tree} | rest], acc) do
+    pairs =
+      specs
+      |> Value.to_list()
+      |> Enum.with_index(1)
+      |> Enum.map(fn {spec, i} -> {spec, Positions.nth(tree, i)} end)
+
+    extract_imports(rest, [pairs | acc])
+  end
+
+  defp extract_imports(rest, acc), do: {acc |> Enum.reverse() |> Enum.concat(), rest}
+
+  # Resolve import specs one at a time, so that a failure is placed at
+  # the spec that caused it. Later specs shadow earlier ones, as in
+  # `Schooner.Library.Import.resolve/2`.
+  defp resolve_imports(spec_pairs, registry) do
+    Enum.reduce(spec_pairs, %{}, fn {spec, tree}, acc ->
+      Map.merge(acc, resolve_import(spec, tree, registry))
+    end)
+  end
+
+  defp resolve_import(spec, tree, registry) do
+    LibImport.resolve([spec], registry)
+  rescue
+    e -> reraise Location.attach(e, Location.new(nil, Positions.at(tree))), __STACKTRACE__
+  end
+
+  # The front end shared by `eval!/3` and `compile!/3`:
+  # resolve the program's imports against `registry` and expand its
+  # body.
+  defp front_end(forms, env, syntax_env, registry, opts) do
+    in_file(opts, fn ->
+      {import_specs, body} = extract_imports(forms)
+      bindings = resolve_imports(import_specs, registry)
+      {env, syntax_env} = LibImport.apply_bindings(bindings, env, syntax_env)
+      {expanded, _syntax_env} = Expander.expand_positioned(body, syntax_env)
+      {bindings, env, expanded}
+    end)
+  end
+
+  defp eval_opts(opts), do: Keyword.take(opts, [:file, :debug])
 
   @doc """
   Invoke a Scheme procedure value from Elixir. Returns
@@ -272,11 +410,15 @@ defmodule Schooner do
   repeatedly against any compatible environment. Macros are
   expanded at compile time; variable bindings from `(import ...)`
   declarations are pre-resolved and baked into the artifact.
+
+  Options are `:file`, `:locations` and `:debug`, as for `eval!/3`.
+  They are kept in the artifact, so `run_compiled/2` reports the same
+  locations.
   """
-  @spec compile(binary(), Environment.t()) ::
+  @spec compile(binary(), Environment.t(), keyword()) ::
           {:ok, Compiled.t()} | {:error, Exception.t()}
-  def compile(source, env_struct) when is_binary(source) do
-    {:ok, compile!(source, env_struct)}
+  def compile(source, env_struct, opts \\ []) when is_binary(source) and is_list(opts) do
+    {:ok, compile!(source, env_struct, opts)}
   rescue
     e -> rescue_script_error(e, __STACKTRACE__)
   end
@@ -292,22 +434,19 @@ defmodule Schooner do
   end
 
   @doc """
-  Bang form of `compile/2` — raises on source-level failure.
+  Bang form of `compile/3` — raises on source-level failure.
   """
-  @spec compile!(binary(), Environment.t()) :: Compiled.t()
-  def compile!(source, env_struct) when is_binary(source) do
-    forms = Reader.read_string(source)
-    {import_specs, body} = LibImport.extract_program_imports(forms)
-    bindings = LibImport.resolve(import_specs, Environment.registry(env_struct))
-
-    {_compile_env, compile_syntax_env} =
-      LibImport.apply_bindings(
-        bindings,
+  @spec compile!(binary(), Environment.t(), keyword()) :: Compiled.t()
+  def compile!(source, env_struct, opts \\ []) when is_binary(source) and is_list(opts) do
+    {bindings, _compile_env, expanded} =
+      source
+      |> read(opts)
+      |> front_end(
         Environment.env(env_struct),
-        Environment.syntax_env(env_struct)
+        Environment.syntax_env(env_struct),
+        Environment.registry(env_struct),
+        opts
       )
-
-    expanded = Expander.expand_program(body, compile_syntax_env)
 
     var_bindings =
       Enum.reduce(bindings, %{}, fn
@@ -315,7 +454,8 @@ defmodule Schooner do
         _, acc -> acc
       end)
 
-    Compiled.new(Enum.map(expanded, &Analyze.analyze/1), var_bindings)
+    program = Enum.map(expanded, fn {form, tree} -> Analyze.analyze(form, tree) end)
+    Compiled.new(program, var_bindings, eval_opts(opts))
   end
 
   @doc """
@@ -356,11 +496,12 @@ defmodule Schooner do
       Compiled.program(compiled),
       Compiled.var_bindings(compiled),
       Environment.env(env_struct),
-      Environment.syntax_env(env_struct)
+      Environment.syntax_env(env_struct),
+      Compiled.opts(compiled)
     )
   end
 
-  defp do_run_program(program, var_bindings, env, syntax_env) do
+  defp do_run_program(program, var_bindings, env, syntax_env, opts) do
     prev_handlers = ExceptionState.snapshot()
     prev_conts = ContinuationState.snapshot()
     prev_params = ParameterState.snapshot()
@@ -372,7 +513,7 @@ defmodule Schooner do
       {env, _syntax_env} = LibImport.apply_bindings(var_bindings, env, syntax_env)
 
       program
-      |> Enum.reduce(:unspecified, fn node, _acc -> Eval.exec(node, env) end)
+      |> Enum.reduce(:unspecified, fn node, _acc -> Eval.exec(node, env, opts) end)
       |> Eval.single_value!()
     after
       ExceptionState.restore(prev_handlers)
@@ -381,7 +522,7 @@ defmodule Schooner do
     end
   end
 
-  defp do_eval(forms, %Env{} = env, syntax_env, registry) do
+  defp do_eval(forms, %Env{} = env, syntax_env, registry, opts) do
     # Snapshot/restore the per-process control state so each top-level
     # call starts clean. Without this, a script that pushes a handler
     # or registers a `call/cc` tag then escapes via a host-side throw
@@ -395,19 +536,83 @@ defmodule Schooner do
     ParameterState.reset()
 
     try do
-      {import_specs, body} = LibImport.extract_program_imports(forms)
-      bindings = LibImport.resolve(import_specs, registry)
+      {_bindings, env, expanded} = front_end(forms, env, syntax_env, registry, opts)
+      eval_opts = eval_opts(opts)
 
-      {env, syntax_env} = LibImport.apply_bindings(bindings, env, syntax_env)
-
-      body
-      |> Expander.expand_program(syntax_env)
-      |> Enum.reduce(:unspecified, fn form, _acc -> Eval.eval(form, env) end)
+      expanded
+      |> Enum.reduce(:unspecified, fn {form, tree}, _acc ->
+        Eval.eval(form, tree, env, eval_opts)
+      end)
       |> Eval.single_value!()
     after
       ExceptionState.restore(prev_handlers)
       ContinuationState.restore(prev_conts)
       ParameterState.restore(prev_params)
+    end
+  end
+
+  @doc ~S"""
+  Render a script-level exception for people.
+
+  The first line is the message, prefixed with the error's location
+  (`file:line:col: ` or `line:col: `) when it has one. With
+  `source: binary` — the text of the script the location points into —
+  a short excerpt follows, with a caret under the failing column:
+
+      iex> source = "(define x 1)\n(car x)"
+      iex> {:error, e} =
+      ...>   Schooner.eval(source, Schooner.Env.new(),
+      ...>     implicit_imports: :all, file: "demo.scm", debug: true)
+      iex> Schooner.format_error(e, source: source)
+      "demo.scm:2:1: type error in `car`: expected pair, got 1\n  |\n2 | (car x)\n  | ^"
+
+  Options:
+
+    * `:source` — the script's source text. Without it, or when the
+      error has no location, only the message is returned.
+  """
+  @spec format_error(Exception.t(), keyword()) :: binary()
+  def format_error(exception, opts \\ []) when is_exception(exception) and is_list(opts) do
+    message = Exception.message(exception)
+
+    case Map.get(exception, :location) do
+      %Location{file: nil} = loc ->
+        "#{loc}: #{message}" <> excerpt(loc, Keyword.get(opts, :source))
+
+      %Location{} = loc ->
+        message <> excerpt(loc, Keyword.get(opts, :source))
+
+      _ ->
+        message
+    end
+  end
+
+  defp excerpt(_loc, nil), do: ""
+
+  defp excerpt(%Location{line: line, column: column}, source) when is_binary(source) do
+    # Split lines as the lexer counts them.
+    case source |> String.split(~r/\r\n|\r|\n/) |> Enum.at(line - 1) do
+      nil ->
+        ""
+
+      text ->
+        number = Integer.to_string(line)
+        gutter = String.duplicate(" ", String.length(number)) <> " |"
+        # The column counts codepoints, as the lexer does. Pad one
+        # space per grapheme before it, keeping tabs so the caret lines
+        # up under them.
+        pad =
+          text
+          |> String.codepoints()
+          |> Enum.take(column - 1)
+          |> Enum.join()
+          |> String.graphemes()
+          |> Enum.map_join(fn
+            "\t" -> "\t"
+            _ -> " "
+          end)
+
+        "\n" <> gutter <> "\n" <> number <> " | " <> text <> "\n" <> gutter <> " " <> pad <> "^"
     end
   end
 

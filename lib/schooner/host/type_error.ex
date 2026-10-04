@@ -9,15 +9,22 @@ defmodule Schooner.Host.TypeError do
   `:got` (the actual value, rendered with `inspect/1` in the
   message). Callers can match on `:op` and `:expected` without
   depending on the message wording.
+
+  `:location` is the `Schooner.Location` of the script call that
+  reached the host function. It is only filled in when the script runs
+  with `debug: true`; see "Source locations" in `Schooner`.
   """
 
-  defexception [:op, :expected, :got, :message]
+  alias Schooner.Location
+
+  defexception [:op, :expected, :got, :message, :location]
 
   @type t :: %__MODULE__{
           op: binary(),
           expected: binary(),
           got: term(),
-          message: binary()
+          message: binary(),
+          location: Location.t() | nil
         }
 
   @impl true

@@ -42,6 +42,25 @@ defmodule Schooner.Eval do
   body is not in tail position. `guard` also retains its dynamic
   exception-handler extent.
 
+  ## Source locations
+
+  The IR records the `{line, column}` of every application and variable
+  reference, and `compile/3` captures them, with the file name, in the
+  closures it builds. Nothing is looked up at run time: a location is
+  only read on the path that raises. An unbound variable and an
+  analysis error always carry their location.
+
+  An error raised while applying a procedure — an arity mismatch, a
+  non-procedure in operator position, or anything a primitive raises —
+  is located only when compiling with `debug: true`. Locating it
+  takes a `try` around each primitive call, which costs time on every
+  call and, for the duration of the primitive, a stack frame; without
+  `debug` the application closures are exactly the plain ones. A
+  primitive that tail-calls back into Scheme (`apply`,
+  `call-with-values`) is still called without the `try` in debug mode,
+  so tail calls through it stay proper; errors raised inside them are
+  located only if the code they call locates them.
+
   The evaluator only consumes the core forms produced by
   `Schooner.Expander`: `quote`, `if`, `lambda`, top-level `define`,
   `define-values`, `begin`, `letrec*`, `quasiquote`, `guard`,
@@ -61,6 +80,8 @@ defmodule Schooner.Eval do
   alias Schooner.Eval.Error
   alias Schooner.Eval.ExceptionState
   alias Schooner.Eval.ParameterState
+  alias Schooner.Expander.Positions
+  alias Schooner.Location
   alias Schooner.Primitive.Error, as: PError
   alias Schooner.Primitives.Base
   alias Schooner.Value
@@ -106,40 +127,65 @@ defmodule Schooner.Eval do
   `Schooner.Environment`).
   """
   @spec eval(Value.t(), Env.t()) :: eval_result()
-  def eval(form, %Env{lex: []} = env), do: compile(Analyze.analyze(form), env.globals).(env)
+  def eval(form, %Env{lex: []} = env), do: eval(form, nil, env, [])
+
+  @doc """
+  Analyse and evaluate a single top-level core form whose position
+  tree is `tree` (see `Schooner.Expander.expand_positioned/2`).
+  `opts` are those of `compile/3`.
+  """
+  @spec eval(Value.t(), Positions.t(), Env.t(), keyword()) :: eval_result()
+  def eval(form, tree, %Env{lex: []} = env, opts),
+    do: compile(Analyze.analyze(form, tree), env.globals, opts).(env)
 
   @doc """
   Compile and evaluate an IR node produced by
-  `Schooner.Eval.Analyze.analyze/1`.
+  `Schooner.Eval.Analyze.analyze/2`. `opts` are those of `compile/3`.
   """
-  @spec exec(Analyze.ir(), Env.t()) :: eval_result()
-  def exec(ir, %Env{globals: g} = env), do: compile(ir, g).(env)
+  @spec exec(Analyze.ir(), Env.t(), keyword()) :: eval_result()
+  def exec(ir, %Env{globals: g} = env, opts \\ []), do: compile(ir, g, opts).(env)
 
   @doc """
   Compile an IR node into a closure that evaluates it against an env
   whose globals slot is `globals`. Child nodes are compiled up front,
   so the returned closure does no further dispatch on the IR, and
   global references are bound to their cells in `globals`.
+
+  Options:
+
+    * `:file` — the file name recorded in the locations of errors.
+    * `:debug` — when `true`, also locate errors raised while applying
+      a procedure. See "Source locations" above.
   """
-  @spec compile(Analyze.ir(), reference()) :: code()
-  def compile({:const, value}, _g), do: fn _env -> value end
+  @spec compile(Analyze.ir(), reference(), keyword()) :: code()
+  def compile(ir, globals, opts \\ []) do
+    comp(ir, %{
+      globals: globals,
+      file: Keyword.get(opts, :file),
+      debug: Keyword.get(opts, :debug, false)
+    })
+  end
+
+  defp loc(%{file: file}, pos), do: Location.new(file, pos)
+  defp comp({:const, value}, _cx), do: fn _env -> value end
 
   # The two shallowest depths cover almost every reference, so match
   # the frame directly instead of walking the chain.
-  def compile({:lref, 0, index}, _g), do: fn %Env{lex: [frame | _]} -> elem(frame, index) end
-  def compile({:lref, 1, index}, _g), do: fn %Env{lex: [_, frame | _]} -> elem(frame, index) end
+  defp comp({:lref, 0, index}, _cx), do: fn %Env{lex: [frame | _]} -> elem(frame, index) end
+  defp comp({:lref, 1, index}, _cx), do: fn %Env{lex: [_, frame | _]} -> elem(frame, index) end
 
-  def compile({:lref, depth, index}, _g),
+  defp comp({:lref, depth, index}, _cx),
     do: fn %Env{lex: lex} -> elem(frame_at(lex, depth), index) end
 
-  def compile({:rref, depth, slot, name, fallback}, g) do
-    fallback = compile(fallback, g)
+  defp comp({:rref, depth, slot, name, fallback, pos}, cx) do
+    fallback = comp(fallback, cx)
+    loc = loc(cx, pos)
 
     fn %Env{lex: lex} = env ->
       {:rec, ref} = frame_at(lex, depth)
 
       case :erlang.get(ref) do
-        {:rec_frame, _names, values} -> rec_value!(elem(values, slot), name)
+        {:rec_frame, _names, values} -> rec_value!(elem(values, slot), name, loc)
         :undefined -> fallback.(env)
       end
     end
@@ -149,30 +195,33 @@ defmodule Schooner.Eval do
   # here once. A marked name is still looked up by name: macro
   # expansion mints fresh marked names, and giving each one a cell
   # would grow the globals with every expansion.
-  def compile({:gref, name, nil}, g) do
-    cell = Env.global_cell(g, name)
+  defp comp({:gref, name, nil, pos}, cx) do
+    cell = Env.global_cell(cx.globals, name)
+    loc = loc(cx, pos)
 
     fn _env ->
       case :erlang.get(cell) do
-        @unbound -> raise Error, reason: {:unbound, name}
+        @unbound -> raise Error, reason: {:unbound, name}, location: loc
         value -> value
       end
     end
   end
 
-  def compile({:gref, name, marked}, _g) do
+  defp comp({:gref, name, marked, pos}, cx) do
+    loc = loc(cx, pos)
+
     fn env ->
       case Env.fetch_global(env, name) do
         {:ok, value} -> value
-        :error -> resolve_marked_var(marked, name, env)
+        :error -> resolve_marked_var(marked, name, env, loc)
       end
     end
   end
 
-  def compile({:if, test, then_e, else_e}, g) do
-    test = compile(test, g)
-    then_c = compile(then_e, g)
-    else_c = compile(else_e, g)
+  defp comp({:if, test, then_e, else_e}, cx) do
+    test = comp(test, cx)
+    then_c = comp(then_e, cx)
+    else_c = comp(else_e, cx)
 
     fn env ->
       case single_value!(test.(env)) do
@@ -187,22 +236,22 @@ defmodule Schooner.Eval do
   # is still read on every call, so a redefinition is honoured (and a
   # lexical binding never reaches this clause); the integer operation
   # runs inline only when the cell holds the standard procedure.
-  def compile({:app, {:gref, name, nil}, [a, b]} = node, g) do
+  defp comp({:app, {:gref, name, nil, _}, [a, b], pos} = node, cx) do
     case Map.fetch(Base.inlined(), name) do
-      {:ok, fun} -> compile_inline(name, fun, Env.global_cell(g, name), a, b, g)
-      :error -> compile_app(node, g)
+      {:ok, fun} -> compile_inline(name, fun, Env.global_cell(cx.globals, name), a, b, pos, cx)
+      :error -> compile_any_app(node, cx)
     end
   end
 
-  def compile({:app, _head, _args} = node, g), do: compile_app(node, g)
+  defp comp({:app, _head, _args, _pos} = node, cx), do: compile_any_app(node, cx)
 
-  def compile({:lambda, params, {names, body}, name}, g) do
-    body = compile_body(body, g)
+  defp comp({:lambda, params, {names, body}, name}, cx) do
+    body = compile_body(body, cx)
     fn env -> Value.closure(params, {names, body}, env, name) end
   end
 
-  def compile({:define, name, expr}, g) do
-    expr = compile(expr, g)
+  defp comp({:define, name, expr}, cx) do
+    expr = comp(expr, cx)
 
     fn env ->
       Env.define(env, name, single_value!(expr.(env)))
@@ -210,17 +259,17 @@ defmodule Schooner.Eval do
     end
   end
 
-  def compile({:define_values, spec, expr}, g) do
-    expr = compile(expr, g)
+  defp comp({:define_values, spec, expr}, cx) do
+    expr = comp(expr, cx)
     fn env -> eval_define_values(spec, expr, env) end
   end
 
-  def compile({:seq, body}, g), do: compile_body(body, g)
+  defp comp({:seq, body}, cx), do: compile_body(body, cx)
 
-  def compile({:letseq, names, bindings, body}, g) do
-    bindings = Enum.map(bindings, &compile_binding(&1, g))
+  defp comp({:letseq, names, bindings, body}, cx) do
+    bindings = Enum.map(bindings, &compile_binding(&1, cx))
     frame = List.to_tuple([names | List.duplicate(@rec_uninitialised, tuple_size(names))])
-    body = compile_body(body, g)
+    body = compile_body(body, cx)
 
     fn env ->
       env = Enum.reduce(bindings, Env.push_frame(env, frame), &init_pos_binding/2)
@@ -228,9 +277,9 @@ defmodule Schooner.Eval do
     end
   end
 
-  def compile({:letrec, names, bindings, body}, g) do
-    bindings = Enum.map(bindings, &compile_binding(&1, g))
-    body = compile_body(body, g)
+  defp comp({:letrec, names, bindings, body}, cx) do
+    bindings = Enum.map(bindings, &compile_binding(&1, cx))
+    body = compile_body(body, cx)
     fn env -> eval_letrec_star(names, bindings, body, env) end
   end
 
@@ -239,9 +288,9 @@ defmodule Schooner.Eval do
   # frame is `{{}, body_0, body_1, ...}`: an empty names tuple, so
   # by-name lookup passes over it, followed by each lambda's compiled
   # body. The frame is built once, here.
-  def compile({:fixrec, lambdas, body}, g) do
-    frame = List.to_tuple([{} | Enum.map(lambdas, fn {_names, b} -> compile_body(b, g) end)])
-    body = compile_body(body, g)
+  defp comp({:fixrec, lambdas, body}, cx) do
+    frame = List.to_tuple([{} | Enum.map(lambdas, fn {_names, b} -> compile_body(b, cx) end)])
+    body = compile_body(body, cx)
     fn %Env{lex: lex} = env -> body.(%{env | lex: [frame | lex]}) end
   end
 
@@ -249,10 +298,10 @@ defmodule Schooner.Eval do
   # levels up. The callee's frame goes on top of the `:fixrec` frame,
   # exactly where `apply_proc/2` would have put it on top of the
   # closure's env, and the compiled body is tail-called.
-  def compile({:known_call, depth, slot, names, args}, g) do
+  defp comp({:known_call, depth, slot, names, args}, cx) do
     index = slot + 1
 
-    case Enum.map(args, &compile(&1, g)) do
+    case Enum.map(args, &comp(&1, cx)) do
       [a] ->
         fn %Env{lex: lex} = env ->
           x = single_value!(a.(env))
@@ -286,20 +335,24 @@ defmodule Schooner.Eval do
     end
   end
 
-  def compile({:quasi, template}, g), do: compile_template(template, g)
+  defp comp({:quasi, template}, cx), do: compile_template(template, cx)
 
-  def compile({:guard, names, clauses, body}, g) do
-    clauses = Enum.map(clauses, &compile_guard_clause(&1, g))
-    body = compile_body(body, g)
+  defp comp({:guard, names, clauses, body}, cx) do
+    clauses = Enum.map(clauses, &compile_guard_clause(&1, cx))
+    body = compile_body(body, cx)
     fn env -> eval_guard(names, clauses, body, env) end
   end
 
-  def compile({:raise, exception}, _g), do: fn _env -> raise(exception) end
+  defp comp({:raise, exception}, cx) do
+    exception = Location.put_file(exception, cx.file)
+    fn _env -> raise(exception) end
+  end
 
   # One clause per inlined primitive, so each closure carries its own
   # BEAM operator. Head first, then arguments left to right, as for any
   # application; anything but the standard procedure applied to two
-  # integers takes the ordinary `apply_proc/2` path.
+  # integers takes the ordinary `apply_proc/2` path, or `apply_located/3`
+  # when compiling with `debug: true`.
   for {name, op} <- [
         {"+", :+},
         {"-", :-},
@@ -310,14 +363,15 @@ defmodule Schooner.Eval do
         {"<=", :"=<"},
         {">=", :>=}
       ] do
-    defp compile_inline(unquote(name), fun, cell, a, b, g) do
-      a = compile(a, g)
-      b = compile(b, g)
+    defp compile_inline(unquote(name), fun, cell, a, b, pos, %{debug: false} = cx) do
+      a = comp(a, cx)
+      b = comp(b, cx)
+      loc = loc(cx, pos)
 
       fn env ->
         proc =
           case :erlang.get(cell) do
-            @unbound -> raise Error, reason: {:unbound, unquote(name)}
+            @unbound -> raise Error, reason: {:unbound, unquote(name)}, location: loc
             value -> value
           end
 
@@ -333,15 +387,43 @@ defmodule Schooner.Eval do
         end
       end
     end
+
+    defp compile_inline(unquote(name), fun, cell, a, b, pos, cx) do
+      a = comp(a, cx)
+      b = comp(b, cx)
+      loc = loc(cx, pos)
+
+      fn env ->
+        proc =
+          case :erlang.get(cell) do
+            @unbound -> raise Error, reason: {:unbound, unquote(name)}, location: loc
+            value -> value
+          end
+
+        x = single_value!(a.(env))
+        y = single_value!(b.(env))
+
+        case proc do
+          {:primitive, _, _, ^fun} when is_integer(x) and is_integer(y) ->
+            :erlang.unquote(op)(x, y)
+
+          _ ->
+            apply_located(proc, [x, y], loc)
+        end
+      end
+    end
   end
+
+  defp compile_any_app(node, %{debug: true} = cx), do: compile_app_located(node, cx)
+  defp compile_any_app(node, cx), do: compile_app(node, cx)
 
   # Applications are specialised on argument count so the common small
   # arities build their argument list inline. Head first, then
   # arguments left to right.
-  defp compile_app({:app, head, args}, g) do
-    head = compile(head, g)
+  defp compile_app({:app, head, args, _pos}, cx) do
+    head = comp(head, cx)
 
-    case Enum.map(args, &compile(&1, g)) do
+    case Enum.map(args, &comp(&1, cx)) do
       [] ->
         fn env -> apply_proc(single_value!(head.(env)), []) end
 
@@ -374,14 +456,54 @@ defmodule Schooner.Eval do
     end
   end
 
+  # `compile_app/2` for `debug: true`: the same closures, applying
+  # through `apply_located/3` so that errors raised while applying the
+  # procedure carry the application's location.
+  defp compile_app_located({:app, head, args, pos}, cx) do
+    head = comp(head, cx)
+    loc = loc(cx, pos)
+
+    case Enum.map(args, &comp(&1, cx)) do
+      [] ->
+        fn env -> apply_located(single_value!(head.(env)), [], loc) end
+
+      [a] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          apply_located(proc, [single_value!(a.(env))], loc)
+        end
+
+      [a, b] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          x = single_value!(a.(env))
+          apply_located(proc, [x, single_value!(b.(env))], loc)
+        end
+
+      [a, b, c] ->
+        fn env ->
+          proc = single_value!(head.(env))
+          x = single_value!(a.(env))
+          y = single_value!(b.(env))
+          apply_located(proc, [x, y, single_value!(c.(env))], loc)
+        end
+
+      codes ->
+        fn env ->
+          proc = single_value!(head.(env))
+          apply_located(proc, eval_args(codes, env), loc)
+        end
+    end
+  end
+
   # A body (or `begin`) compiles to one closure that runs each form in
   # order and tail-calls the last.
-  defp compile_body([], _g), do: fn _env -> :unspecified end
-  defp compile_body([last], g), do: compile(last, g)
+  defp compile_body([], _cx), do: fn _env -> :unspecified end
+  defp compile_body([last], cx), do: comp(last, cx)
 
-  defp compile_body([head | rest], g) do
-    head = compile(head, g)
-    rest = compile_body(rest, g)
+  defp compile_body([head | rest], cx) do
+    head = comp(head, cx)
+    rest = compile_body(rest, cx)
 
     fn env ->
       _ = head.(env)
@@ -389,10 +511,10 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp compile_binding({:single, slot, init}, g), do: {:single, slot, compile(init, g)}
+  defp compile_binding({:single, slot, init}, cx), do: {:single, slot, comp(init, cx)}
 
-  defp compile_binding({:multi, spec, init, slots}, g),
-    do: {:multi, spec, compile(init, g), slots}
+  defp compile_binding({:multi, spec, init, slots}, cx),
+    do: {:multi, spec, comp(init, cx), slots}
 
   # A name that carries a hygiene mark from a macro template but was
   # never bound by an introduced binder is a free reference to the
@@ -400,19 +522,20 @@ defmodule Schooner.Eval do
   # analyser pre-resolved that base name; any failure to find it
   # (unbound, or an uninitialised letrec slot) reports the original
   # marked name as unbound.
-  defp resolve_marked_var(nil, name, _env), do: raise(Error, reason: {:unbound, name})
+  defp resolve_marked_var(nil, name, _env, loc),
+    do: raise(Error, reason: {:unbound, name}, location: loc)
 
-  defp resolve_marked_var(base_ref, name, env) do
+  defp resolve_marked_var(base_ref, name, env, loc) do
     case lookup_soft(base_ref, env) do
       {:ok, value} -> value
-      :error -> raise Error, reason: {:unbound, name}
+      :error -> raise Error, reason: {:unbound, name}, location: loc
     end
   end
 
   defp lookup_soft({:lref, depth, index}, %Env{lex: lex}),
     do: {:ok, elem(frame_at(lex, depth), index)}
 
-  defp lookup_soft({:rref, depth, slot, _name, fallback}, %Env{lex: lex} = env) do
+  defp lookup_soft({:rref, depth, slot, _name, fallback, _pos}, %Env{lex: lex} = env) do
     {:rec, ref} = frame_at(lex, depth)
 
     case :erlang.get(ref) do
@@ -427,10 +550,12 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp lookup_soft({:gref, name, _marked}, env), do: Env.fetch_global(env, name)
+  defp lookup_soft({:gref, name, _marked, _pos}, env), do: Env.fetch_global(env, name)
 
-  defp rec_value!(@rec_uninitialised, name), do: raise(Error, reason: {:rec_uninitialised, name})
-  defp rec_value!(value, _name), do: value
+  defp rec_value!(@rec_uninitialised, name, loc),
+    do: raise(Error, reason: {:rec_uninitialised, name}, location: loc)
+
+  defp rec_value!(value, _name, _loc), do: value
 
   defp frame_at([frame | _], 0), do: frame
   defp frame_at([_ | rest], depth), do: frame_at(rest, depth - 1)
@@ -519,23 +644,93 @@ defmodule Schooner.Eval do
 
   def apply_proc(other, _args), do: raise(Error, reason: {:not_a_procedure, other})
 
-  defp bind_params({:fixed, n, names}, args, fname) do
-    case length(args) do
-      ^n -> Enum.zip(names, args)
-      got -> raise(Error, reason: {:arity_mismatch, fname, {:exact, n}, got})
+  # `apply_proc/2` for applications compiled with `debug: true`: errors
+  # raised while applying `proc` are given the application's location
+  # `loc`, unless something nearer the failure already located them.
+  # Closures are still tail-called. A primitive runs inside a `try`,
+  # except one that tail-calls back into Scheme, which would otherwise
+  # keep the `try`'s frame for the rest of the computation.
+  defp apply_located(
+         {:closure, {:fixed, n, _}, {names, body}, %Env{lex: lex} = env, name},
+         args,
+         loc
+       ) do
+    frame = List.to_tuple([names | args])
+
+    if tuple_size(frame) == n + 1 do
+      body.(%{env | lex: [frame | lex]})
+    else
+      raise Error, reason: {:arity_mismatch, name, {:exact, n}, length(args)}, location: loc
     end
   end
 
-  defp bind_params({:any, name}, args, _fname), do: [{name, Value.list(args)}]
+  defp apply_located({:closure, params, {names, body}, env, name}, args, loc) do
+    values = params |> bind_params(args, name, loc) |> Enum.map(&elem(&1, 1))
+    body.(Env.push_frame(env, List.to_tuple([names | values])))
+  end
 
-  defp bind_params({:fixed_rest, n, names, rest_name}, args, fname) do
+  defp apply_located({:primitive, name, arity, fun}, args, loc) do
+    got = length(args)
+
+    if not arity_ok?(arity, got) do
+      raise Error, reason: {:arity_mismatch, name, expected_arity(arity), got}, location: loc
+    end
+
+    if reenters?(name, fun) do
+      fun.(args)
+    else
+      try do
+        fun.(args)
+      rescue
+        e -> reraise Location.attach(e, loc), __STACKTRACE__
+      catch
+        # A raise caught by a `guard` escapes as a throw; carry this
+        # call's location with it in case the guard does not handle it.
+        :throw, {:schooner_guard, tag, raised} -> throw({:schooner_guard, tag, raised, loc})
+      end
+    end
+  end
+
+  defp apply_located({:parameter, id, init, _converter}, [], _loc) do
+    ParameterState.lookup(id, init)
+  end
+
+  defp apply_located({:parameter, _, _, _}, args, loc) do
+    raise Error, reason: {:arity_mismatch, "parameter", {:exact, 0}, length(args)}, location: loc
+  end
+
+  defp apply_located(other, _args, loc),
+    do: raise(Error, reason: {:not_a_procedure, other}, location: loc)
+
+  # Only `apply` and `call-with-values` tail-call back into Scheme;
+  # their names rule out every other primitive without the fun
+  # comparison.
+  defp reenters?("apply", fun), do: Base.tail_calls_scheme?(fun)
+  defp reenters?("call-with-values", fun), do: Base.tail_calls_scheme?(fun)
+  defp reenters?(_name, _fun), do: false
+
+  # The located variant is only called from `apply_located/3`; inlining
+  # keeps the plain path free of the extra call.
+  @compile {:inline, bind_params: 3}
+  defp bind_params(spec, args, fname), do: bind_params(spec, args, fname, nil)
+
+  defp bind_params({:fixed, n, names}, args, fname, loc) do
+    case length(args) do
+      ^n -> Enum.zip(names, args)
+      got -> raise(Error, reason: {:arity_mismatch, fname, {:exact, n}, got}, location: loc)
+    end
+  end
+
+  defp bind_params({:any, name}, args, _fname, _loc), do: [{name, Value.list(args)}]
+
+  defp bind_params({:fixed_rest, n, names, rest_name}, args, fname, loc) do
     case length(args) do
       got when got >= n ->
         {head, tail} = Enum.split(args, n)
         Enum.zip(names, head) ++ [{rest_name, Value.list(tail)}]
 
       got ->
-        raise(Error, reason: {:arity_mismatch, fname, {:at_least, n}, got})
+        raise(Error, reason: {:arity_mismatch, fname, {:at_least, n}, got}, location: loc)
     end
   end
 
@@ -562,6 +757,13 @@ defmodule Schooner.Eval do
       raise(Error, reason: {:arity_mismatch, name, {:between, lo, hi}, got})
     end
   end
+
+  defp arity_ok?(n, got) when is_integer(n), do: got == n
+  defp arity_ok?({:at_least, n}, got), do: got >= n
+  defp arity_ok?({:between, lo, hi}, got), do: got >= lo and got <= hi
+
+  defp expected_arity(n) when is_integer(n), do: {:exact, n}
+  defp expected_arity(spec), do: spec
 
   # `letrec*` backs both user-facing recursive bindings (the `letrec`
   # and named-`let` bootstrap macros expand to it) and internal-define
@@ -639,12 +841,12 @@ defmodule Schooner.Eval do
   # Quasiquote templates compile to closures that rebuild only the
   # non-constant spine. The head is evaluated before the tail, keeping
   # unquoted expressions in left-to-right order.
-  defp compile_template({:qc, datum}, _g), do: fn _env -> datum end
-  defp compile_template({:qu, expr}, g), do: compile(expr, g)
+  defp compile_template({:qc, datum}, _cx), do: fn _env -> datum end
+  defp compile_template({:qu, expr}, cx), do: comp(expr, cx)
 
-  defp compile_template({:qcons, head, tail}, g) do
-    head = compile_template(head, g)
-    tail = compile_template(tail, g)
+  defp compile_template({:qcons, head, tail}, cx) do
+    head = compile_template(head, cx)
+    tail = compile_template(tail, cx)
 
     fn env ->
       h = head.(env)
@@ -652,9 +854,9 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp compile_template({:qsplice, expr, tail}, g) do
-    expr = compile(expr, g)
-    tail = compile_template(tail, g)
+  defp compile_template({:qsplice, expr, tail}, cx) do
+    expr = comp(expr, cx)
+    tail = compile_template(tail, cx)
 
     fn env ->
       spliced = expr.(env)
@@ -663,8 +865,8 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp compile_template({:qvec, template}, g) do
-    template = compile_template(template, g)
+  defp compile_template({:qvec, template}, cx) do
+    template = compile_template(template, cx)
     fn env -> Value.vector(scheme_list_to_elixir(template.(env))) end
   end
 
@@ -765,15 +967,37 @@ defmodule Schooner.Eval do
       # unwound past any parameterize/handler frames between the raise
       # site and this guard.
       :throw, {:schooner_guard, ^tag, raised} ->
-        handler_env = Env.push_frame(env, {names, raised})
+        handle_raised(names, clauses, env, raised, nil)
 
-        case eval_guard_clauses(clauses, handler_env) do
-          {:matched, value} -> value
-          :no_match -> ExceptionState.raise_value(raised)
-        end
+      # In debug mode the throw also carries the raise site's location
+      # (see `apply_located/3`).
+      :throw, {:schooner_guard, ^tag, raised, loc} ->
+        handle_raised(names, clauses, env, raised, loc)
     after
       ExceptionState.restore(prev)
     end
+  end
+
+  defp handle_raised(names, clauses, env, raised, loc) do
+    handler_env = Env.push_frame(env, {names, raised})
+
+    case eval_guard_clauses(clauses, handler_env) do
+      {:matched, value} -> value
+      :no_match -> reraise_from(raised, loc)
+    end
+  end
+
+  # Re-raise a value no clause handled, keeping the original raise
+  # site's location: on the error that escapes to the host, or on the
+  # throw to an outer `guard`.
+  defp reraise_from(raised, nil), do: ExceptionState.raise_value(raised)
+
+  defp reraise_from(raised, loc) do
+    ExceptionState.raise_value(raised)
+  rescue
+    e -> reraise Location.attach(e, loc), __STACKTRACE__
+  catch
+    :throw, {:schooner_guard, tag, value} -> throw({:schooner_guard, tag, value, loc})
   end
 
   defp build_guard_handler(tag) do
@@ -782,15 +1006,20 @@ defmodule Schooner.Eval do
     end)
   end
 
-  defp compile_guard_clause({:else, body}, g), do: {:else, compile_body(body, g)}
-  defp compile_guard_clause({:bad, _} = bad, _g), do: bad
-  defp compile_guard_clause({:test, test}, g), do: {:test, compile(test, g)}
+  defp compile_guard_clause({:else, body}, cx), do: {:else, compile_body(body, cx)}
 
-  defp compile_guard_clause({:arrow, test, proc_expr}, g),
-    do: {:arrow, compile(test, g), compile(proc_expr, g)}
+  defp compile_guard_clause({:bad, exception}, cx),
+    do: {:bad, Location.put_file(exception, cx.file)}
 
-  defp compile_guard_clause({:test_body, test, body}, g),
-    do: {:test_body, compile(test, g), compile_body(body, g)}
+  defp compile_guard_clause({:test, test}, cx), do: {:test, comp(test, cx)}
+
+  # In debug mode the clause keeps its location, so applying its
+  # procedure is located like any other application.
+  defp compile_guard_clause({:arrow, test, proc_expr, pos}, cx),
+    do: {:arrow, comp(test, cx), comp(proc_expr, cx), if(cx.debug, do: loc(cx, pos))}
+
+  defp compile_guard_clause({:test_body, test, body}, cx),
+    do: {:test_body, comp(test, cx), compile_body(body, cx)}
 
   defp eval_guard_clauses([], _env), do: :no_match
   defp eval_guard_clauses([{:else, body} | _rest], env), do: {:matched, body.(env)}
@@ -810,14 +1039,14 @@ defmodule Schooner.Eval do
     end
   end
 
-  defp eval_guard_clause({:arrow, test, proc_expr}, env) do
+  defp eval_guard_clause({:arrow, test, proc_expr, loc}, env) do
     case test.(env) do
       false ->
         :no_match
 
       val ->
         proc = proc_expr.(env)
-        {:matched, apply_proc(proc, [val])}
+        {:matched, if(loc, do: apply_located(proc, [val], loc), else: apply_proc(proc, [val]))}
     end
   end
 

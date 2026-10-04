@@ -5,14 +5,25 @@ defmodule Schooner.Eval.Error do
   The `:reason` field is a structured term — atom or tagged tuple — meant
   to be matched on. The `:message` is derived from the reason, so
   assertions can pin behaviour on `:reason` without coupling to wording.
+
+  `:location` is the `Schooner.Location` of the form that failed, or
+  `nil` when it is not known. See "Source locations" in `Schooner`.
   """
 
-  defexception [:reason, :message]
+  alias Schooner.Location
+
+  defexception [:reason, :message, :location]
 
   @impl true
   def exception(opts) do
     reason = Keyword.fetch!(opts, :reason)
-    %__MODULE__{reason: reason, message: format(reason)}
+    location = Keyword.get(opts, :location)
+
+    %__MODULE__{
+      reason: reason,
+      location: location,
+      message: Location.prefix(location) <> format(reason)
+    }
   end
 
   defp format({:unknown_import_identifier, modifier, name, library}) do

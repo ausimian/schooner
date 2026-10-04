@@ -20,7 +20,7 @@ defmodule Schooner.Expander.SyntaxEnv do
   through top-level forms.
   """
 
-  @type transformer :: (term() -> term())
+  @type transformer :: (term(), term() -> {term(), term()})
   @type binding ::
           {:macro, transformer()}
           | :variable
@@ -62,7 +62,7 @@ defmodule Schooner.Expander.SyntaxEnv do
   """
   @spec define_macro(t(), binary(), transformer()) :: t()
   def define_macro(%__MODULE__{globals: g} = env, name, transformer)
-      when is_binary(name) and is_function(transformer, 1) do
+      when is_binary(name) and is_function(transformer, 2) do
     %{env | globals: Map.put(g, name, {:macro, transformer})}
   end
 
