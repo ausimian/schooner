@@ -233,7 +233,7 @@ defmodule Mix.Tasks.Schooner.CheckTest do
       [_, pricing] =
         Regex.run(~r/and one script, `scripts\/pricing.scm`:\n\n```scheme\n(.*?)```/s, @guide)
 
-      [section] = Regex.run(~r/## Checking scripts before they run.*?(?=\n## )/s, @guide)
+      [section] = Regex.run(~r/## Checking scripts before they run.*?(?=\n## |\z)/s, @guide)
       %{pricing: pricing, section: section}
     end
 
@@ -264,13 +264,6 @@ defmodule Mix.Tasks.Schooner.CheckTest do
         |> Enum.map(&String.replace(&1, "MyApp.Scripts.environment", "#{inspect(Envs)}.scripts"))
 
       assert File.cd!(dir, fn -> run_task(argv) end) == {1, expected}
-    end
-
-    test "marks the section available" do
-      assert @guide =~ "**Status: Available** ([#136]"
-
-      assert @guide =~
-               "| 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available |"
     end
   end
 end

@@ -495,12 +495,7 @@ defmodule Schooner.BacktraceTest do
       )
     end
 
-    defp section, do: hd(Regex.run(~r/## Backtraces\n.*?(?=\n## )/s, @guide))
-
-    test "marks the backtraces section available" do
-      assert section() =~ "**Status: Available** ([#138]"
-      assert @guide =~ "| 4 | [Backtraces](#backtraces) | Available |"
-    end
+    defp section, do: hd(Regex.run(~r/## Backtraces\n.*?(?=\n## |\z)/s, @guide))
 
     test "the pricing example matches the guide" do
       [_, script] =

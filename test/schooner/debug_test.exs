@@ -384,7 +384,7 @@ defmodule Schooner.DebugTest do
     @guide File.read!("guides/tooling.md")
 
     setup do
-      [section] = Regex.run(~r/## Tracing and assertions.*?(?=\n## )/s, @guide)
+      [section] = Regex.run(~r/## Tracing and assertions.*?(?=\n## |\z)/s, @guide)
       [_, script] = Regex.run(~r/```scheme\n(.*?)```/s, section)
       %{section: section, script: script}
     end
@@ -423,13 +423,6 @@ defmodule Schooner.DebugTest do
 
       assert log =~ "pricing 1 lines"
       assert log =~ "line-total: 30"
-    end
-
-    test "marks the section available" do
-      assert @guide =~ "**Status: Available** ([#137]"
-
-      assert @guide =~
-               "| 3 | [Tracing and assertions](#tracing-and-assertions) | Available |"
     end
   end
 end
