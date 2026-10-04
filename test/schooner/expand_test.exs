@@ -213,6 +213,12 @@ defmodule Schooner.ExpandTest do
              ]
     end
 
+    test "a NUL the script wrote in a symbol is not taken for a mark" do
+      assert {:ok, [form]} = Schooner.expand("(quote |a\\x0;b|)", env())
+      assert form == Schooner.Value.list([{:sym, "quote"}, {:sym, "a" <> <<0>> <> "b"}])
+      assert Pretty.format(form) == "'|a" <> <<0>> <> "b|"
+    end
+
     test "with plain names, it is printed as written" do
       assert {:ok, [form]} = Schooner.expand(@swap, env())
 

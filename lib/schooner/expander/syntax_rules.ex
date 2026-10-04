@@ -136,12 +136,20 @@ defmodule Schooner.Expander.SyntaxRules do
   @doc false
   # Split a name into its base name and its marks, oldest first: `[]`
   # for an unmarked name, and more than one for an identifier a macro
-  # introduced into the output of another macro's template.
+  # introduced into the output of another macro's template. A mark is
+  # a separator followed by digits at the end of the name, so a NUL
+  # the script wrote itself (`|a\x0;b|`) is left in the base name.
   @spec split_marks(binary()) :: {binary(), [binary()]}
   def split_marks(name) when is_binary(name) do
-    [base | marks] = :binary.split(name, @mark_separator, [:global])
-    {base, marks}
+    [first | segments] = :binary.split(name, @mark_separator, [:global])
+    {marks, rest} = segments |> Enum.reverse() |> Enum.split_while(&mark?/1)
+    {Enum.join([first | Enum.reverse(rest)], @mark_separator), Enum.reverse(marks)}
   end
+
+  defp mark?(<<_, _::binary>> = segment),
+    do: for(<<c <- segment>>, do: c in ?0..?9) |> Enum.all?()
+
+  defp mark?(_segment), do: false
 
   @doc false
   # Renumber the hygiene marks in `values` 1, 2, 3, ... in the order
