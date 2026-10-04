@@ -154,6 +154,11 @@ defmodule Schooner.ExpandTest do
       assert [{"cond", {1, 1}, _, _}] = trace("(cond (a 1) (b 2))", step: :once)
     end
 
+    test "names a macro whose name has a NUL the script wrote" do
+      source = "(define-syntax |m\\x0;b| (syntax-rules () ((_) 1)))\n(|m\\x0;b|)"
+      assert [{"m" <> <<0>> <> "b", _, _, "1"}] = trace(source)
+    end
+
     test "is empty when there are no macro uses" do
       assert trace("(define x 1)") == []
     end

@@ -358,10 +358,8 @@ defmodule Schooner.Expander do
   defp restore(key, value), do: Process.put(key, value)
 
   defp base_name(name) do
-    case SyntaxRules.strip_mark(name) do
-      {:ok, base} -> base
-      :error -> name
-    end
+    {base, _marks} = SyntaxRules.split_marks(name)
+    base
   end
 
   # ---------------------------------------------------------------------------
