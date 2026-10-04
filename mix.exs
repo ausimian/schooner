@@ -91,6 +91,7 @@ defmodule Schooner.MixProject do
           Schooner.Diagnostic,
           Schooner.Frame,
           Schooner.Pretty,
+          Schooner.Session,
           Mix.Tasks.Schooner.Check,
           Mix.Tasks.Schooner.Expand
         ],
@@ -127,6 +128,7 @@ defmodule Schooner.MixProject do
                     Schooner.Library.NotFoundError,
                     Schooner.Location,
                     Schooner.Pretty,
+                    Schooner.Session,
                     Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
