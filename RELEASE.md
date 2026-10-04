@@ -60,6 +60,21 @@
   the environment with `--env Mod.fun` or
   `config :schooner, :tooling_environment, {Mod, :fun, args}`;
   without either, every standard library is imported.
+- `Schooner.expand/3` shows what a script's macros expand to,
+  without running it. It reads the script, resolves its imports
+  against a `Schooner.Environment` and returns the expanded top-level
+  forms. With `step: :once`, it expands each macro use that isn't
+  inside another macro use only once, and leaves the macro uses in
+  its output unexpanded. With `trace: true`, it also returns every
+  expansion step in order, each with the macro's name, the location
+  of the use, and the form before and after. Like `check/3`, it
+  leaves the environment unchanged.
+- `Schooner.Pretty.format/2` prints Scheme data and code across
+  lines, indented the usual way, within a `:width`. Reading the
+  output back gives an `equal?` datum. Identifiers a macro
+  introduces are printed with a number, as `tmp·1`, so they can be
+  told apart from the script's own; `names: :plain` prints them
+  without it.
 - `Schooner.Debug.library/1` builds `(schooner debug)`, an opt-in
   library for print debugging. Its `(trace label expr)` sends
   `label: value` to a sink and returns the value unchanged, including

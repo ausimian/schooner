@@ -73,6 +73,12 @@ defmodule Schooner.Expander do
   defp cons(_car, _cdr, nil), do: nil
   defp cons(car, cdr, tree), do: Pos.cons(car, cdr, tree)
 
+  # Process dictionary keys holding the options and the steps traced
+  # so far while `inspect_positioned/4` runs. Ordinary expansion finds
+  # no options there and pays one lookup per macro use.
+  @inspect_key {__MODULE__, :inspect}
+  @steps_key {__MODULE__, :steps}
+
   @typedoc "A form paired with its position tree (`nil` when unknown)."
   @type positioned :: {Value.t(), Pos.t()}
 
@@ -268,7 +274,11 @@ defmodule Schooner.Expander do
     case lookup_with_fallback(env, name) do
       {:macro, transformer} ->
         {new_form, new_t} = transformer.(form, t)
-        ex(new_form, new_t, env)
+
+        case Process.get(@inspect_key) do
+          nil -> ex(new_form, new_t, env)
+          inspect -> inspect_step(inspect, name, form, t, {new_form, new_t}, env)
+        end
 
       {:special, base} ->
         # A core special form's name appeared with a hygiene mark.
@@ -284,6 +294,56 @@ defmodule Schooner.Expander do
   defp ex_form([_head | _tail] = form, t, env), do: expand_application(form, t, env)
 
   defp ex_form(other, t, _env), do: {other, t}
+
+  # ---------------------------------------------------------------------------
+  # Inspection (`Schooner.expand/3`)
+  # ---------------------------------------------------------------------------
+
+  @doc false
+  # Expand positioned top-level forms like `expand_positioned/2`, for
+  # `Schooner.expand/3`. With `step: :once`, a macro's output is not
+  # expanded further, so only the macro uses that are not inside
+  # another macro use are expanded, once each. With `trace: true`,
+  # every macro use expanded is also returned, in the order it was
+  # expanded, as `{macro_name, use, use_tree, output}`.
+  @spec inspect_positioned([positioned()], SyntaxEnv.t(), :full | :once, boolean()) ::
+          {[positioned()], [{binary(), Value.t(), Pos.t(), Value.t()}]}
+  def inspect_positioned(forms, %SyntaxEnv{} = env, step, trace?)
+      when step in [:full, :once] and is_boolean(trace?) do
+    # Restored afterwards, so an inspection started while another runs
+    # leaves the outer one's options and steps as they were.
+    previous = {Process.get(@inspect_key), Process.get(@steps_key)}
+    Process.put(@inspect_key, %{once?: step == :once, trace?: trace?})
+    Process.put(@steps_key, [])
+
+    try do
+      {expanded, _env} = expand_positioned(forms, env)
+      {expanded, Enum.reverse(Process.get(@steps_key))}
+    after
+      {inspect, steps} = previous
+      restore(@inspect_key, inspect)
+      restore(@steps_key, steps)
+    end
+  end
+
+  defp restore(key, nil), do: Process.delete(key)
+  defp restore(key, value), do: Process.put(key, value)
+
+  defp inspect_step(%{once?: once?, trace?: trace?}, name, form, t, {new_form, new_t}, env) do
+    if trace? do
+      step = {base_name(name), form, t, new_form}
+      Process.put(@steps_key, [step | Process.get(@steps_key)])
+    end
+
+    if once?, do: {new_form, new_t}, else: ex(new_form, new_t, env)
+  end
+
+  defp base_name(name) do
+    case SyntaxRules.strip_mark(name) do
+      {:ok, base} -> base
+      :error -> name
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Special-form expanders

@@ -133,6 +133,63 @@ defmodule Schooner.Expander.SyntaxRules do
     end
   end
 
+  @doc false
+  # Split a name into its base name and its marks, oldest first: `[]`
+  # for an unmarked name, and more than one for an identifier a macro
+  # introduced into the output of another macro's template.
+  @spec split_marks(binary()) :: {binary(), [binary()]}
+  def split_marks(name) when is_binary(name) do
+    [base | marks] = :binary.split(name, @mark_separator, [:global])
+    {base, marks}
+  end
+
+  @doc false
+  # Renumber the hygiene marks in `values` 1, 2, 3, ... in the order
+  # they first appear, walking each value depth first, so expansions
+  # print the same on every run. A mark keeps its number across all of
+  # `values`, so identifiers that were the same stay the same, and
+  # different ones stay different.
+  @spec renumber_marks([Value.t()]) :: [Value.t()]
+  def renumber_marks(values) when is_list(values) do
+    {values, _numbers} = Enum.map_reduce(values, %{}, &renumber/2)
+    values
+  end
+
+  defp renumber({:sym, name} = sym, numbers) do
+    case split_marks(name) do
+      {_base, []} ->
+        {sym, numbers}
+
+      {base, marks} ->
+        {marks, numbers} = Enum.map_reduce(marks, numbers, &renumber_mark/2)
+        {{:sym, Enum.reduce(marks, base, &mark_name(&2, &1))}, numbers}
+    end
+  end
+
+  defp renumber([h | t], numbers) do
+    {h, numbers} = renumber(h, numbers)
+    {t, numbers} = renumber(t, numbers)
+    {[h | t], numbers}
+  end
+
+  defp renumber({:vector, items}, numbers) do
+    {items, numbers} = items |> Tuple.to_list() |> Enum.map_reduce(numbers, &renumber/2)
+    {{:vector, List.to_tuple(items)}, numbers}
+  end
+
+  defp renumber(other, numbers), do: {other, numbers}
+
+  defp renumber_mark(mark, numbers) do
+    case numbers do
+      %{^mark => n} ->
+        {n, numbers}
+
+      _ ->
+        n = map_size(numbers) + 1
+        {n, Map.put(numbers, mark, n)}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # syntax-rules parsing
   # ---------------------------------------------------------------------------

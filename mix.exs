@@ -90,6 +90,7 @@ defmodule Schooner.MixProject do
           Schooner.Debug,
           Schooner.Diagnostic,
           Schooner.Frame,
+          Schooner.Pretty,
           Mix.Tasks.Schooner.Check
         ],
         Errors: [
@@ -124,6 +125,7 @@ defmodule Schooner.MixProject do
                     Schooner.Library,
                     Schooner.Library.NotFoundError,
                     Schooner.Location,
+                    Schooner.Pretty,
                     Schooner.Time,
                     Schooner.Error,
                     Schooner.Eval.Error,
