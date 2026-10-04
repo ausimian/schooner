@@ -23,7 +23,8 @@ defmodule Schooner.Pretty do
   `(unquote-splicing x)` are printed as `'x`, `` `x ``, `,x` and
   `,@x`. Everything else that has a written form is printed as
   `Schooner.Value.write/1` would print it, so reading the output back
-  gives a datum `equal?` to the one printed.
+  gives a datum `equal?` to the one printed, unless it contains
+  renamed identifiers (below).
 
   ## Renamed identifiers
 
@@ -33,6 +34,13 @@ defmodule Schooner.Pretty do
   its name and a number, joined by a middle dot (`tmp·1`), so it can be
   told apart from the code's own `tmp`. With `names: :plain` it is
   printed as its name alone (`tmp`).
+
+  A renamed identifier has no written form, so neither way of
+  printing it reads back as the same identifier: `tmp·1` reads as an
+  ordinary symbol with that name, which a symbol of the code's own
+  could share, and `tmp` reads as the code's `tmp`. The output is for
+  people to read. Don't read it back as code, because a macro's
+  identifier could then capture, or be captured by, the code's own.
   """
 
   alias Schooner.Expander.SyntaxRules

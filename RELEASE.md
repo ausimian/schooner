@@ -71,10 +71,11 @@
   leaves the environment unchanged.
 - `Schooner.Pretty.format/2` prints Scheme data and code across
   lines, indented the usual way, within a `:width`. Reading the
-  output back gives an `equal?` datum. Identifiers a macro
-  introduces are printed with a number, as `tmp·1`, so they can be
-  told apart from the script's own; `names: :plain` prints them
-  without it.
+  output back gives an `equal?` datum, unless it contains
+  identifiers a macro introduced. Those are printed with a number,
+  as `tmp·1`, so people can tell them apart from the script's own
+  (`names: :plain` prints them without it), but they have no written
+  form that reads back as the same identifier.
 - `mix schooner.expand <file | -e source>` prints a script's
   expansion, with `--once`, `--trace`, `--plain`, `--width` and the
   same `--env` resolution as `mix schooner.check`.
