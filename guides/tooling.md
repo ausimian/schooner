@@ -20,7 +20,7 @@ surface documentation and editor integration.
 | --- | --- | --- | --- |
 | 1 | [Source locations in errors](#source-locations-in-errors) | Available | [#135](https://github.com/ausimian/schooner/issues/135) |
 | 2 | [Checking scripts before they run](#checking-scripts-before-they-run) | Available | [#136](https://github.com/ausimian/schooner/issues/136) |
-| 3 | [Tracing and assertions](#tracing-and-assertions) | Planned | [#137](https://github.com/ausimian/schooner/issues/137) |
+| 3 | [Tracing and assertions](#tracing-and-assertions) | Available | [#137](https://github.com/ausimian/schooner/issues/137) |
 | 4 | [Backtraces](#backtraces) | Planned | [#138](https://github.com/ausimian/schooner/issues/138) |
 | 5 | [The REPL](#the-repl) | Planned | [#139](https://github.com/ausimian/schooner/issues/139) |
 | 6 | [Inspecting macro expansion](#inspecting-macro-expansion) | Planned | [#140](https://github.com/ausimian/schooner/issues/140) |
@@ -219,7 +219,7 @@ error. `--format json` prints machine-readable output.
 
 ## Tracing and assertions
 
-**Status: Planned** ([#137](https://github.com/ausimian/schooner/issues/137))
+**Status: Available** ([#137](https://github.com/ausimian/schooner/issues/137))
 
 In Schooner, `display` and `write` *return* their rendered text
 rather than writing it anywhere (see
@@ -237,25 +237,44 @@ env =
   )
 ```
 
+Take `scripts/order.scm`:
+
 ```scheme
 (import (schooner debug))
 
-(define (line-total sku qty)
-  (trace "line-total" (* (unit-price sku) qty)))  ; logs "line-total: 30", returns 30
+(define (line-total price qty)
+  (trace "line-total" (* price qty)))
 
-(print "pricing" (length lines) "lines")          ; logs "pricing 3 lines"
-
-(assert (> total 0))
-;; on failure raises: assertion failed: (> total 0)
+(define (order-total lines)
+  (print "pricing" (length lines) "lines")
+  (let ((total (apply + (map (lambda (line) (line-total (car line) (cdr line)))
+                             lines))))
+    (assert (> total 0))
+    total))
 ```
+
+`(order-total '((10 . 3)))` logs `pricing 1 lines` and
+`line-total: 30`, and returns 30. `(order-total '((10 . 0)))` fails
+the assertion.
 
 - `(trace label expr)` returns `expr`'s value unchanged, so you
   can wrap any expression in place without restructuring code.
+  It sends `label: value`, with the label rendered by `display`
+  and the value by `write`. Multiple values pass through, and are
+  all written. `trace` has to see the value, so `expr` is not in
+  tail position, but tail calls inside `expr` still are: wrapping
+  a call to a long-running loop is fine.
 - `(print obj ...)` sends the `display` rendering of its
-  arguments.
+  arguments, separated by spaces.
 - `(assert expr)` / `(assert expr message)` raise a normal
-  Scheme error, catchable with `guard`. Its message includes the
-  source text of `expr`.
+  Scheme error, catchable with `guard`, when `expr` is `#f`, and
+  otherwise return its value. The error's message is
+  `assertion failed:` followed by the source text of `expr`, and
+  then by `message`, which is only evaluated when the assertion
+  fails.
+
+All three are syntax, so `trace`, `print` and `assert` can't be
+passed as values.
 
 Sinks:
 
@@ -264,6 +283,15 @@ Sinks:
 | `{:logger, level}` | `Logger`, with the script location in metadata |
 | a pid | the process, as `{:schooner_debug, kind, text, location}` |
 | a 1-arity function | the function, called with `%{kind:, text:, location:}` |
+
+`kind` is `:trace` or `:print`. The location is the
+`%Schooner.Location{}` of the `trace` or `print` form, recorded on
+the same terms as error locations: pass `:file`,
+`locations: true` or `debug: true`, or it is `nil`. With the logger
+sink it is in the `:schooner_location` metadata, and `kind` is in
+`:schooner_debug`. A sink runs in the evaluating process; if it
+raises, the script stops with a `Schooner.Primitive.Error` that a
+`guard` can't catch.
 
 The pid sink is convenient in tests:
 
@@ -274,8 +302,21 @@ env =
     libraries: [Schooner.Debug.library(sink: self())]
   )
 
-Schooner.eval(source, env)
-assert_receive {:schooner_debug, :trace, "line-total: 30", _location}
+{:ok, 30} =
+  Schooner.eval(source <> "(order-total '((10 . 3)))", env, file: "scripts/order.scm")
+
+assert_receive {:schooner_debug, :print, "pricing 1 lines", _location}
+assert_receive {:schooner_debug, :trace, "line-total: 30", %Schooner.Location{line: 4}}
+```
+
+A failed assertion is located too:
+
+```elixir
+{:error, error} =
+  Schooner.eval(source <> "(order-total '((10 . 0)))", env, file: "scripts/order.scm")
+
+error.message
+# => "scripts/order.scm:10:5: uncaught Scheme error: assertion failed: (> total 0)"
 ```
 
 ## Backtraces

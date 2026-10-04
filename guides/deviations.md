@@ -284,6 +284,10 @@ they return the rendered text instead of writing to a port.
 For scripts that need to side-effect, the embedder exposes a
 host function (`info`, `log`, `print`) that does the actual
 writing.
+For print debugging, the embedder can pass in the opt-in
+`(schooner debug)` library (`Schooner.Debug`), whose `trace` and
+`print` send text to a sink the embedder chooses. See
+[Tooling](tooling.md#tracing-and-assertions).
 
 ## What this means for migration
 

@@ -87,6 +87,7 @@ defmodule Schooner.MixProject do
           Schooner.Time
         ],
         Tooling: [
+          Schooner.Debug,
           Schooner.Diagnostic,
           Mix.Tasks.Schooner.Check
         ],
@@ -112,6 +113,7 @@ defmodule Schooner.MixProject do
                     Schooner,
                     Schooner.Environment,
                     Schooner.Compiled,
+                    Schooner.Debug,
                     Schooner.Diagnostic,
                     Schooner.Host,
                     Schooner.Host.TypeError,
