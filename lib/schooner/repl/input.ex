@@ -219,16 +219,27 @@ defmodule Schooner.REPL.Input do
   end
 
   defp scan([g | rest], state) when g in ["'", "`"],
-    do: scan(rest, state |> prefix(true) |> advance(g))
+    do: scan(rest, state |> prefix(if(g == "'", do: :quote, else: :quasiquote)) |> advance(g))
 
-  defp scan([",", "@" | rest], state), do: scan(rest, state |> prefix(false) |> advance(",@"))
-  defp scan(["," | rest], state), do: scan(rest, state |> prefix(false) |> advance(","))
+  defp scan([",", "@" | rest], state), do: scan(rest, state |> prefix(:unquote) |> advance(",@"))
+  defp scan(["," | rest], state), do: scan(rest, state |> prefix(:unquote) |> advance(","))
 
   defp scan(["\"" | rest], state),
     do: scan(rest, %{(state |> item(nil) |> advance("\"")) | mode: :string})
 
-  defp scan(["|" | rest], state),
-    do: scan(rest, %{(state |> item(nil) |> advance("|")) | mode: :bar})
+  # A `|...|` identifier is a symbol, if it's closed. An open one is
+  # scanned in `:bar` mode.
+  defp scan(["|" | rest], state) do
+    case bar_identifier(rest, []) do
+      {:ok, name, raw, rest} ->
+        state = state |> item(name) |> advance("|")
+        state = Enum.reduce(raw, state, &advance(&2, &1))
+        scan(rest, advance(state, "|"))
+
+      :open ->
+        scan(rest, %{(state |> item(nil) |> advance("|")) | mode: :bar})
+    end
+  end
 
   defp scan([";" | rest], state), do: scan(rest, %{advance(state, ";") | mode: :line_comment})
 
@@ -243,19 +254,32 @@ defmodule Schooner.REPL.Input do
     end
   end
 
+  # The name in a `|...|` identifier, the graphemes between its bars,
+  # and what follows it, or `:open` when it isn't closed. The name only
+  # decides how a list it heads is indented, so escapes other than `\|`
+  # are left as written.
+  defp bar_identifier(["\\", g | rest], acc), do: bar_identifier(rest, [g, "\\" | acc])
+  defp bar_identifier(["|" | rest], acc), do: bar_name(Enum.reverse(acc), rest)
+  defp bar_identifier([g | rest], acc), do: bar_identifier(rest, [g | acc])
+  defp bar_identifier([], _acc), do: :open
+
+  defp bar_name(raw, rest),
+    do: {:ok, raw |> Enum.join() |> String.replace("\\|", "|"), raw, rest}
+
   # Open a list with the delimiter `open`. The list is an item of the
-  # list around it, and is data when that one is, when it's quoted,
-  # and when it's a vector or bytevector (`data?`).
-  defp open(state, open, data?) do
-    quoted? = match?({_, _, true}, state.prefix)
-    outer_data? = match?([%{data?: true} | _], state.stack)
+  # list around it. It is data when it's a vector or bytevector
+  # (`vector?`), when it's quoted, and when the list around it is data,
+  # unless an unquote in a quasiquoted list makes it code again.
+  defp open(state, open, vector?) do
+    {data?, quasi?} = quotation(state)
     column = state.column
     state = item(state, nil)
 
     frame = %{
       column: column,
       items_column: column + String.length(open),
-      data?: data? or quoted? or outer_data?,
+      data?: data? or vector?,
+      quasi?: quasi?,
       count: 0,
       head: nil,
       first_arg: nil,
@@ -294,7 +318,7 @@ defmodule Schooner.REPL.Input do
         nil -> {state.line, state.column}
       end
 
-    # A prefixed item is a list or quoted datum, not a call's head.
+    # A prefixed item is a quoted datum, not a call's head.
     symbol = if state.prefix, do: nil, else: symbol
     position = %{line: line, column: column, symbol: symbol, symbol?: symbol != nil}
 
@@ -308,12 +332,37 @@ defmodule Schooner.REPL.Input do
     %{state | stack: [%{frame | count: frame.count + 1} | stack], prefix: nil}
   end
 
-  # Note a prefix, keeping the position of the first one in a run such
-  # as `',x`.
-  defp prefix(%{prefix: nil} = state, quoted?),
-    do: %{state | prefix: {state.line, state.column, quoted?}}
+  # Note a prefix (`:quote`, `:quasiquote` or `:unquote`), keeping the
+  # position of the first one in a run such as `',x`, and every kind.
+  defp prefix(%{prefix: nil} = state, kind),
+    do: %{state | prefix: {state.line, state.column, [kind]}}
 
-  defp prefix(state, _quoted?), do: state
+  defp prefix(%{prefix: {line, column, kinds}} = state, kind),
+    do: %{state | prefix: {line, column, kinds ++ [kind]}}
+
+  # Whether a list opened now is data, and whether it is inside a
+  # quasiquote: what the list around it is, changed by each of the
+  # pending prefixes in turn.
+  defp quotation(state) do
+    outer =
+      case state.stack do
+        [%{data?: data?, quasi?: quasi?} | _] -> {data?, quasi?}
+        [] -> {false, false}
+      end
+
+    kinds =
+      case state.prefix do
+        {_line, _column, kinds} -> kinds
+        nil -> []
+      end
+
+    Enum.reduce(kinds, outer, fn
+      :quote, _ -> {true, false}
+      :quasiquote, _ -> {true, true}
+      :unquote, {_, true} -> {false, false}
+      :unquote, context -> context
+    end)
+  end
 
   # A `#;`: hold a pending prefix until the datums it comments out are
   # skipped.

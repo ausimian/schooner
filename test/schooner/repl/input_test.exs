@@ -189,6 +189,42 @@ defmodule Schooner.REPL.InputTest do
       (foo #;'x (a b
                    ^
       """,
+      # A `|...|` identifier is a symbol, so it can head a call or a
+      # body form.
+      """
+      (|foo bar| first
+                 ^
+      """,
+      """
+      (|define| (f x)
+        ^
+      """,
+      """
+      (|a\\|b| c
+              ^
+      """,
+      # An unquote in a quasiquoted list is code again; in a quoted
+      # list, it's data like the rest.
+      """
+      `(foo ,(bar baz
+                  ^
+      """,
+      """
+      `(foo ,@(bar baz
+                   ^
+      """,
+      """
+      `(foo ,(bar `(x y
+                    ^
+      """,
+      """
+      '(foo ,(bar baz
+              ^
+      """,
+      """
+      `#(1 ,(f x
+               ^
+      """,
       # A `#\` the newline completes leaves the next line's columns as
       # they are.
       "(foo #\\\n(bar baz\n     ^\n",
