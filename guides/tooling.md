@@ -8,11 +8,13 @@ surface documentation and editor integration.
 > #### Roadmap {: .warning}
 >
 > Most of this guide describes **planned** tooling, tracked in
-> [#134](https://github.com/ausimian/schooner/issues/134). Each
-> section names its issue and status. Sections marked **Planned**
-> show the intended API; it may change before it ships. When a
-> feature lands, its section is marked **Available** and its
-> examples are verified against the release.
+> [#134](https://github.com/ausimian/schooner/issues/134) and
+> developed on the `feature/tooling` branch. Each section names its
+> issue and status. Sections marked **Planned** show the intended
+> API; it may change before it ships. When a feature lands on
+> `feature/tooling`, its section is marked **Available** and its
+> examples are verified. The branch merges into `main` once the
+> roadmap, or a releasable part of it, is complete.
 
 | # | Feature | Status | Issue |
 | --- | --- | --- | --- |
