@@ -38,6 +38,8 @@ defmodule Schooner.Pretty do
   alias Schooner.Expander.SyntaxRules
   alias Schooner.Value
 
+  @call_site Schooner.Eval.call_site()
+
   @abbreviations %{
     "quote" => "'",
     "quasiquote" => "`",
@@ -276,6 +278,10 @@ defmodule Schooner.Pretty do
   # The type identity an expanded `define-record-type` embeds in the
   # procedures it defines.
   defp flat({:record_type, name, _id}, _cx), do: ["#<record-type ", name, ">"]
+
+  # The placeholder `Schooner.Debug`'s macros pass for the location of
+  # their use.
+  defp flat(@call_site, _cx), do: "#<call-site>"
 
   defp flat(value, _cx), do: Value.write_iodata(value)
 
