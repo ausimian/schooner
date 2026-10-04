@@ -149,6 +149,17 @@ defmodule Schooner.PrettyTest do
       end
     end
 
+    test "any symbol the reader would not read back as written is quoted" do
+      for name <- [".", ".a", "+foo", "-foo", "@foo"] do
+        assert Pretty.format({:sym, name}) == "|#{name}|"
+        assert read!(Pretty.format({:sym, name})) == {:sym, name}
+      end
+
+      for name <- ["+", "-", "...", "->x", "a.b", "λ"] do
+        assert Pretty.format({:sym, name}) == name
+      end
+    end
+
     test "a renamed symbol starting with @ is quoted too" do
       form = Value.list([{:sym, "unquote"}, marked("@foo", ["1"])])
       assert Pretty.format(form) == ",|@foo·1|"

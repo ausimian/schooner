@@ -44,6 +44,8 @@ defmodule Schooner.Pretty do
   """
 
   alias Schooner.Expander.SyntaxRules
+  alias Schooner.Lexer
+  alias Schooner.Reader
   alias Schooner.Value
 
   @call_site Schooner.Eval.call_site()
@@ -303,15 +305,31 @@ defmodule Schooner.Pretty do
     end
   end
 
-  # `name` as `Value.write/1` writes it, quoted when `quote?` or when it
-  # starts with `@`, which would otherwise not read back (and after a
-  # `,` would read as `,@`). A quoted name reads back the same.
+  # `name` as `Value.write/1` writes it, quoted when `quote?` or when
+  # the reader would not read it back as `name`. `Value.write/1` leaves
+  # some names bare that the reader rejects, such as `.`, `+foo` and
+  # `@foo` (which after a `,` would also read as `,@`). A quoted name
+  # reads back the same.
   defp write_symbol(name, quote?) do
     written = Value.write_iodata({:sym, name})
 
-    if bare?(written) and (quote? or String.starts_with?(name, "@")),
+    if bare?(written) and (quote? or not reads_back?(written, name)),
       do: ["|", written, "|"],
       else: written
+  end
+
+  # A name starting with a letter or one of these reads back as written,
+  # so only the rest are checked with the reader.
+  @plain_initials ~c"!$%&*/:<=>?^_~"
+
+  defp reads_back?(<<c, _::binary>>, _name)
+       when c in ?a..?z or c in ?A..?Z or c in @plain_initials,
+       do: true
+
+  defp reads_back?(written, name) do
+    Reader.read_string(IO.iodata_to_binary(written)) == [{:sym, name}]
+  rescue
+    _ in [Lexer.Error, Reader.Error] -> false
   end
 
   defp bare?([?| | _]), do: false
