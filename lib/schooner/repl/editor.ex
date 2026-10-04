@@ -31,27 +31,12 @@ defmodule Schooner.REPL.Editor do
   #   * Ctrl-L: clear the screen.
   #   * Ctrl-C: discard the entry.
 
+  alias Schooner.REPL.Cells
   alias Schooner.REPL.Input
 
+  # Both as wide as `Schooner.REPL.Cells.margin/0`.
   @prompt "schooner> "
 
-  # Code points a terminal shows two cells wide.
-  @wide [
-    0x1100..0x115F,
-    0x2E80..0x303E,
-    0x3041..0x33FF,
-    0x3400..0x4DBF,
-    0x4E00..0x9FFF,
-    0xA000..0xA4CF,
-    0xAC00..0xD7A3,
-    0xF900..0xFAFF,
-    0xFE30..0xFE4F,
-    0xFF00..0xFF60,
-    0xFFE0..0xFFE6,
-    0x1F300..0x1F64F,
-    0x1F900..0x1F9FF,
-    0x20000..0x3FFFD
-  ]
   @continuation "     ...> "
 
   defstruct lines: [""],
@@ -479,7 +464,7 @@ defmodule Schooner.REPL.Editor do
       editor.lines
       |> Enum.with_index()
       |> Enum.map(fn {line, i} ->
-        [if(i == 0, do: @prompt, else: @continuation), expand_tabs(line)]
+        [if(i == 0, do: @prompt, else: @continuation), Cells.expand_tabs(line)]
       end)
       |> Enum.intersperse("\n")
 
@@ -527,43 +512,7 @@ defmodule Schooner.REPL.Editor do
   defp prefix_width(editor, row, col),
     do: editor.lines |> Enum.at(row) |> String.slice(0, col) |> display_width()
 
-  # The terminal cells `text` takes after the prompt: two for a wide
-  # grapheme (East Asian wide and fullwidth characters, and most
-  # emoji), one for any other, and for a tab, which only a paste
-  # inserts, those up to the next tab stop.
-  defp display_width(text) do
-    prompt = String.length(@prompt)
-
-    text
-    |> String.graphemes()
-    |> Enum.reduce(prompt, fn
-      "\t", column -> next_tab_stop(column)
-      grapheme, column -> column + cell_width(grapheme)
-    end)
-    |> Kernel.-(prompt)
-  end
-
-  # `line` with each tab replaced by the spaces up to the next tab
-  # stop, as `display_width/1` counts it, so that the cursor is placed
-  # the same whatever tab stops the terminal has.
-  defp expand_tabs(line) do
-    if String.contains?(line, "\t") do
-      line
-      |> String.split("\t")
-      |> Enum.reduce(fn part, shown ->
-        column = String.length(@prompt) + display_width(shown)
-        shown <> String.duplicate(" ", next_tab_stop(column) - column) <> part
-      end)
-    else
-      line
-    end
-  end
-
-  defp next_tab_stop(column), do: (div(column, 8) + 1) * 8
-
-  defp cell_width(<<c::utf8, _::binary>>) do
-    if Enum.any?(@wide, &(c in &1)), do: 2, else: 1
-  end
+  defp display_width(text), do: Cells.width(text)
 
   defp cursor_up(0), do: []
   defp cursor_up(n), do: "\e[#{n}A"

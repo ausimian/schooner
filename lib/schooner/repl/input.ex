@@ -16,6 +16,7 @@ defmodule Schooner.REPL.Input do
   alias Schooner.Lexer
   alias Schooner.Pretty
   alias Schooner.Reader
+  alias Schooner.REPL.Cells
 
   # Meta-commands whose argument is Scheme source, which may run over
   # several lines.
@@ -119,7 +120,7 @@ defmodule Schooner.REPL.Input do
   # than the lexer: anything that isn't a delimiter, a string, a
   # comment or a `|...|` identifier is an atom.
   defp scan(text) do
-    state = %{line: 0, column: 0, mode: :code, depth: 0, stack: [], prefix: nil}
+    state = %{line: 0, column: 0, mode: :code, depth: 0, stack: [], prefix: nil, comments: 0}
     text |> String.graphemes() |> scan(state)
   end
 
@@ -177,7 +178,9 @@ defmodule Schooner.REPL.Input do
   defp scan(["#", "|" | rest], state),
     do: scan(rest, %{advance(state, "#|") | mode: :block_comment, depth: 1})
 
-  defp scan(["#", ";" | rest], state), do: scan(rest, state |> prefix(false) |> advance("#;"))
+  # A datum comment: the next datum isn't an item. They can stack.
+  defp scan(["#", ";" | rest], state),
+    do: scan(rest, %{advance(state, "#;") | comments: state.comments + 1})
 
   defp scan(["#", "\\", char | rest], state) do
     {atom, rest} = Enum.split_while(rest, &(not delimiter?(&1)))
@@ -192,7 +195,7 @@ defmodule Schooner.REPL.Input do
   defp scan([g | rest], state) when g in ["(", "["], do: scan(rest, open(state, g, false))
 
   defp scan([g | rest], state) when g in [")", "]"] do
-    state = %{advance(state, g) | prefix: nil}
+    state = %{advance(state, g) | prefix: nil, comments: 0}
 
     case state.stack do
       [_ | stack] -> scan(rest, %{state | stack: stack})
@@ -247,7 +250,11 @@ defmodule Schooner.REPL.Input do
   end
 
   # Count an item starting at the current position, or at the prefix
-  # (`'`, `,`, `#;`, ...) in front of it, in the innermost open list.
+  # (`'`, `,`, ...) in front of it, in the innermost open list. A datum
+  # a `#;` comments out isn't counted.
+  defp item(%{comments: comments} = state, _symbol) when comments > 0,
+    do: %{state | prefix: nil, comments: comments - 1}
+
   defp item(%{stack: []} = state, _symbol), do: %{state | prefix: nil}
 
   defp item(%{stack: [frame | stack]} = state, symbol) do
@@ -281,7 +288,7 @@ defmodule Schooner.REPL.Input do
   defp advance(state, text) do
     if newline?(text),
       do: %{state | line: state.line + 1, column: 0},
-      else: %{state | column: state.column + String.length(text)}
+      else: %{state | column: state.column + Cells.width(text, state.column)}
   end
 
   defp newline?(g), do: g in ["\n", "\r\n", "\r"]

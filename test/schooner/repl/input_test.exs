@@ -146,6 +146,26 @@ defmodule Schooner.REPL.InputTest do
       (f '(1
            ^
       """,
+      # Wide characters and pasted tabs count the cells they take.
+      """
+      (界 foo
+          ^
+      """,
+      "(f\ta\n" <> String.duplicate(" ", 6) <> "^\n",
+      # A datum a `#;` comments out isn't an item, even a list or
+      # several stacked.
+      """
+      (foo #;ignored
+       ^
+      """,
+      """
+      (foo #;(a (b) c) #; #; x y
+       ^
+      """,
+      """
+      (foo #;(a
+              ^
+      """,
       # Closed lists, strings, comments and characters don't count.
       """
       (define (f x)
