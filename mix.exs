@@ -68,6 +68,7 @@ defmodule Schooner.MixProject do
         "guides/host-functions.md",
         "guides/sandbox.md",
         "guides/deviations.md",
+        "guides/tooling.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
