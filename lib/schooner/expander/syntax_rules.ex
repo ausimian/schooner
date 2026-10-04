@@ -185,6 +185,13 @@ defmodule Schooner.Expander.SyntaxRules do
     {{:vector, List.to_tuple(items)}, numbers}
   end
 
+  # An expanded `define-record-type` embeds its type's name, renamed
+  # like the definitions when a macro introduced it.
+  defp renumber({:record_type, name, id}, numbers) do
+    {{:sym, name}, numbers} = renumber({:sym, name}, numbers)
+    {{:record_type, name, id}, numbers}
+  end
+
   defp renumber(other, numbers), do: {other, numbers}
 
   defp renumber_mark(mark, numbers) do

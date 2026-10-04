@@ -224,6 +224,20 @@ defmodule Schooner.ExpandTest do
       assert Pretty.format(form) == "'|a" <> <<0>> <> "b|"
     end
 
+    test "a record type a macro defines is renamed like its procedures" do
+      source = """
+      (define-syntax defpoint
+        (syntax-rules () ((_) (define-record-type pt (mk-pt x) pt? (x pt-x)))))
+      (defpoint)
+      """
+
+      assert expand(source) == [
+               "(begin (define (mk-pt·1 x·1) (%record-instance #<record-type pt·1> x·1)) " <>
+                 "(define (pt?·1 v) (%record-of? #<record-type pt·1> v)) " <>
+                 "(define (pt-x·1 v) (%record-ref #<record-type pt·1> v 0)))"
+             ]
+    end
+
     test "with plain names, it is printed as written" do
       assert {:ok, [form]} = Schooner.expand(@swap, env())
 

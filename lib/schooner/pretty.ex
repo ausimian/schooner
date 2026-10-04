@@ -285,7 +285,7 @@ defmodule Schooner.Pretty do
 
   # The type identity an expanded `define-record-type` embeds in the
   # procedures it defines.
-  defp flat({:record_type, name, _id}, _cx), do: ["#<record-type ", name, ">"]
+  defp flat({:record_type, name, _id}, cx), do: ["#<record-type ", symbol(name, cx), ">"]
 
   # The placeholder `Schooner.Debug`'s macros pass for the location of
   # their use.
