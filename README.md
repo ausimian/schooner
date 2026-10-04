@@ -9,7 +9,7 @@ resource-bound the work with the standard process tools
 
 ## Quick example
 
-```iex
+```elixir
 iex> alias Schooner.Host
 iex> env =
 ...>   Schooner.Environment.new(
