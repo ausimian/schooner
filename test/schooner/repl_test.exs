@@ -214,6 +214,54 @@ defmodule Schooner.REPLTest do
       assert output =~ "schooner> y\nerror: unbound variable: y\n"
     end
 
+    test "the evaluator stops when the REPL does, even if it traps exits" do
+      test = self()
+
+      environment = fn ->
+        trap = fn [] ->
+          Process.flag(:trap_exit, true)
+          send(test, {:evaluator, self()})
+          Process.sleep(:infinity)
+        end
+
+        Environment.new(libraries: [Host.library(name: [], primitives: [{"trap", 0, trap}])])
+      end
+
+      repl = spawn(fn -> repl("(trap)\n", environment: environment) end)
+      assert_receive {:evaluator, evaluator}, 5000
+      monitor = Process.monitor(evaluator)
+
+      Process.exit(repl, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^evaluator, :killed}, 5000
+    end
+
+    test "its processes stop when it raises, even if the caller carries on" do
+      test = self()
+
+      environment = fn ->
+        send(test, {:evaluator, self()})
+        scripts_environment()
+      end
+
+      assert_raise RuntimeError, "no width", fn ->
+        terminal = FakeTerminal.start()
+        FakeTerminal.feed(terminal, "x")
+        {:ok, out} = StringIO.open("")
+
+        REPL.run(
+          input: terminal,
+          output: out,
+          mode: :editor,
+          environment: environment,
+          columns: fn -> raise "no width" end
+        )
+      end
+
+      assert_receive {:evaluator, evaluator}
+      monitor = Process.monitor(evaluator)
+      assert_receive {:DOWN, ^monitor, :process, ^evaluator, _}, 5000
+    end
+
     test "a failed environment leaves no processes behind" do
       test = self()
 

@@ -49,6 +49,8 @@ defmodule Schooner.REPL do
   and Ctrl-C discards the entry, or interrupts an evaluation.
   """
 
+  @workers {__MODULE__, :workers}
+
   defstruct [
     :input,
     :output,
@@ -94,6 +96,18 @@ defmodule Schooner.REPL do
       editor: Editor.new()
     }
 
+    previous_workers = Process.put(@workers, [])
+
+    try do
+      serve(state, opts)
+    after
+      stop_workers(previous_workers)
+    end
+
+    :ok
+  end
+
+  defp serve(state, opts) do
     environment = Keyword.fetch!(opts, :environment)
     session_opts = Keyword.get(opts, :session, [])
     state = start_evaluator(state, {:build, environment, session_opts})
@@ -107,13 +121,10 @@ defmodule Schooner.REPL do
         state
       end)
 
-    state =
-      case state.mode do
-        :editor -> state |> prompt() |> editor_loop()
-        :line -> line_loop(state)
-      end
-
-    stop(state)
+    case state.mode do
+      :editor -> state |> prompt() |> editor_loop()
+      :line -> line_loop(state)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -174,6 +185,7 @@ defmodule Schooner.REPL do
         end)
       end)
 
+    track({reader, :link})
     %{state | reader: reader}
   end
 
@@ -430,6 +442,8 @@ defmodule Schooner.REPL do
         evaluator_init(repl, ref, init)
       end)
 
+    track({pid, monitor})
+
     receive do
       {^ref, :ok, snapshot} ->
         %{state | evaluator: {pid, monitor}, snapshot: snapshot}
@@ -479,13 +493,17 @@ defmodule Schooner.REPL do
 
   # Stop this evaluator when the REPL goes, even in the middle of an
   # evaluation, when a message would wait unread: a process linked to
-  # it exits when the REPL does, and takes it down too.
+  # it kills it when the REPL exits. Being linked, it goes when the
+  # evaluator does.
   defp guard(repl) do
+    evaluator = self()
+
     spawn_link(fn ->
       monitor = Process.monitor(repl)
 
       receive do
-        {:DOWN, ^monitor, :process, ^repl, _reason} -> exit(:repl_down)
+        # A kill, since the evaluator may trap exits.
+        {:DOWN, ^monitor, :process, ^repl, _reason} -> Process.exit(evaluator, :kill)
       end
     end)
   end
@@ -525,22 +543,23 @@ defmodule Schooner.REPL do
 
   defp restart(state), do: start_evaluator(state, {:restore, state.snapshot})
 
-  defp stop(state) do
-    case state.evaluator do
+  # The evaluators and the reader this REPL starts are kept in its
+  # process dictionary, so that `run/1` stops them however it ends,
+  # including by an exception the caller catches.
+  defp track(worker), do: Process.put(@workers, [worker | Process.get(@workers, [])])
+
+  defp stop_workers(previous) do
+    Enum.each(Process.get(@workers, []), fn
+      {pid, :link} ->
+        Process.unlink(pid)
+        Process.exit(pid, :kill)
+
       {pid, monitor} ->
         Process.demonitor(monitor, [:flush])
         Process.exit(pid, :kill)
+    end)
 
-      nil ->
-        :ok
-    end
-
-    if state.reader do
-      Process.unlink(state.reader)
-      Process.exit(state.reader, :kill)
-    end
-
-    :ok
+    if previous, do: Process.put(@workers, previous), else: Process.delete(@workers)
   end
 
   defp write(state, iodata), do: IO.write(state.output, iodata)
