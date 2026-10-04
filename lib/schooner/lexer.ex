@@ -293,11 +293,11 @@ defmodule Schooner.Lexer do
     {{:char, cp, start}, rest, col + String.length(body)}
   end
 
-  defp scan_char_run(<<c::utf8, rest::binary>>, acc) do
+  defp scan_char_run(<<c::utf8, rest::binary>> = src, acc) do
     if char_run?(c) do
       scan_char_run(rest, [c | acc])
     else
-      {acc, <<c::utf8, rest::binary>>}
+      {acc, src}
     end
   end
 
@@ -517,8 +517,10 @@ defmodule Schooner.Lexer do
 
   defp scan_atom(<<>>, acc), do: build_atom(acc, <<>>)
 
-  defp scan_atom(<<c, rest::binary>>, acc) when c in @terminators do
-    build_atom(acc, <<c, rest::binary>>)
+  # Keep the delimiter in the original suffix. Rebuilding it with the rest
+  # would copy all remaining source once per atom.
+  defp scan_atom(<<c, _::binary>> = src, acc) when c in @terminators do
+    build_atom(acc, src)
   end
 
   defp scan_atom(<<c::utf8, rest::binary>>, acc) do

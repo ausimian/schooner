@@ -432,6 +432,31 @@ defmodule Schooner.LexerTest do
     end
   end
 
+  describe "token boundaries in a long source" do
+    test "atoms and character literals leave following delimiters and positions intact" do
+      line = "(λ #x2a .5 #\\space #\\λ #\\()'tail; comment\r\n"
+      source = String.duplicate(line, 1_000) <> "last"
+
+      expected =
+        Enum.flat_map(1..1_000, fn line_number ->
+          [
+            {:lparen, nil, {line_number, 1}},
+            {:ident, "λ", {line_number, 2}},
+            {:integer, 42, {line_number, 4}},
+            {:float, 0.5, {line_number, 9}},
+            {:char, ?\s, {line_number, 12}},
+            {:char, ?λ, {line_number, 20}},
+            {:char, ?(, {line_number, 24}},
+            {:rparen, nil, {line_number, 27}},
+            {:quote, nil, {line_number, 28}},
+            {:ident, "tail", {line_number, 29}}
+          ]
+        end) ++ [{:ident, "last", {1_001, 1}}]
+
+      assert Lexer.tokenise(source) == expected
+    end
+  end
+
   describe "negative cases" do
     test "stray closing bracket-style char is an unexpected character" do
       err = assert_raise Error, fn -> Lexer.tokenise("@") end
